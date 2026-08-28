@@ -223,7 +223,15 @@ Write-Log "Installer exited with code: $exitCode"
 
 Start-Sleep -Seconds 1
 
-# Step 4: Find installed Vortex.exe
+# Step 4: Find installed Vortex.exe and prepare clean environment
+# Clear any inherited PyInstaller onefile variables to prevent "Security validation failure" on relaunch
+$env:_MEIPASS2 = $null
+$env:_MEIPASS = $null
+[System.Environment]::SetEnvironmentVariable('_MEIPASS2', $null, 'Process')
+[System.Environment]::SetEnvironmentVariable('_MEIPASS', $null, 'Process')
+Remove-Item env:\_MEIPASS2 -ErrorAction SilentlyContinue
+Remove-Item env:\_MEIPASS -ErrorAction SilentlyContinue
+
 $candidates = @(
     '{default_target}',
     "$env:LOCALAPPDATA\\Programs\\Vortex\\Vortex.exe",
@@ -250,6 +258,7 @@ foreach ($c in $candidates) {{
 
 if ($targetExe) {{
     Write-Log "Launching updated Vortex from: $targetExe"
+    # Launch in fresh environment with no inherited PyInstaller bootloader tokens
     Start-Process -FilePath "$targetExe"
 }} else {{
     Write-Log "ERROR: Could not locate installed Vortex.exe to relaunch!"
@@ -267,8 +276,15 @@ Write-Log "Cleanup finished. Update cycle complete."
         with open(updater_vbs, "w", encoding="utf-8") as f:
             f.write(vbs_content)
 
+        # Clean current process environment of PyInstaller internal bootloader variables
+        clean_env = os.environ.copy()
+        clean_env.pop("_MEIPASS2", None)
+        clean_env.pop("_MEIPASS", None)
+        os.environ.pop("_MEIPASS2", None)
+        os.environ.pop("_MEIPASS", None)
+
         try:
-            subprocess.Popen(["wscript.exe", updater_vbs])
+            subprocess.Popen(["wscript.exe", updater_vbs], env=clean_env)
             return True
         except Exception:
             # Fallback to direct powershell spawn if wscript unavailable
@@ -283,9 +299,9 @@ Write-Log "Cleanup finished. Update cycle complete."
                 creationflags=0x08000000,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                env=clean_env
             )
             return True
     except Exception:
         return False
-
