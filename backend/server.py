@@ -181,8 +181,23 @@ async def background_auto_detect_and_link(account_id: int):
     target_username = acc_data.get("username") if acc_data else None
 
     detected = False
-    for _ in range(15):
-        await asyncio.sleep(2.0)
+    for _ in range(16):
+        await asyncio.sleep(1.8)
+
+        # Check for immediate auth error from Riot lockfile API
+        auth_err = await asyncio.to_thread(launcher.check_login_error)
+        if auth_err:
+            if auth_err in ("auth_failure", "invalid_credentials"):
+                client_launcher._set_login_stage(
+                    "error", "Invalid username or password. Please check your credentials.", target_username
+                )
+                return
+            elif auth_err in ("rate_limited", "login_error"):
+                client_launcher._set_login_stage(
+                    "error", "Riot rate limit or login error. Please wait a moment and try again.", target_username
+                )
+                return
+
         info = await asyncio.to_thread(launcher.get_active_riot_account, target_username)
         if info and info.get("found") and (info.get("display_name") or info.get("username")):
             detected = True
@@ -212,9 +227,7 @@ async def background_auto_detect_and_link(account_id: int):
             break
 
     # If we typed the credentials but Riot never confirmed a signed-in
-    # session in the time we waited, the modal would otherwise sit on
-    # "Waiting for Riot to sign in" forever with no way out. Surface it as
-    # an explicit, retryable error instead of a silent hang.
+    # session in the time we waited, surface it as an explicit, retryable error.
     if not detected and client_launcher.LOGIN_PROGRESS.get("stage") not in ("done", "error", "idle"):
         client_launcher.login_logger.warning(
             "[%s] auto-detect timed out after login - no confirmed session within 30s", target_username
@@ -224,6 +237,7 @@ async def background_auto_detect_and_link(account_id: int):
             "Login didn't finish - Riot never confirmed the session. Check the credentials and try again.",
             target_username
         )
+
 
 
 async def run_batch_account_check():
@@ -1051,22 +1065,90 @@ def _queue_elapsed(party: Dict[str, Any], in_queue: bool) -> int:
     return max(0, int(time.time() - started))
 
 
-def _match_account_to_session(username: str) -> Optional[Dict[str, Any]]:
-    """Finds the stored account matching the signed-in Riot Client username."""
-    if not username:
-        return None
-    target = username.strip().lower()
-    for acc in db.get_all_accounts():
-        if acc["username"].strip().lower() == target:
-            return acc
+def _match_account_to_session(username: str, display_name: str = "", puuid: str = "") -> Optional[Dict[str, Any]]:
+    """Finds the stored account matching the signed-in Riot Client username, display name, or PUUID."""
+    accounts = db.get_all_accounts()
+    u_target = username.strip().lower() if username else ""
+    d_target = display_name.strip().lower() if display_name else ""
+    p_target = puuid.strip() if puuid else ""
+
+    # 1. Match by username
+    if u_target:
+        for acc in accounts:
+            if acc.get("username", "").strip().lower() == u_target:
+                return acc
+
+    # 2. Match by display name (Riot ID e.g. Name#TAG)
+    if d_target:
+        for acc in accounts:
+            if acc.get("display_name", "").strip().lower() == d_target:
+                return acc
+
+    # 3. Match by PUUID
+    if p_target:
+        for acc in accounts:
+            if acc.get("puuid") and acc["puuid"].strip() == p_target:
+                return acc
+
     return None
 
 
-def _roster_entry(player: Dict[str, Any], names: Dict[str, str], self_puuid: str) -> Dict[str, Any]:
+_PLAYER_MMR_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, Any]:
+    if not puuid:
+        return valorant_client.parse_player_mmr({})
+    if puuid in _PLAYER_MMR_CACHE:
+        return _PLAYER_MMR_CACHE[puuid]
+
+    try:
+        raw_mmr = client.player_mmr(puuid)
+        stats = valorant_client.parse_player_mmr(raw_mmr)
+    except Exception:
+        stats = valorant_client.parse_player_mmr({})
+
+    try:
+        combat = client.player_combat_summary(puuid, max_matches=2)
+        stats["kd"] = combat.get("kd", 0.0)
+        stats["hs_pct"] = combat.get("hs_pct", 0)
+        stats["kills"] = combat.get("kills", 0)
+        stats["deaths"] = combat.get("deaths", 0)
+        stats["assists"] = combat.get("assists", 0)
+    except Exception:
+        stats["kd"] = 0.0
+        stats["hs_pct"] = 0
+        stats["kills"] = 0
+        stats["deaths"] = 0
+        stats["assists"] = 0
+
+    if stats["tier"] == 0 and fallback_tier > 0:
+        stats["tier"] = fallback_tier
+        stats["tier_label"] = valorant_client.tier_label(fallback_tier)
+        stats["tier_icon"] = valorant_client.tier_icon(fallback_tier)
+        if stats["peak_tier"] < fallback_tier:
+            stats["peak_tier"] = fallback_tier
+            stats["peak_tier_label"] = stats["tier_label"]
+            stats["peak_tier_icon"] = stats["tier_icon"]
+
+    if len(_PLAYER_MMR_CACHE) > 60:
+        _PLAYER_MMR_CACHE.clear()
+    _PLAYER_MMR_CACHE[puuid] = stats
+    return stats
+
+
+def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_puuid: str) -> Dict[str, Any]:
     agent = valorant_client.agent_by_id(player.get("CharacterID", ""))
-    tier = (player.get("SeasonalBadgeInfo") or {}).get("Rank") or player.get("CompetitiveTier") or 0
+    seasonal_tier = (player.get("SeasonalBadgeInfo") or {}).get("Rank") or player.get("CompetitiveTier") or 0
     subject = player.get("Subject", "")
     identity = player.get("PlayerIdentity", {}) or {}
+    level = identity.get("AccountLevel", 0)
+
+    stats = _get_player_stats(client, subject, seasonal_tier)
+
+    tier = stats.get("tier") or seasonal_tier or 0
+    tier_label = stats.get("tier_label") or valorant_client.tier_label(tier)
+    tier_icon = stats.get("tier_icon") or valorant_client.tier_icon(tier)
 
     return {
         "puuid": subject,
@@ -1074,10 +1156,19 @@ def _roster_entry(player: Dict[str, Any], names: Dict[str, str], self_puuid: str
         "agent": agent.get("name", ""),
         "agent_icon": agent.get("icon", ""),
         "team": player.get("TeamID", ""),
-        "level": identity.get("AccountLevel", 0),
+        "level": level,
         "tier": tier,
-        "tier_label": valorant_client.tier_label(tier),
-        "tier_icon": valorant_client.tier_icon(tier),
+        "tier_label": tier_label,
+        "tier_icon": tier_icon,
+        "rr": stats.get("rr", 0),
+        "peak_tier": stats.get("peak_tier", 0),
+        "peak_tier_label": stats.get("peak_tier_label", "Unranked"),
+        "peak_tier_icon": stats.get("peak_tier_icon", valorant_client.tier_icon(0)),
+        "wins": stats.get("wins", 0),
+        "games": stats.get("games", 0),
+        "winrate": stats.get("winrate", 0),
+        "kd": stats.get("kd", 0.0),
+        "hs_pct": stats.get("hs_pct", 0),
         "is_self": subject == self_puuid,
         "locked": (player.get("CharacterSelectionState", "") == "locked"),
     }
@@ -1097,8 +1188,8 @@ def _cached_names(client, match_id: str, puuids: List[str]) -> Dict[str, str]:
     return names
 
 
-def _build_pregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    match_id = client.pregame_match_id()
+def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    match_id = match_id or client.pregame_match_id()
     if not match_id:
         return None
 
@@ -1106,8 +1197,16 @@ def _build_pregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str,
     if not data:
         return None
 
-    ally = (data.get("AllyTeam") or {}).get("Players", []) or []
-    puuids = [p.get("Subject", "") for p in ally if p.get("Subject")]
+    ally_team = data.get("AllyTeam") or {}
+    ally = ally_team.get("Players", []) or []
+    team_id = (ally_team.get("TeamID") or "Blue").strip()
+    starting_side = "Defender" if team_id.lower() == "blue" else "Attacker"
+
+    # Enemy team in pregame (if available, e.g. custom games)
+    enemy_team = data.get("EnemyTeam") or {}
+    enemy = enemy_team.get("Players", []) or []
+
+    puuids = [p.get("Subject", "") for p in ally + enemy if p.get("Subject")]
     names = _cached_names(client, match_id, puuids)
     map_info = valorant_client.resolve_map(data.get("MapID", ""))
 
@@ -1119,15 +1218,18 @@ def _build_pregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str,
         "map": map_info,
         "mode": valorant_client.resolve_mode(data.get("Mode", ""), presence.get("queueId", "")),
         "time_remaining": round(remaining_ns / 1_000_000_000, 1),
-        "team": [_roster_entry(p, names, client.puuid) for p in ally],
-        "enemy": [],
+        "team": [_roster_entry(client, p, names, client.puuid) for p in ally],
+        "enemy": [_roster_entry(client, p, names, client.puuid) for p in enemy],
         "score": {"ally": 0, "enemy": 0},
         "round": 0,
+        "starting_side": starting_side,
+        "current_side": starting_side,
+        "side": starting_side,
     }
 
 
-def _build_coregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    match_id = client.coregame_match_id()
+def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    match_id = match_id or client.coregame_match_id()
     if not match_id:
         return None
 
@@ -1144,14 +1246,37 @@ def _build_coregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str
         if p.get("Subject") == client.puuid:
             self_team = p.get("TeamID", "")
             break
+    if not self_team:
+        self_team = "Blue"
 
-    roster = [_roster_entry(p, names, client.puuid) for p in players]
+    roster = [_roster_entry(client, p, names, client.puuid) for p in players]
     ally = [r for r in roster if r["team"] == self_team]
     enemy = [r for r in roster if r["team"] != self_team]
 
     ally_score = int(presence.get("partyOwnerMatchScoreAllyTeam", 0) or 0)
     enemy_score = int(presence.get("partyOwnerMatchScoreEnemyTeam", 0) or 0)
     map_id = data.get("MapID") or presence.get("matchMap", "")
+    total_rounds = ally_score + enemy_score
+
+    starting_side = "Defender" if self_team.lower() == "blue" else "Attacker"
+
+    # Determine current side based on round/half switch & presence hint
+    pres_team = (presence.get("partyOwnerMatchCurrentTeam", "") or "").lower()
+    if "defend" in pres_team or pres_team == "blue":
+        current_side = "Defender"
+    elif "attack" in pres_team or pres_team == "red":
+        current_side = "Attacker"
+    else:
+        # Standard Valorant regulation: 12 rounds per half
+        if total_rounds < 12:
+            current_side = starting_side
+        elif total_rounds < 24:
+            current_side = "Attacker" if starting_side == "Defender" else "Defender"
+        else:
+            # Overtime (rounds 25+): switches every 2 rounds
+            ot_round = total_rounds - 24
+            switches = ot_round // 2
+            current_side = ("Attacker" if starting_side == "Defender" else "Defender") if (switches % 2 == 1) else starting_side
 
     return {
         "phase": "in_match",
@@ -1162,8 +1287,10 @@ def _build_coregame_block(client, presence: Dict[str, Any]) -> Optional[Dict[str
         "team": ally,
         "enemy": enemy,
         "score": {"ally": ally_score, "enemy": enemy_score},
-        "round": ally_score + enemy_score + 1,
-        "side": presence.get("partyOwnerMatchCurrentTeam", "") or self_team,
+        "round": total_rounds + 1,
+        "starting_side": starting_side,
+        "current_side": current_side,
+        "side": current_side,
     }
 
 
@@ -1210,11 +1337,36 @@ def build_live_snapshot() -> Dict[str, Any]:
         "message": "Signed in - VALORANT isn't running yet.",
     })
 
-    matched = _match_account_to_session(info.get("username", ""))
+    matched = _match_account_to_session(info.get("username", ""), info.get("display_name", ""))
     if matched:
         snapshot["account_id"] = matched["id"]
         if not snapshot["display_name"]:
             snapshot["display_name"] = matched.get("display_name", "")
+    else:
+        uname = (info.get("username") or "").strip()
+        if uname and not db.account_exists(uname):
+            try:
+                new_acc_id = db.add_account({
+                    "username": uname,
+                    "password": "",
+                    "display_name": info.get("display_name", uname),
+                    "region": info.get("region", "NA"),
+                    "level": int(info.get("level", 0) or 0),
+                    "rank_tier": info.get("rank_tier", "UNRANKED"),
+                    "rank_division": info.get("rank_division", ""),
+                    "lp": int(info.get("lp", 0) or 0),
+                    "rank_icon_url": info.get("rank_icon_url", ""),
+                    "peak_rank_tier": info.get("peak_rank_tier", ""),
+                    "peak_rank_division": info.get("peak_rank_division", ""),
+                    "peak_rank_icon_url": info.get("peak_rank_icon_url", ""),
+                    "tag": "Ranked" if int(info.get("level", 0) or 0) >= 20 else "Unrated",
+                    "status": "PLAYABLE",
+                    "notes": "Auto-detected active session"
+                })
+                snapshot["account_id"] = new_acc_id
+                matched = db.get_account_by_id(new_acc_id)
+            except Exception:
+                pass
 
     snapshot["valorant_running"] = launcher.is_valorant_running()
     if not snapshot["valorant_running"]:
@@ -1226,8 +1378,39 @@ def build_live_snapshot() -> Dict[str, Any]:
         return snapshot
 
     snapshot["puuid"] = client.puuid
+    if not snapshot.get("account_id") and snapshot.get("puuid"):
+        matched = _match_account_to_session(info.get("username", ""), info.get("display_name", ""), snapshot["puuid"])
+        if matched:
+            snapshot["account_id"] = matched["id"]
+            if not snapshot["display_name"]:
+                snapshot["display_name"] = matched.get("display_name", "")
     presence = client.presence()
-    loop_state = (presence.get("sessionLoopState") or "MENUS").upper()
+    presence_loop_state = (presence.get("sessionLoopState") or "").upper()
+
+    # Authoritative game check: check Coregame first, then Pregame
+    core_match_id = None
+    pregame_match_id = None
+
+    try:
+        core_match_id = client.coregame_match_id()
+    except Exception:
+        core_match_id = None
+
+    if not core_match_id:
+        try:
+            pregame_match_id = client.pregame_match_id()
+        except Exception:
+            pregame_match_id = None
+
+    if core_match_id:
+        loop_state = "INGAME"
+    elif pregame_match_id:
+        loop_state = "PREGAME"
+    elif presence_loop_state in ("INGAME", "PREGAME"):
+        loop_state = presence_loop_state
+    else:
+        loop_state = "MENUS"
+
     snapshot["state"] = loop_state
     snapshot["queue_id"] = presence.get("queueId", "") or ""
     snapshot["queue_label"] = valorant_client.MODE_LABELS.get(snapshot["queue_id"], snapshot["queue_id"])
@@ -1259,9 +1442,9 @@ def build_live_snapshot() -> Dict[str, Any]:
 
     try:
         if loop_state == "PREGAME":
-            snapshot["match"] = _build_pregame_block(client, presence)
+            snapshot["match"] = _build_pregame_block(client, presence, pregame_match_id)
         elif loop_state == "INGAME":
-            snapshot["match"] = _build_coregame_block(client, presence)
+            snapshot["match"] = _build_coregame_block(client, presence, core_match_id)
     except valorant_client.LiveClientError as e:
         snapshot["message"] = str(e)
 

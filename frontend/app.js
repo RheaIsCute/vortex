@@ -1019,10 +1019,52 @@ function buildPeakBadge(acc) {
 
     return `
         <span class="peak-emblem-badge" title="All-Time Peak Rank: ${escapeHtml(label)}${escapeHtml(season)}">
-            ${icon}
             <span class="peak-emblem-text">Peak: ${escapeHtml(label)}</span>
+            ${icon}
         </span>
     `;
+}
+
+function getAccountCombatStats(acc) {
+    const matches = Array.isArray(acc.match_history) ? acc.match_history : [];
+    if (!matches || matches.length === 0) {
+        return {
+            winrate: Number(acc.winrate) || 0,
+            games: acc.games_played || 0,
+            kd: "0.0",
+            kda: "0.0",
+            hs: 0,
+            avgKills: "0.0"
+        };
+    }
+
+    let kills = 0, deaths = 0, assists = 0;
+    let totalHsPct = 0, hsCount = 0;
+
+    for (const m of matches) {
+        kills += Number(m.kills) || 0;
+        deaths += Number(m.deaths) || 0;
+        assists += Number(m.assists) || 0;
+        if (m.hs_pct !== undefined && m.hs_pct !== null && !isNaN(m.hs_pct)) {
+            totalHsPct += Number(m.hs_pct);
+            hsCount++;
+        }
+    }
+
+    const n = matches.length;
+    const kd = deaths > 0 ? (kills / deaths).toFixed(2) : (kills > 0 ? kills.toFixed(2) : "0.0");
+    const kda = deaths > 0 ? ((kills + assists) / deaths).toFixed(2) : ((kills + assists) > 0 ? (kills + assists).toFixed(2) : "0.0");
+    const avgHs = hsCount > 0 ? Math.round(totalHsPct / hsCount) : 0;
+    const avgKills = n > 0 ? (kills / n).toFixed(1) : "0.0";
+
+    return {
+        winrate: Number(acc.winrate) || 0,
+        games: acc.games_played || n,
+        kd,
+        kda,
+        hs: avgHs,
+        avgKills
+    };
 }
 
 function getStatusBadge(status) {
@@ -1128,6 +1170,7 @@ function buildAccountView(acc) {
 function renderHeroAccountCard(acc) {
     const v = buildAccountView(acc);
     const peakBadge = buildPeakBadge(acc);
+    const combat = getAccountCombatStats(acc);
     const isValRunning = state.live && state.live.valorant_running;
     const sessionInfo = sessionStateInfo(state.live);
 
@@ -1187,12 +1230,16 @@ function renderHeroAccountCard(acc) {
                             <span class="hero-stat-value ${v.wrClass}">${v.winrate}%</span>
                         </div>
                         <div class="hero-stat-card">
-                            <span class="hero-stat-label">MATCHES</span>
-                            <span class="hero-stat-value">${acc.games_played || 0}</span>
+                            <span class="hero-stat-label">AVG KDA</span>
+                            <span class="hero-stat-value text-accent">${combat.kda} <small class="stat-unit">KDA</small></span>
                         </div>
                         <div class="hero-stat-card">
-                            <span class="hero-stat-label">PEAK RANK</span>
-                            <span class="hero-stat-value text-gold">${acc.peak_rank_tier ? `${escapeHtml(acc.peak_rank_tier)} ${escapeHtml(acc.peak_rank_division || '')}` : 'Unranked'}</span>
+                            <span class="hero-stat-label">HEADSHOT</span>
+                            <span class="hero-stat-value text-cyan">${combat.hs}%</span>
+                        </div>
+                        <div class="hero-stat-card">
+                            <span class="hero-stat-label">MATCHES</span>
+                            <span class="hero-stat-value">${acc.games_played || combat.games || 0}</span>
                         </div>
                     </div>
 
@@ -1229,8 +1276,7 @@ function renderHeroAccountCard(acc) {
 
                 <!-- Hero Right: Launch & Actions -->
                 <div class="hero-actions-col">
-                    <button class="btn-hero-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
-                        <div class="hero-play-icon-wrap"><i class="fa-solid fa-play"></i></div>
+                    <button class="btn-hero-play ${isValRunning ? 'is-running' : ''}" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
                         <div class="hero-play-text-wrap">
                             <span class="hero-play-title">${isValRunning ? 'VALORANT RUNNING' : 'PLAY VALORANT'}</span>
                             <span class="hero-play-sub">${isValRunning ? 'Client Active' : 'Launch Game Client'}</span>
@@ -1261,8 +1307,34 @@ function renderHeroAccountCard(acc) {
 }
 
 function renderGridView() {
-    const activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
-    const regularAccounts = activeAcc ? state.accounts.filter(a => a.id !== state.activeAccountId) : state.accounts;
+    let activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
+    if (!activeAcc && state.live && state.live.available && state.live.username) {
+        activeAcc = state.accounts.find(a => 
+            (a.username && a.username.toLowerCase() === state.live.username.toLowerCase()) ||
+            (a.display_name && state.live.display_name && a.display_name.toLowerCase() === state.live.display_name.toLowerCase())
+        );
+    }
+    if (!activeAcc && state.live && state.live.available && state.live.username) {
+        activeAcc = {
+            id: state.live.account_id || 0,
+            username: state.live.username,
+            display_name: state.live.display_name || state.live.username,
+            region: state.live.region || "NA",
+            level: state.live.level || 0,
+            rank_tier: (state.live.rank_label || "UNRANKED").split(" ")[0].toUpperCase(),
+            rank_division: (state.live.rank_label || "").split(" ")[1] || "",
+            lp: 0,
+            rank_icon_url: state.live.rank_icon_url || DEFAULT_TIER_ICON,
+            tag: "Active Session",
+            status: "PLAYABLE",
+            games_played: 0,
+            winrate: 0
+        };
+    }
+
+    const regularAccounts = activeAcc && activeAcc.id
+        ? state.accounts.filter(a => a.id !== activeAcc.id && (a.username || '').toLowerCase() !== (activeAcc.username || '').toLowerCase())
+        : state.accounts;
 
     let html = "";
     if (activeAcc) {
@@ -1778,15 +1850,100 @@ async function deleteAccount(id) {
     }
 }
 
-async function toggleFavorite(id) {
-    try {
-        const res = await fetch(`/api/accounts/${id}/toggle-favorite`, { method: "POST" });
-        const data = await res.json();
-        if (data.success) {
-            const acc = state.accounts.find(a => a.id === id);
-            if (acc) acc.favorite = data.account.favorite;
-            fetchAccounts();
+function sortAccountsList(accounts, sortBy) {
+    const tierRanks = {
+        "RADIANT": 1, "IMMORTAL": 2, "ASCENDANT": 3, "DIAMOND": 4,
+        "PLATINUM": 5, "GOLD": 6, "SILVER": 7, "BRONZE": 8, "IRON": 9, "UNRANKED": 10
+    };
+    return [...accounts].sort((a, b) => {
+        const favA = a.favorite ? 1 : 0;
+        const favB = b.favorite ? 1 : 0;
+        if (favB !== favA) return favB - favA;
+
+        if (sortBy === "rank") {
+            const rA = tierRanks[(a.rank_tier || "UNRANKED").toUpperCase()] || 10;
+            const rB = tierRanks[(b.rank_tier || "UNRANKED").toUpperCase()] || 10;
+            if (rA !== rB) return rA - rB;
+            return (b.lp || 0) - (a.lp || 0);
+        } else if (sortBy === "winrate") {
+            return (Number(b.winrate) || 0) - (Number(a.winrate) || 0);
+        } else if (sortBy === "name") {
+            return (a.username || "").localeCompare(b.username || "", undefined, { sensitivity: "base" });
+        } else if (sortBy === "last_updated") {
+            return (b.last_updated || "").localeCompare(a.last_updated || "");
+        } else {
+            return (b.level || 0) - (a.level || 0);
         }
+    });
+}
+
+async function toggleFavorite(id) {
+    const acc = state.accounts.find(a => a.id === id);
+    if (!acc) return;
+
+    const newFav = !acc.favorite;
+    acc.favorite = newFav;
+
+    // 1. Immediately toggle the button and class in the DOM
+    const cards = document.querySelectorAll(`[data-id="${id}"]`);
+    cards.forEach(card => {
+        card.classList.toggle("is-favorite", newFav);
+        const starBtn = card.querySelector(".card-favorite-btn");
+        if (starBtn) {
+            starBtn.classList.toggle("active", newFav);
+            const icon = starBtn.querySelector("i");
+            if (icon) {
+                icon.className = `fa-${newFav ? 'solid' : 'regular'} fa-star`;
+            }
+        }
+    });
+
+    // 2. Re-sort the accounts list in memory
+    state.accounts = sortAccountsList(state.accounts, state.currentSort);
+
+    // 3. Move the DOM element directly without full section re-render
+    if (state.currentTag === "FAVORITES" && !newFav) {
+        cards.forEach(card => {
+            card.style.transition = "opacity 0.25s ease, transform 0.25s ease";
+            card.style.opacity = "0";
+            card.style.transform = "scale(0.95)";
+            setTimeout(() => card.remove(), 260);
+        });
+        state.accounts = state.accounts.filter(a => a.id !== id);
+    } else {
+        const activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
+        const regularAccounts = activeAcc ? state.accounts.filter(a => a.id !== state.activeAccountId) : state.accounts;
+        const newIndex = regularAccounts.findIndex(a => a.id === id);
+
+        if (state.viewMode === "grid" && DOM.accountsGrid) {
+            const cardEl = DOM.accountsGrid.querySelector(`.account-card[data-id="${id}"]:not(.account-card-hero)`);
+            if (cardEl && newIndex !== -1) {
+                const existingCards = Array.from(DOM.accountsGrid.querySelectorAll(`.account-card:not(.account-card-hero)`));
+                const targetSibling = existingCards.filter(c => c !== cardEl)[newIndex];
+                if (targetSibling) {
+                    DOM.accountsGrid.insertBefore(cardEl, targetSibling);
+                } else {
+                    DOM.accountsGrid.appendChild(cardEl);
+                }
+            }
+        } else if (state.viewMode === "table" && DOM.accountsTableBody) {
+            const rowEl = DOM.accountsTableBody.querySelector(`tr[data-id="${id}"]`);
+            if (rowEl && newIndex !== -1) {
+                const existingRows = Array.from(DOM.accountsTableBody.querySelectorAll(`tr`));
+                const targetSibling = existingRows.filter(r => r !== rowEl)[newIndex];
+                if (targetSibling) {
+                    DOM.accountsTableBody.insertBefore(rowEl, targetSibling);
+                } else {
+                    DOM.accountsTableBody.appendChild(rowEl);
+                }
+            }
+        }
+    }
+
+    state._lastAccountsSignature = accountsSignature(state.accounts);
+
+    try {
+        await fetch(`/api/accounts/${id}/toggle-favorite`, { method: "POST" });
     } catch (err) {
         showToast("Failed to update pin", "error");
     }
@@ -2385,8 +2542,8 @@ const SESSION_STATES = {
 
 // The snapshot costs a handful of Riot requests, so it's only polled hard
 // while the dashboard is actually on screen.
-const LIVE_POLL_IDLE = 5000;
-const LIVE_POLL_ACTIVE = 1600;
+const LIVE_POLL_IDLE = 1500;
+const LIVE_POLL_ACTIVE = 1200;
 
 function startLiveSessionPolling() {
     const tick = async () => {
@@ -2401,6 +2558,30 @@ function startLiveSessionPolling() {
     tick();
 }
 
+function updateLiveHeroCardState(live) {
+    const heroCard = document.querySelector(".account-card-hero");
+    if (!heroCard) return;
+
+    const isValRunning = !!(live && live.available && live.valorant_running);
+    const sessionInfo = sessionStateInfo(live);
+
+    const titleEl = heroCard.querySelector(".hero-play-title");
+    const subEl = heroCard.querySelector(".hero-play-sub");
+    if (titleEl) titleEl.textContent = isValRunning ? "VALORANT RUNNING" : "PLAY VALORANT";
+    if (subEl) subEl.textContent = isValRunning ? "Client Active" : "Launch Game Client";
+
+    const chipEl = heroCard.querySelector(".session-state-chip");
+    if (chipEl) {
+        chipEl.className = `session-state-chip ${sessionInfo.cls}`;
+        chipEl.textContent = isValRunning ? sessionInfo.label : "Riot Session Active";
+    }
+
+    const playBtn = heroCard.querySelector(".btn-hero-play");
+    if (playBtn) {
+        playBtn.classList.toggle("is-running", isValRunning);
+    }
+}
+
 async function pollLiveSession() {
     let live;
     try {
@@ -2411,10 +2592,17 @@ async function pollLiveSession() {
     }
 
     const previousId = state.activeAccountId;
+    const hadHero = !!document.querySelector(".account-card-hero");
     state.live = live;
     state.activeAccountId = live.available ? live.account_id : null;
 
+    if (live.available && live.account_id && !state.accounts.some(a => a.id === live.account_id)) {
+        await fetchAccounts(false);
+    }
+
     renderSessionBar(live);
+    updateLiveHeroCardState(live);
+
     if (state.dashboardOpen) {
         renderDashboard(live);
         refreshInstalockStatus();
@@ -2430,9 +2618,10 @@ async function pollLiveSession() {
     }
     state._wasInMatch = !!live.match;
 
-    // Re-render only when the active card actually moved, so the badge and
-    // the PLAY button appear without restarting animations every poll.
-    if (previousId !== state.activeAccountId) renderAccounts();
+    // Re-render when the active card moved or when hero card needs to appear
+    if (previousId !== state.activeAccountId || (live.available && !hadHero)) {
+        renderAccounts();
+    }
 }
 
 function sessionStateInfo(live) {
@@ -2501,8 +2690,11 @@ async function playAccount(id) {
         const data = await res.json();
         showToast(data.message || (data.success ? "Starting VALORANT…" : "Couldn't start VALORANT"),
                   data.success ? "success" : "error");
-        if (data.success && !data.switched) {
-            setTimeout(pollLiveSession, 2500);
+        if (data.success) {
+            openDashboard();
+            if (!data.switched) {
+                setTimeout(pollLiveSession, 1200);
+            }
         } else if (!data.success && !isActive) {
             stopLaunchPolling();
             renderLaunchProgress({ stage: "error", message: data.message || "Couldn't start VALORANT." });
@@ -2663,6 +2855,9 @@ async function loadLiveAgents() {
 }
 
 // -- tabs ----------------------------------------------------------------
+// (handled below)
+
+// -- tabs ----------------------------------------------------------------
 
 function switchDashTab(tab) {
     state.dashTab = tab;
@@ -2740,42 +2935,137 @@ function renderDashboard(live) {
     if (inMatch) {
         DOM.dashScoreAlly.textContent = match.score.ally;
         DOM.dashScoreEnemy.textContent = match.score.enemy;
-        DOM.dashRoundChip.textContent = `Round ${match.round}`;
+        const curSide = match.current_side || match.side || "Defender";
+        const curSideCls = curSide === "Defender" ? "side-defender" : "side-attacker";
+        const curSideIcon = curSide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
+        DOM.dashRoundChip.innerHTML = `Round ${match.round} &middot; <span class="dash-side-chip ${curSideCls}"><i class="fa-solid ${curSideIcon}"></i> ${curSide}</span>`;
         DOM.dashMapName.textContent = match.map.name || "Unknown map";
         DOM.dashModeName.textContent = match.mode || live.queue_label || "";
         DOM.dashMapArt.style.backgroundImage = match.map.splash ? `url("${match.map.splash}")` : "none";
     }
 
     if (inPregame) {
-        DOM.dashPregameText.textContent =
-            `Agent select · ${match.map.name || "Unknown map"} · ${match.mode || live.queue_label || ""}`;
-        DOM.dashPregameTimer.textContent = match.time_remaining > 0
-            ? `${Math.ceil(match.time_remaining)}s`
-            : "--";
+        const startSide = match.starting_side || "Defender";
+        const sideIcon = startSide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
+        const sideCls = startSide === "Defender" ? "side-defender" : "side-attacker";
+        const sideText = startSide === "Defender" ? "Starting Defense" : "Starting Attack";
+
+        DOM.dashPregameText.innerHTML = `
+            <span>Agent select &middot; <strong>${escapeHtml(match.map.name || "Unknown map")}</strong> &middot; ${escapeHtml(match.mode || live.queue_label || "")}</span>
+            <span class="dash-side-pill ${sideCls}"><i class="fa-solid ${sideIcon}"></i> ${sideText}</span>
+        `;
     }
+
+    // Sync independent smooth timers
+    syncPregameTimer(match, inPregame);
+    syncQueueTimer(live, inQueue);
 
     if (match) {
         renderRoster(DOM.dashRosterAlly, match.team);
         renderRoster(DOM.dashRosterEnemy, match.enemy);
         DOM.dashTeamEnemyWrap.style.display = (match.enemy && match.enemy.length) ? "block" : "none";
+
+        const allyTitleEl = document.querySelector(".dash-team-ally");
+        const enemyTitleEl = document.querySelector(".dash-team-enemy");
+        const allySide = match.current_side || match.side || match.starting_side || "Defender";
+        const enemySide = allySide === "Defender" ? "Attacker" : "Defender";
+
+        if (allyTitleEl) {
+            const allySideIcon = allySide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
+            allyTitleEl.innerHTML = `<i class="fa-solid fa-user-group"></i> Your Team <span class="dash-side-pill ${allySide === "Defender" ? "side-defender" : "side-attacker"}"><i class="fa-solid ${allySideIcon}"></i> ${allySide}</span>`;
+        }
+        if (enemyTitleEl) {
+            const enemySideIcon = enemySide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
+            enemyTitleEl.innerHTML = `<i class="fa-solid fa-crosshairs"></i> Enemy Team <span class="dash-side-pill ${enemySide === "Defender" ? "side-defender" : "side-attacker"}"><i class="fa-solid ${enemySideIcon}"></i> ${enemySide}</span>`;
+        }
     }
 
-    // -- queue timing --------------------------------------------------
-    if (inQueue) {
-        // Anchored to the backend's elapsed count so the clock survives a
-        // reload mid-queue instead of restarting at zero.
-        state.queueStartedAt = Date.now() - (live.queue_elapsed || 0) * 1000;
-        if (DOM.dashQueueBannerSub) {
-            DOM.dashQueueBannerSub.textContent = live.queue_label || "Searching for a match";
-        }
-        renderQueueClock();
-    } else {
-        state.queueStartedAt = 0;
+    if (inQueue && DOM.dashQueueBannerSub) {
+        DOM.dashQueueBannerSub.textContent = live.queue_label || "Searching for a match";
     }
 
     renderQueueControls(live);
     renderPlayButton(live);
     updateInstalockControls();
+}
+
+// -- INDEPENDENT SMOOTH TIMERS --------------------------------------------
+let _queueTimerInterval = null;
+let _pregameTimerInterval = null;
+
+function syncQueueTimer(live, inQueue) {
+    if (!inQueue) {
+        state.queueStartedAt = 0;
+        if (_queueTimerInterval) {
+            clearInterval(_queueTimerInterval);
+            _queueTimerInterval = null;
+        }
+        return;
+    }
+
+    const backendElapsed = (live && live.queue_elapsed) || 0;
+    const targetStart = Date.now() - backendElapsed * 1000;
+
+    // Only resync start timestamp if uninitialized or drifted by > 2.5s
+    if (!state.queueStartedAt || Math.abs(state.queueStartedAt - targetStart) > 2500) {
+        state.queueStartedAt = targetStart;
+    }
+
+    if (!_queueTimerInterval) {
+        updateQueueClockDisplay();
+        _queueTimerInterval = setInterval(updateQueueClockDisplay, 500);
+    }
+}
+
+function updateQueueClockDisplay() {
+    if (!state.queueStartedAt || !DOM.dashQueueClock) return;
+    const elapsed = Math.max(0, Math.floor((Date.now() - state.queueStartedAt) / 1000));
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    DOM.dashQueueClock.textContent = `${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
+function syncPregameTimer(match, inPregame) {
+    if (!inPregame || !match || !(match.time_remaining > 0)) {
+        state.pregameEndsAt = 0;
+        if (_pregameTimerInterval) {
+            clearInterval(_pregameTimerInterval);
+            _pregameTimerInterval = null;
+        }
+        if (DOM.dashPregameTimer) DOM.dashPregameTimer.textContent = "--";
+        return;
+    }
+
+    const targetEnd = Date.now() + Math.ceil(match.time_remaining) * 1000;
+
+    // Only resync target end if uninitialized or drifted by > 2s
+    if (!state.pregameEndsAt || Math.abs(state.pregameEndsAt - targetEnd) > 2000) {
+        state.pregameEndsAt = targetEnd;
+    }
+
+    if (!_pregameTimerInterval) {
+        updatePregameClockDisplay();
+        _pregameTimerInterval = setInterval(updatePregameClockDisplay, 250);
+    }
+}
+
+function updatePregameClockDisplay() {
+    if (!state.pregameEndsAt || !DOM.dashPregameTimer) return;
+    const rem = Math.max(0, Math.ceil((state.pregameEndsAt - Date.now()) / 1000));
+    DOM.dashPregameTimer.textContent = rem > 0 ? `${rem}s` : "0s";
+}
+
+function stopQueueClock() {
+    state.queueStartedAt = 0;
+    if (_queueTimerInterval) {
+        clearInterval(_queueTimerInterval);
+        _queueTimerInterval = null;
+    }
+    state.pregameEndsAt = 0;
+    if (_pregameTimerInterval) {
+        clearInterval(_pregameTimerInterval);
+        _pregameTimerInterval = null;
+    }
 }
 
 function renderRoster(el, players) {
@@ -2786,20 +3076,67 @@ function renderRoster(el, players) {
         return;
     }
 
-    el.innerHTML = players.map(p => `
-        <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""}">
-            ${p.agent_icon
-                ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
-                : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
-            <div class="dash-player-info">
-                <span class="dash-player-name">${escapeHtml(p.name || (p.is_self ? "You" : "Hidden"))}</span>
-                <span class="dash-player-sub">
-                    ${escapeHtml(p.agent || "Picking…")}${p.level ? ` · LV ${p.level}` : ""}
-                </span>
+    const DEFAULT_UNRANKED_ICON = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+
+    el.innerHTML = players.map(p => {
+        const tierIcon = p.tier_icon || DEFAULT_UNRANKED_ICON;
+        const tierLabel = p.tier_label || "Unranked";
+        const hasRank = (p.tier && p.tier > 0);
+        const rankText = hasRank
+            ? `${tierLabel}${p.rr ? ` · ${p.rr} RR` : ""}`
+            : "Unranked";
+
+        const hasPeak = (p.peak_tier && p.peak_tier > 0 && p.peak_tier !== p.tier);
+        const peakIcon = p.peak_tier_icon || DEFAULT_UNRANKED_ICON;
+        const peakLabel = p.peak_tier_label || "Unranked";
+
+        const hasKd = (p.kd && p.kd > 0);
+        const hasHs = (p.hs_pct && p.hs_pct > 0);
+        const hasWinrate = (p.games && p.games > 0);
+
+        return `
+            <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""}">
+                ${hasPeak ? `
+                    <div class="dash-player-peak-corner" title="Peak Rank: ${escapeHtml(peakLabel)}">
+                        <img src="${peakIcon}" class="dash-peak-corner-icon" alt="Peak" onerror="this.style.display='none';">
+                        <span>Peak ${escapeHtml(peakLabel)}</span>
+                    </div>
+                ` : ""}
+                ${p.agent_icon
+                    ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
+                    : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
+                <div class="dash-player-info">
+                    <div class="dash-player-name-row">
+                        <span class="dash-player-name">${escapeHtml(p.name || (p.is_self ? "You" : "Hidden"))}</span>
+                        ${p.is_self ? `<span class="dash-self-tag">YOU</span>` : ""}
+                    </div>
+                    <div class="dash-player-sub">
+                        <span>${escapeHtml(p.agent || "Picking…")}</span>
+                        ${p.level ? `<span class="dash-player-lvl">LV ${p.level}</span>` : ""}
+                    </div>
+                    <div class="dash-player-stats-row">
+                        <span class="dash-player-stat-pill ${hasRank ? "is-ranked" : "is-unranked"}" title="Current Rank">
+                            <i class="fa-solid fa-medal"></i> ${escapeHtml(rankText)}
+                        </span>
+                        <span class="dash-player-stat-pill is-kd" title="Recent K/D Ratio">
+                            <i class="fa-solid fa-crosshairs"></i> ${hasKd ? `${p.kd} K/D` : "-- K/D"}
+                        </span>
+                        <span class="dash-player-stat-pill is-hs" title="Recent Headshot Accuracy">
+                            <i class="fa-solid fa-bullseye"></i> ${hasHs ? `${p.hs_pct}% HS` : "-- HS"}
+                        </span>
+                        ${hasWinrate ? `
+                            <span class="dash-player-stat-pill is-wr" title="${p.wins} Wins / ${p.games} Games">
+                                <i class="fa-solid fa-chart-simple"></i> ${p.winrate}% WR
+                            </span>
+                        ` : ""}
+                    </div>
+                </div>
+                <div class="dash-player-rank-wrap" title="${escapeHtml(tierLabel)}${p.rr ? ` (${p.rr} RR)` : ''}">
+                    <img src="${tierIcon}" class="dash-player-rank" alt="${escapeHtml(tierLabel)}" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
+                </div>
             </div>
-            ${p.tier ? `<img src="${p.tier_icon}" class="dash-player-rank" alt="${escapeHtml(p.tier_label)}" title="${escapeHtml(p.tier_label)}" onerror="this.style.display='none';">` : ""}
-        </div>
-    `).join("");
+        `;
+    }).join("");
 }
 
 // -- PLAY -----------------------------------------------------------------
@@ -3333,23 +3670,43 @@ function renderPlayerStats() {
 
         ${(s.recent || []).length ? `
         <div class="stat-block">
-            <h5 class="stat-block-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent Matches</h5>
+            <h5 class="stat-block-title"><i class="fa-solid fa-clock-rotate-left"></i> Match History & Performance</h5>
             <div class="stat-matches">
-                ${s.recent.map(m => `
-                    <div class="stat-match ${m.result === "Win" ? "is-win" : m.result === "Loss" ? "is-loss" : ""}">
+                ${s.recent.map(m => {
+                    const isWin = m.result === "Win";
+                    const isLoss = m.result === "Loss";
+                    const outcomeText = isWin ? "VICTORY" : (isLoss ? "DEFEAT" : "DRAW");
+                    const scoreText = m.placement ? `#${m.placement}` : `${m.rounds_won} – ${m.rounds_lost}`;
+                    return `
+                    <div class="stat-match ${isWin ? "is-win" : (isLoss ? "is-loss" : "")}">
                         <span class="stat-match-flag"></span>
-                        <img src="${m.agent_icon}" alt="${escapeHtml(m.agent)}" onerror="this.style.visibility='hidden';">
-                        <div class="stat-match-meta">
-                            <strong>${escapeHtml(m.map || "Unknown")}</strong>
-                            <small>${escapeHtml(m.mode || "")} · ${m.hs}% HS · ${m.acs} ACS</small>
+                        <div class="stat-match-agent-wrap">
+                            <img src="${m.agent_icon}" alt="${escapeHtml(m.agent)}" class="stat-match-agent-img" onerror="this.style.visibility='hidden';">
                         </div>
-                        <span class="stat-match-score">${m.placement ? `#${m.placement}` : `${m.rounds_won}–${m.rounds_lost}`}</span>
-                        <div class="stat-match-kda">
-                            <span>${m.kills}/${m.deaths}/${m.assists}</span>
-                            <small>${m.kd} K/D</small>
+                        <div class="stat-match-meta">
+                            <div class="stat-match-title-row">
+                                <span class="stat-match-outcome ${isWin ? 'is-win' : (isLoss ? 'is-loss' : '')}">${outcomeText}</span>
+                                <strong class="stat-match-map">${escapeHtml(m.map || "Unknown")}</strong>
+                                <span class="stat-match-score-pill">${scoreText}</span>
+                                ${m.surrendered ? `<span class="stat-match-surrender-pill" title="Match concluded early via surrender"><i class="fa-solid fa-flag"></i> Surrender</span>` : ""}
+                            </div>
+                            <div class="stat-match-details-row">
+                                <span class="stat-match-mode">${escapeHtml(m.mode || "Competitive")}</span>
+                                <span class="stat-match-metric is-hs" title="Match Headshot Accuracy"><i class="fa-solid fa-bullseye"></i> ${m.hs || 0}% HS</span>
+                                <span class="stat-match-metric is-adr" title="Average Damage per Round"><i class="fa-solid fa-fire-flame-curved"></i> ${m.adr || 0} ADR</span>
+                                <span class="stat-match-metric is-acs" title="Average Combat Score"><i class="fa-solid fa-bolt"></i> ${m.acs || 0} ACS</span>
+                            </div>
+                        </div>
+                        <div class="stat-match-kda-wrap">
+                            <div class="stat-match-kda-numbers">
+                                <span class="stat-kda-score">${m.kills} <small>/</small> ${m.deaths} <small>/</small> ${m.assists}</span>
+                            </div>
+                            <div class="stat-match-kd-pill ${m.kd >= 1 ? 'is-positive' : 'is-negative'}">
+                                ${m.kd} K/D
+                            </div>
                         </div>
                     </div>
-                `).join("")}
+                `}).join("")}
             </div>
         </div>` : ""}
     `;

@@ -159,68 +159,115 @@ def reveal_installer(installer_path: str) -> bool:
 
 def apply_and_relaunch(installer_path: str) -> bool:
     """
-    Spawns a detached background updater script that waits for the running
+    Spawns a detached background PowerShell updater that waits for the running
     Vortex process to exit, runs the installer silently (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-),
-    relaunches the updated Vortex.exe, and cleans up the temporary files.
+    relaunches the updated Vortex.exe, and cleans up temporary files.
     """
     try:
         tmp_dir = tempfile.gettempdir()
-        updater_bat = os.path.join(tmp_dir, "vortex_silent_update.bat")
+        updater_ps1 = os.path.join(tmp_dir, "vortex_updater.ps1")
 
-        exe_path = sys.executable if getattr(sys, "frozen", False) else ""
+        current_pid = os.getpid()
+        exe_path = os.path.normpath(sys.executable) if getattr(sys, "frozen", False) else ""
         local_app_data = os.environ.get("LOCALAPPDATA", "")
         program_files = os.environ.get("ProgramFiles", "")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "")
 
-        default_target = os.path.join(local_app_data, "Programs", "Vortex", "Vortex.exe")
-        alt_target = os.path.join(program_files, "Vortex", "Vortex.exe")
+        default_target = os.path.normpath(os.path.join(local_app_data, "Programs", "Vortex", "Vortex.exe"))
+        local_target = os.path.normpath(os.path.join(local_app_data, "Vortex", "Vortex.exe"))
+        alt_target = os.path.normpath(os.path.join(program_files, "Vortex", "Vortex.exe"))
+        x86_target = os.path.normpath(os.path.join(program_files_x86, "Vortex", "Vortex.exe"))
 
         norm_installer = os.path.normpath(installer_path)
 
-        bat_content = f"""@echo off
-setlocal
-:: Wait 2 seconds for parent Vortex process to exit cleanly
-timeout /t 2 /nobreak >nul
+        ps1_content = f"""# Vortex Automated Background Updater
+$logFile = "$env:TEMP\\vortex_updater.log"
+$ErrorActionPreference = "SilentlyContinue"
 
-:: Terminate any lingering Vortex instance to release file lock
-taskkill /F /IM Vortex.exe /T >nul 2>&1
+function Write-Log($msg) {{
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "[$ts] $msg" | Out-File -FilePath $logFile -Append -Encoding utf8
+}}
 
-:: Run Inno Setup installer silently and wait for installation to complete
-start "" /wait "{norm_installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+"=== Vortex Automated Background Updater Started ===" | Out-File -FilePath $logFile -Encoding utf8
+Write-Log "Installer: '{norm_installer}'"
+Write-Log "Parent PID: {current_pid}"
 
-:: Small delay to let filesystem finalize installation
-timeout /t 1 /nobreak >nul
+# Step 1: Wait up to 10 seconds for parent PID {current_pid} to exit
+$parentExited = $false
+for ($i = 0; $i -lt 20; $i++) {{
+    $p = Get-Process -Id {current_pid} -ErrorAction SilentlyContinue
+    if (-not $p) {{
+        $parentExited = $true
+        break
+    }}
+    Start-Sleep -Milliseconds 500
+}}
 
-:: Launch updated Vortex
-if exist "{default_target}" (
-    start "" "{default_target}"
-) else if exist "{exe_path}" (
-    start "" "{exe_path}"
-) else if exist "{alt_target}" (
-    start "" "{alt_target}"
+if ($parentExited) {{
+    Write-Log "Parent process exited cleanly."
+}} else {{
+    Write-Log "Parent process did not exit in time, forcing process cleanup..."
+}}
+
+# Step 2: Forcefully terminate any remaining Vortex instances to release locks
+Get-Process -Name "Vortex" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 400
+
+# Step 3: Run Inno Setup installer silently
+Write-Log "Executing installer silently..."
+$installProc = Start-Process -FilePath '{norm_installer}' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait -PassThru -ErrorAction SilentlyContinue
+$exitCode = if ($installProc) {{ $installProc.ExitCode }} else {{ -1 }}
+Write-Log "Installer exited with code: $exitCode"
+
+Start-Sleep -Seconds 1
+
+# Step 4: Find installed Vortex.exe
+$targetExe = ""
+$candidates = @(
+    '{default_target}',
+    '{local_target}',
+    '{exe_path}',
+    '{alt_target}',
+    '{x86_target}'
 )
 
-:: Clean up installer and this temporary script
-del "{norm_installer}" >nul 2>&1
-(goto) 2>nul & del "%~f0"
+foreach ($c in $candidates) {{
+    if ($c -and (Test-Path $c)) {{
+        $targetExe = $c
+        break
+    }}
+}}
+
+if ($targetExe) {{
+    Write-Log "Launching updated Vortex from: $targetExe"
+    Start-Process -FilePath $targetExe
+}} else {{
+    Write-Log "ERROR: Could not locate installed Vortex.exe to relaunch!"
+}}
+
+# Step 5: Clean up temporary installer
+Start-Sleep -Seconds 2
+Remove-Item -Path '{norm_installer}' -Force -ErrorAction SilentlyContinue
+Write-Log "Cleanup finished. Update successful."
 """
-        # cmd.exe parses a .bat in the machine's ANSI/OEM codepage, so a
-        # UTF-8 file corrupts as soon as a path leaves ASCII - which %TEMP%
-        # does for any non-ASCII Windows username.
-        try:
-            with open(updater_bat, "w", encoding="mbcs", errors="replace") as f:
-                f.write(bat_content)
-        except LookupError:
-            with open(updater_bat, "w", encoding="utf-8") as f:
-                f.write(bat_content)
+        with open(updater_ps1, "w", encoding="utf-8") as f:
+            f.write(ps1_content)
 
         flags = 0
         if os.name == "nt":
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP
+            flags = 0x00000008 | subprocess.CREATE_NEW_PROCESS_GROUP
             if hasattr(subprocess, "CREATE_NO_WINDOW"):
                 flags |= subprocess.CREATE_NO_WINDOW
 
         subprocess.Popen(
-            ["cmd.exe", "/c", updater_bat],
+            [
+                "powershell.exe",
+                "-WindowStyle", "Hidden",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", updater_ps1
+            ],
             creationflags=flags,
             close_fds=True
         )

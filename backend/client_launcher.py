@@ -29,6 +29,15 @@ from typing import Optional, Dict, Any, Tuple, List, Callable
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pyautogui.PAUSE = 0.04
 
+# Enable Per-Monitor DPI awareness so window coordinates & clicks match physical pixels accurately
+try:
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+except Exception:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
 # Same per-user writable location the database uses in a packaged build, so
 # the log survives updates and is somewhere a user can actually find it.
 if getattr(sys, "frozen", False):
@@ -47,6 +56,70 @@ if not login_logger.handlers:
     _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     login_logger.addHandler(_handler)
     login_logger.propagate = False
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ('dwSize', ctypes.c_uint32),
+        ('cntUsage', ctypes.c_uint32),
+        ('th32ProcessID', ctypes.c_uint32),
+        ('th32DefaultHeapID', ctypes.c_size_t),
+        ('th32ModuleID', ctypes.c_uint32),
+        ('cntThreads', ctypes.c_uint32),
+        ('th32ParentProcessID', ctypes.c_uint32),
+        ('pcPriClassBase', ctypes.c_long),
+        ('dwFlags', ctypes.c_uint32),
+        ('szExeFile', ctypes.c_wchar * 260)
+    ]
+
+
+def _is_process_running_fast(targets: set) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        CreateToolhelp32Snapshot = ctypes.windll.kernel32.CreateToolhelp32Snapshot
+        Process32FirstW = ctypes.windll.kernel32.Process32FirstW
+        Process32NextW = ctypes.windll.kernel32.Process32NextW
+        CloseHandle = ctypes.windll.kernel32.CloseHandle
+
+        h_snap = CreateToolhelp32Snapshot(0x00000002, 0)
+        if h_snap == -1 or not h_snap:
+            return False
+        try:
+            entry = _PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+            if not Process32FirstW(h_snap, ctypes.byref(entry)):
+                return False
+            while True:
+                if entry.szExeFile.lower() in targets:
+                    return True
+                if not Process32NextW(h_snap, ctypes.byref(entry)):
+                    break
+            return False
+        finally:
+            CloseHandle(h_snap)
+    except Exception:
+        return False
+
+
+def is_valorant_running() -> bool:
+    """Checks if VALORANT is currently running (ultra-fast Win32 check)."""
+    targets = {"valorant.exe", "valorant-win64-shipping.exe"}
+    try:
+        return _is_process_running_fast(targets)
+    except Exception:
+        pass
+    try:
+        output = subprocess.check_output(
+            ["tasklist", "/FI", "IMAGENAME eq VALORANT.exe", "/NH"],
+            shell=False,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=1.0
+        )
+        return "VALORANT.exe" in output
+    except Exception:
+        return False
+
 
 # Live per-session login progress, polled by the frontend to drive the
 # "logging into Riot Client" animation. Single active login at a time.
@@ -388,99 +461,115 @@ class ClientLauncher:
 
     @classmethod
     def find_riot_window(cls) -> Optional[int]:
-        """Finds HWND of Riot Client window."""
-        for title in ["Riot Client", "Riot Client Main"]:
-            hwnd = win32gui.FindWindow(None, title)
-            if hwnd and win32gui.IsWindowVisible(hwnd):
-                return hwnd
+        """Finds HWND of the main visible Riot Client window."""
+        candidates = []
 
-        matches = []
         def enum_cb(hwnd, _):
             try:
-                if win32gui.IsWindowVisible(hwnd):
+                if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
                     title = win32gui.GetWindowText(hwnd)
                     if "Riot Client" in title:
                         rect = win32gui.GetWindowRect(hwnd)
-                        if (rect[2] - rect[0]) >= 300:
-                            matches.append(hwnd)
+                        w = rect[2] - rect[0]
+                        h = rect[3] - rect[1]
+                        if w >= 300 and h >= 200:
+                            candidates.append((w * h, hwnd))
             except Exception:
                 pass
             return True
 
         try:
             win32gui.EnumWindows(enum_cb, None)
-            if matches:
-                return matches[0]
+            if candidates:
+                # Sort by window area descending so the largest visible main window is preferred
+                candidates.sort(reverse=True)
+                return candidates[0][1]
         except Exception:
             pass
+
+        for title in ["Riot Client", "Riot Client Main"]:
+            hwnd = win32gui.FindWindow(None, title)
+            if hwnd and win32gui.IsWindowVisible(hwnd):
+                rect = win32gui.GetWindowRect(hwnd)
+                if (rect[2] - rect[0]) >= 300 and (rect[3] - rect[1]) >= 200:
+                    return hwnd
+
         return None
 
     @staticmethod
     def focus_window(hwnd: int) -> bool:
         """
-        Brings Riot Client to foreground.
-
-        SetForegroundWindow silently fails when called from a background
-        process that Windows doesn't consider "active" (which is exactly our
-        case: a background server thread). The Alt key-tap trick helps but
-        isn't reliable on its own. AttachThreadInput temporarily merges our
-        thread's input state with the target window's foreground thread,
-        which is the standard, much more reliable way to force focus in
-        this situation.
+        Brings Riot Client to foreground reliably without sending
+        defocusing keystrokes like Alt.
         """
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            if not hwnd or not win32gui.IsWindow(hwnd):
+                return False
+
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+            try:
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)
+            except Exception:
+                pass
 
             fg_hwnd = win32gui.GetForegroundWindow()
-            target_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
-            current_thread = win32api.GetCurrentThreadId()
-            fg_thread = win32process.GetWindowThreadProcessId(fg_hwnd)[0] if fg_hwnd else 0
+            if fg_hwnd != hwnd:
+                target_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
+                current_thread = win32api.GetCurrentThreadId()
+                fg_thread = win32process.GetWindowThreadProcessId(fg_hwnd)[0] if fg_hwnd else 0
 
-            attached_fg = False
-            attached_self = False
-            try:
-                if fg_thread and fg_thread != target_thread:
-                    win32process.AttachThreadInput(fg_thread, target_thread, True)
-                    attached_fg = True
-                if current_thread != target_thread:
-                    win32process.AttachThreadInput(current_thread, target_thread, True)
-                    attached_self = True
+                attached_fg = False
+                attached_self = False
+                try:
+                    if fg_thread and fg_thread != target_thread:
+                        win32process.AttachThreadInput(fg_thread, target_thread, True)
+                        attached_fg = True
+                    if current_thread != target_thread:
+                        win32process.AttachThreadInput(current_thread, target_thread, True)
+                        attached_self = True
 
-                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
-
-                win32gui.BringWindowToTop(hwnd)
-                win32gui.SetForegroundWindow(hwnd)
-            finally:
-                if attached_fg:
-                    try:
-                        win32process.AttachThreadInput(fg_thread, target_thread, False)
-                    except Exception:
-                        pass
-                if attached_self:
-                    try:
-                        win32process.AttachThreadInput(current_thread, target_thread, False)
-                    except Exception:
-                        pass
+                    # Elevate z-order using TOPMOST toggle
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+                    )
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+                    )
+                    win32gui.BringWindowToTop(hwnd)
+                    win32gui.SetForegroundWindow(hwnd)
+                finally:
+                    if attached_fg:
+                        try:
+                            win32process.AttachThreadInput(fg_thread, target_thread, False)
+                        except Exception:
+                            pass
+                    if attached_self:
+                        try:
+                            win32process.AttachThreadInput(current_thread, target_thread, False)
+                        except Exception:
+                            pass
 
             return True
-        except Exception:
+        except Exception as e:
+            login_logger.warning("focus_window failed: %s", e)
             return False
 
     @classmethod
-    def auto_fill_credentials_pure_keyboard(cls, username: str, password: str, cold_start: bool = False):
+    def auto_fill_credentials(cls, username: str, password: str, cold_start: bool = False):
         """
-        Pure keyboard autofill (ZERO mouse movement):
+        Enters credentials into the Riot Client login window:
         1. Signs out existing session via API if logged in.
-        2. Waits for the login DOM inputs to finish mounting.
-        3. Focuses window and types Username -> Tab -> Password -> Enter.
-
-        When cold_start is True (Riot Client was not already running), the client
-        typically shows a transient splash window before the real login window
-        appears, and the login form's DOM takes noticeably longer to mount than on
-        a warm relaunch. We wait longer up front and require the detected window's
-        size to be stable across repeated checks before treating it as ready,
-        so we don't type into a splash screen or a window that isn't finished loading.
+        2. Waits for the login window to appear & stabilize.
+        3. Brings window to foreground.
+        4. Focuses Username field directly and inputs username.
+        5. Focuses Password field directly and inputs password.
+        6. Submits login.
         """
         # Ensure any running Valorant game instance is closed first so session can be cleanly switched
         cls.kill_valorant()
@@ -488,16 +577,12 @@ class ClientLauncher:
         _set_login_stage("signout", "Signing out of the current session...", username)
         did_sign_out = cls.api_sign_out()
         if did_sign_out:
-            # Riot Client auto-navigates straight to the username/password
-            # form as soon as sign-out completes - it keeps its own window
-            # focused through that transition, so this only needs to be a
-            # short settle delay, not a re-focus battle.
-            time.sleep(0.5)
+            # Allow CEF UI time to transition to login view
+            time.sleep(1.2)
 
-        # On cold start, give the client process time to get past its splash
-        # screen before we even start looking for the real window.
+        # On cold start, give client process time to pass splash screen
         if cold_start:
-            time.sleep(2.5)
+            time.sleep(2.0)
 
         _set_login_stage("waiting_window", "Waiting for the Riot Client login window...", username)
         max_attempts = 90 if cold_start else 45
@@ -506,125 +591,127 @@ class ClientLauncher:
             hwnd = cls.find_riot_window()
             if hwnd:
                 break
-            time.sleep(0.12)
+            time.sleep(0.15)
 
         if not hwnd:
             _set_login_stage("error", "Riot Client login window did not appear.", username)
             return
 
-        if cold_start:
-            # Wait until the window's rect stops changing (splash -> real login
-            # window swap, or the login form finishing layout) before typing.
-            stable_checks = 0
-            last_rect = None
-            for _ in range(60):
-                time.sleep(0.15)
-                current_hwnd = cls.find_riot_window()
-                if not current_hwnd:
-                    continue
-                hwnd = current_hwnd
-                try:
-                    rect = win32gui.GetWindowRect(hwnd)
-                except Exception:
-                    rect = None
+        # Wait until window dimensions stabilize
+        stable_checks = 0
+        last_rect = None
+        for _ in range(50 if cold_start else 20):
+            time.sleep(0.12)
+            curr_hwnd = cls.find_riot_window() or hwnd
+            hwnd = curr_hwnd
+            try:
+                rect = win32gui.GetWindowRect(hwnd)
+            except Exception:
+                rect = None
 
-                if rect and rect == last_rect and rect[2] - rect[0] > 300:
-                    stable_checks += 1
-                    if stable_checks >= 6:
-                        break
-                else:
-                    stable_checks = 0
-                last_rect = rect
+            if rect and rect == last_rect and (rect[2] - rect[0]) >= 300:
+                stable_checks += 1
+                if stable_checks >= 5:
+                    break
+            else:
+                stable_checks = 0
+            last_rect = rect
 
-            # Extra settle time for the login form's inputs to become interactive.
-            time.sleep(1.2)
-
-            # Only fight for foreground focus on cold start, where Riot
-            # Client is a brand new process and Windows' foreground-lock
-            # restrictions are more likely to block SetForegroundWindow.
-            focused_ok = False
-            for _ in range(6):
-                cls.focus_window(hwnd)
-                time.sleep(0.25)
-                try:
-                    if win32gui.GetForegroundWindow() == hwnd:
-                        focused_ok = True
-                        break
-                except Exception:
-                    pass
-
-            if not focused_ok:
-                _set_login_stage("error", "Could not focus the Riot Client window.", username)
-                return
-        else:
-            # Warm path (already logged in -> API sign-out): Riot Client
-            # auto-navigates to the login form and keeps its own window
-            # focused through the transition, so we don't need to fight for
-            # foreground focus here. Repeatedly tapping Alt via
-            # focus_window() in this case sends real keystrokes into
-            # whatever currently has focus (including Riot Client's own
-            # login view), which can shift keyboard focus to an unrelated
-            # element there (e.g. an alternate sign-in option) - that's what
-            # was breaking this path. A single, non-repeated nudge is enough.
+        # Bring window to front
+        for _ in range(3):
             cls.focus_window(hwnd)
+            time.sleep(0.15)
 
-        # A bit more settle time before typing starts - the login form can
-        # be visible before its inputs are actually interactive/focused,
-        # which is what causes the password to land in the username field.
-        time.sleep(0.9)
+        time.sleep(0.5)
 
         _set_login_stage("typing", "Entering credentials into Riot Client...", username)
         try:
-            # Clear Username & Paste (Username field is default focused)
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.04)
-            pyautogui.press('backspace')
-            time.sleep(0.04)
-            pyperclip.copy(username)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.15)
+            rect = win32gui.GetWindowRect(hwnd)
+            w = rect[2] - rect[0]
+            h = rect[3] - rect[1]
 
-            # Tab to Password - extra pause here so the password field has
-            # actually received focus before we start typing into it.
-            pyautogui.press('tab')
-            time.sleep(0.3)
+            if w < 300 or h < 200:
+                raise RuntimeError(f"Invalid Riot Client window dimensions ({w}x{h}).")
 
-            # Clear Password & Paste
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.04)
-            pyautogui.press('backspace')
-            time.sleep(0.04)
-            pyperclip.copy(password)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.08)
+            # Save user's cursor position so mouse restoration is seamless
+            orig_cursor = None
+            try:
+                orig_cursor = win32api.GetCursorPos()
+            except Exception:
+                pass
 
-            # Submit login
-            pyautogui.press('enter')
-            _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
-        except Exception:
-            _set_login_stage("error", "Failed to type credentials.", username)
+            try:
+                user_x = rect[0] + int(w * 0.165)
+                user_y = rect[1] + int(h * 0.245)
+
+                pass_x = rect[0] + int(w * 0.165)
+                pass_y = rect[1] + int(h * 0.335)
+
+                def _click_at(x: int, y: int):
+                    win32api.SetCursorPos((x, y))
+                    time.sleep(0.03)
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                    time.sleep(0.04)
+                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+
+                # 1. Click directly on Username field to guarantee CEF focus
+                _click_at(user_x, user_y)
+                time.sleep(0.06)
+                _click_at(user_x, user_y)
+                time.sleep(0.06)
+
+                # Clear and Paste Username
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.03)
+                pyautogui.press('backspace')
+                time.sleep(0.03)
+                pyautogui.press('delete')
+                time.sleep(0.03)
+
+                pyperclip.copy(username)
+                time.sleep(0.04)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.12)
+
+                # 2. Click directly on Password field to guarantee focus
+                _click_at(pass_x, pass_y)
+                time.sleep(0.06)
+                _click_at(pass_x, pass_y)
+                time.sleep(0.06)
+
+                # Clear and Paste Password
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.03)
+                pyautogui.press('backspace')
+                time.sleep(0.03)
+                pyautogui.press('delete')
+                time.sleep(0.03)
+
+                pyperclip.copy(password)
+                time.sleep(0.04)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.12)
+
+                # 3. Submit login
+                pyautogui.press('enter')
+                _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
+            finally:
+                if orig_cursor:
+                    try:
+                        win32api.SetCursorPos(orig_cursor)
+                    except Exception:
+                        pass
+        except Exception as e:
+            login_logger.exception("[%s] Failed to enter credentials: %s", username, e)
+            _set_login_stage("error", f"Failed to type credentials: {e}", username)
+
+    # Backward compatibility alias
+    auto_fill_credentials_pure_keyboard = auto_fill_credentials
 
     @staticmethod
     def is_valorant_running() -> bool:
-        """Checks if VALORANT is currently running."""
-        try:
-            output = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq VALORANT.exe", "/NH"],
-                shell=True,
-                text=True,
-                stderr=subprocess.DEVNULL
-            )
-            if "VALORANT.exe" in output:
-                return True
-            output_shipping = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq VALORANT-Win64-Shipping.exe", "/NH"],
-                shell=True,
-                text=True,
-                stderr=subprocess.DEVNULL
-            )
-            return "VALORANT-Win64-Shipping.exe" in output_shipping
-        except Exception:
-            return False
+        """Checks if VALORANT is currently running (ultra-fast Win32 check)."""
+        return is_valorant_running()
 
     @staticmethod
     def kill_valorant() -> bool:
@@ -643,7 +730,7 @@ class ClientLauncher:
     @classmethod
     def login_account(cls, username: str, password: str, client_path: Optional[str] = None) -> Dict[str, Any]:
         """
-        Opens Riot Client and logs in using API logout & pure keyboard injection.
+        Opens Riot Client and logs in using API logout & smart autofill.
         If VALORANT is running, exits VALORANT before proceeding.
         """
         LOGIN_PROGRESS["started_at"] = time.time()
@@ -677,7 +764,7 @@ class ClientLauncher:
                 # uncaught exception - without this it would just leave the
                 # login modal stuck on its last stage forever.
                 try:
-                    cls.auto_fill_credentials_pure_keyboard(username, password, not was_running)
+                    cls.auto_fill_credentials(username, password, not was_running)
                 except Exception as e:
                     login_logger.exception("[%s] auto-fill worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)

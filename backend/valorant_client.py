@@ -97,12 +97,81 @@ def tier_icon(tier_num: int) -> str:
     return f"{TIER_BASE_URL}/{idx}/largeicon.png"
 
 
+def parse_player_mmr(mmr_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Extracts tier, RR, peak tier, and seasonal stats from raw MMR JSON."""
+    result = {
+        "tier": 0,
+        "tier_label": "Unranked",
+        "tier_icon": tier_icon(0),
+        "rr": 0,
+        "peak_tier": 0,
+        "peak_tier_label": "Unranked",
+        "peak_tier_icon": tier_icon(0),
+        "wins": 0,
+        "games": 0,
+        "winrate": 0,
+    }
+    if not mmr_data or not isinstance(mmr_data, dict):
+        return result
+
+    skills = mmr_data.get("QueueSkills", {}).get("competitive", {})
+    if not skills:
+        return result
+
+    seasons = skills.get("SeasonalInfoBySeasonID", {}) or {}
+    peak_t = 0
+    current_tier = 0
+    current_rr = 0
+    total_wins = 0
+    total_games = 0
+
+    for s_id, s_info in seasons.items():
+        if not isinstance(s_info, dict):
+            continue
+        c_tier = int(s_info.get("CompetitiveTier") or 0)
+        r_tier = int(s_info.get("Rank") or 0)
+        t_high = max(c_tier, r_tier)
+        if t_high > peak_t:
+            peak_t = t_high
+
+        wins = int(s_info.get("NumberOfWins") or 0)
+        games = int(s_info.get("NumberOfGames") or 0)
+        total_wins += wins
+        total_games += games
+
+        if c_tier > 0 or games > 0:
+            current_tier = c_tier
+            current_rr = int(s_info.get("RankedRating") or 0)
+
+    latest = mmr_data.get("LatestCompetitiveUpdate", {}) or {}
+    if latest.get("TierAfterUpdate"):
+        current_tier = int(latest.get("TierAfterUpdate") or current_tier)
+        current_rr = int(latest.get("RankedRatingAfterUpdate") or current_rr)
+
+    if peak_t < current_tier:
+        peak_t = current_tier
+
+    result["tier"] = current_tier
+    result["tier_label"] = tier_label(current_tier) or "Unranked"
+    result["tier_icon"] = tier_icon(current_tier) or tier_icon(0)
+    result["rr"] = current_rr
+    result["peak_tier"] = peak_t
+    result["peak_tier_label"] = tier_label(peak_t) or "Unranked"
+    result["peak_tier_icon"] = tier_icon(peak_t) or tier_icon(0)
+    result["wins"] = total_wins
+    result["games"] = total_games
+    result["winrate"] = round((total_wins / total_games * 100)) if total_games > 0 else 0
+
+    return result
+
+
 # --------------------------------------------------------------------------
 # Static game data (agents, maps, client version), fetched once and cached.
 # --------------------------------------------------------------------------
 
 _STATIC_CACHE: Dict[str, Any] = {"agents": None, "maps": None, "version": None}
 _STATIC_LOCK = threading.Lock()
+_MATCH_DETAILS_CACHE: Dict[str, Any] = {}
 
 
 def _fetch_json(url: str, timeout: float = 6.0) -> Optional[Any]:
@@ -395,17 +464,26 @@ class ValorantLiveClient:
         if not res or res.status_code != 200:
             return {}
 
+        best_payload = {}
         try:
             for p in res.json().get("presences", []) or []:
                 if p.get("puuid") != self.puuid:
                     continue
                 raw = p.get("private")
                 if not raw:
-                    return {}
-                return json.loads(base64.b64decode(raw).decode("utf-8", errors="ignore"))
+                    continue
+                try:
+                    decoded = json.loads(base64.b64decode(raw).decode("utf-8", errors="ignore"))
+                except Exception:
+                    continue
+                # If this presence payload contains valorant session state or party info, return immediately
+                if decoded.get("sessionLoopState") or decoded.get("partyOwnerMatchCurrentTeam") or decoded.get("provisioningFlow"):
+                    return decoded
+                if not best_payload:
+                    best_payload = decoded
         except Exception:
             pass
-        return {}
+        return best_payload
 
     # -- names -----------------------------------------------------------
 
@@ -554,10 +632,19 @@ class ValorantLiveClient:
 
     def mmr(self) -> Dict[str, Any]:
         """Full MMR record: current tier/RR plus every act the player ranked in."""
-        res = self._remote("GET", f"{self.pd}/mmr/v1/players/{self.puuid}", timeout=6.0)
+        return self.player_mmr(self.puuid)
+
+    def player_mmr(self, puuid: str) -> Dict[str, Any]:
+        """Full MMR record for any player PUUID in the active match."""
+        if not puuid or not self.pd:
+            return {}
+        res = self._remote("GET", f"{self.pd}/mmr/v1/players/{puuid}", timeout=4.0)
         if res.status_code != 200:
             return {}
-        return res.json()
+        try:
+            return res.json()
+        except Exception:
+            return {}
 
     def competitive_updates(self, count: int = 20) -> List[Dict[str, Any]]:
         """
@@ -583,13 +670,81 @@ class ValorantLiveClient:
         return res.json().get("History", []) or []
 
     def match_details(self, match_id: str) -> Dict[str, Any]:
-        res = self._remote("GET", f"{self.pd}/match-details/v1/matches/{match_id}", timeout=15.0)
+        global _MATCH_DETAILS_CACHE
+        if match_id in _MATCH_DETAILS_CACHE:
+            return _MATCH_DETAILS_CACHE[match_id]
+        res = self._remote("GET", f"{self.pd}/match-details/v1/matches/{match_id}", timeout=6.0)
         if res.status_code != 200:
             return {}
         try:
-            return res.json()
+            data = res.json()
+            if data:
+                if len(_MATCH_DETAILS_CACHE) > 30:
+                    _MATCH_DETAILS_CACHE.clear()
+                _MATCH_DETAILS_CACHE[match_id] = data
+            return data
         except Exception:
             return {}
+
+    def player_combat_summary(self, puuid: str, max_matches: int = 2) -> Dict[str, Any]:
+        """Computes K/D, kills, deaths, assists, and Headshot % from recent matches."""
+        result = {"kd": 0.0, "hs_pct": 0, "kills": 0, "deaths": 0, "assists": 0, "matches_analyzed": 0}
+        if not puuid or not self.pd:
+            return result
+        try:
+            url = f"{self.pd}/match-history/v1/history/{puuid}?startIndex=0&endIndex={max_matches}"
+            res = self._remote("GET", url, timeout=4.0)
+            if res.status_code != 200:
+                return result
+            history = res.json().get("History", []) or []
+            if not history:
+                return result
+
+            total_kills = 0
+            total_deaths = 0
+            total_assists = 0
+            total_hs = 0
+            total_bs = 0
+            total_ls = 0
+            valid_matches = 0
+
+            for h in history[:max_matches]:
+                m_id = h.get("MatchID")
+                if not m_id:
+                    continue
+                details = self.match_details(m_id)
+                if not details:
+                    continue
+
+                p_entry = next((p for p in details.get("players", []) if p.get("subject") == puuid), None)
+                if not p_entry:
+                    continue
+
+                p_stats = p_entry.get("stats") or {}
+                total_kills += int(p_stats.get("kills") or 0)
+                total_deaths += int(p_stats.get("deaths") or 0)
+                total_assists += int(p_stats.get("assists") or 0)
+
+                for r in details.get("roundResults", []) or []:
+                    for ps in r.get("playerStats", []) or []:
+                        if ps.get("subject") == puuid:
+                            for d in ps.get("damage", []) or []:
+                                total_hs += int(d.get("headshots") or 0)
+                                total_bs += int(d.get("bodyshots") or 0)
+                                total_ls += int(d.get("legshots") or 0)
+                valid_matches += 1
+
+            if valid_matches > 0:
+                total_hits = total_hs + total_bs + total_ls
+                result["kd"] = round(total_kills / max(1, total_deaths), 2)
+                result["hs_pct"] = round((total_hs / max(1, total_hits)) * 100) if total_hits > 0 else 0
+                result["kills"] = total_kills
+                result["deaths"] = total_deaths
+                result["assists"] = total_assists
+                result["matches_analyzed"] = valid_matches
+            return result
+        except Exception:
+            return result
 
     def loadout(self) -> Dict[str, Any]:
         """Currently equipped skins/sprays, straight off the local client."""
@@ -984,11 +1139,16 @@ def valorant_launcher_exe() -> Optional[str]:
 
 def is_game_running() -> bool:
     """True while either VALORANT process is alive."""
+    try:
+        from .client_launcher import _is_process_running_fast
+        return _is_process_running_fast({"valorant.exe", "valorant-win64-shipping.exe"})
+    except Exception:
+        pass
     for image in ("VALORANT.exe", "VALORANT-Win64-Shipping.exe"):
         try:
             out = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {image}", "/NH"],
-                capture_output=True, text=True, shell=True, timeout=8
+                capture_output=True, text=True, shell=False, timeout=1.0
             ).stdout or ""
             if image.lower() in out.lower():
                 return True
@@ -1306,7 +1466,12 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
     kills = int(stats.get("kills", 0) or 0)
     deaths = int(stats.get("deaths", 0) or 0)
     assists = int(stats.get("assists", 0) or 0)
-    rounds = int(stats.get("roundsPlayed", 0) or 0)
+    round_results = details.get("roundResults") or []
+    played_rounds = [r for r in round_results if (r.get("roundResultCode") or "").lower() != "surrendered"]
+    has_surrender = any((r.get("roundResultCode") or "").lower() == "surrendered" for r in round_results)
+    actual_rounds_count = len(played_rounds) if played_rounds else int(stats.get("roundsPlayed", 0) or 0)
+    rounds = max(1, actual_rounds_count)
+
     score = int(stats.get("score", 0) or 0)
 
     team_id = me.get("teamId") or me.get("TeamId") or ""
@@ -1317,24 +1482,31 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
     rounds_won = rounds_lost = placement = 0
 
     if len(teams) == 2 and own is not None:
-        rounds_won = int(own.get("roundsWon", 0) or 0)
-        rounds_lost = int((others[0] if others else {}).get("roundsWon", 0) or 0)
+        other_team = others[0] if others else {}
+        if has_surrender and played_rounds:
+            rounds_won = sum(1 for r in played_rounds if (r.get("winningTeam") or "") == team_id)
+            rounds_lost = sum(1 for r in played_rounds if (r.get("winningTeam") or "") != team_id)
+        elif own.get("numPoints") is not None and other_team.get("numPoints") is not None:
+            rounds_won = int(own.get("numPoints", 0) or 0)
+            rounds_lost = int(other_team.get("numPoints", 0) or 0)
+        else:
+            rounds_won = int(own.get("roundsWon", 0) or 0)
+            rounds_lost = int(other_team.get("roundsWon", 0) or 0)
+
         if rounds_won == rounds_lost:
             result = "Draw"
         else:
             result = "Win" if own.get("won") else "Loss"
     else:
-        # Deathmatch and the other free-for-alls give every player their own
-        # "team", so a win is a placement rather than a round score.
         ranked_scores = sorted(
             (int(((p.get("stats") or {}).get("score", 0)) or 0) for p in players), reverse=True
         )
         placement = ranked_scores.index(score) + 1 if score in ranked_scores else 0
         result = "Win" if placement == 1 else "Loss"
 
-    # Hit locations only exist per round, which is also how trackers do it.
-    head = body = leg = 0
-    for rnd in details.get("roundResults") or []:
+    # Hit locations and damage per round for that specific match
+    head = body = leg = total_damage = 0
+    for rnd in played_rounds if played_rounds else round_results:
         for ps in rnd.get("playerStats") or []:
             if ps.get("subject") != puuid:
                 continue
@@ -1342,9 +1514,12 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
                 head += int(dmg.get("headshots", 0) or 0)
                 body += int(dmg.get("bodyshots", 0) or 0)
                 leg += int(dmg.get("legshots", 0) or 0)
+                total_damage += int(dmg.get("damage", 0) or 0)
 
     shots = head + body + leg
     agent = agent_by_id(me.get("characterId") or me.get("CharacterId") or "")
+    adr = round(total_damage / max(1, rounds)) if rounds else 0
+    hs_pct = round(head / shots * 100, 1) if shots else 0.0
 
     return {
         "match_id": info.get("matchId", ""),
@@ -1355,16 +1530,23 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         "agent": agent.get("name", ""),
         "agent_icon": agent.get("icon", ""),
         "result": result,
+        "surrendered": has_surrender,
         "rounds_won": rounds_won,
         "rounds_lost": rounds_lost,
         "placement": placement,
         "kills": kills,
         "deaths": deaths,
         "assists": assists,
-        "kd": round(kills / deaths, 2) if deaths else float(kills),
-        "acs": round(score / rounds) if rounds else 0,
-        "hs": round(head / shots * 100, 1) if shots else 0.0,
+        "kda": f"{kills}/{deaths}/{assists}",
+        "kd": round(kills / max(1, deaths), 2),
+        "acs": round(score / max(1, rounds)) if rounds else 0,
+        "hs": hs_pct,
+        "hs_pct": hs_pct,
+        "adr": adr,
         "headshots": head,
+        "bodyshots": body,
+        "legshots": leg,
+        "total_damage": total_damage,
         "shots": shots,
         "rounds": rounds,
         "started_at": int(info.get("gameStartMillis", 0) or 0),

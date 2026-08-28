@@ -1,9 +1,9 @@
 ; Inno Setup script for Vortex | Valorant Account Manager.
-; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=3.0.0
+; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=4.3.0
 ; (AppVersion defaults below if not passed on the command line.)
 
 #ifndef AppVersion
-  #define AppVersion "3.0.0"
+  #define AppVersion "4.3.0"
 #endif
 
 #define AppName "Vortex"
@@ -27,16 +27,11 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExeName}
-; Always per-user, never admin - no elevation dialog/override needed. Inno
-; Setup's PrivilegesRequiredOverridesAllowed forces Setup.exe to relaunch
-; itself and verify the relaunched process's image path matches the
-; original exactly; when launched from a background/detached process (as
-; our in-app auto-updater does) that self-check can spuriously fail with
-; "Security validation failure: parent process has different executable!"
-; and dump the user back at a fresh wizard. Since we never need the
-; per-user/per-machine choice, removing the override avoids that relaunch
-; entirely.
 PrivilegesRequired=lowest
+CloseApplications=force
+CloseApplicationsFilter=*.exe
+RestartApplications=no
+AppMutex=Global\VortexAppMutex
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -45,7 +40,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 
 [Icons]
 Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"
@@ -56,21 +51,12 @@ Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; Tasks: desktopico
 Filename: "{app}\{#AppExeName}"; Description: "Launch Vortex"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Vortex must not be running when we try to delete it - Windows won't
-; remove a locked .exe, which previously left Vortex.exe behind after an
-; uninstall. This runs before the uninstaller deletes any files.
-Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName} /T"; Flags: runhidden; RunOnceId: "KillVortex"
+Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName}"; Flags: runhidden; RunOnceId: "KillVortex"
 
 [UninstallDelete]
-; Scoped to the install dir only. The user's accounts live in
-; %LOCALAPPDATA%\Vortex\database.sqlite and are deliberately preserved
-; so reinstalling or updating keeps their data.
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-{ Close any running instance BEFORE files are copied. Aggressively kills any
-  process (including if an old client batch script tried to launch too early)
-  so the destination executable is completely unlocked. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
@@ -78,22 +64,13 @@ var
 begin
   for I := 1 to 3 do
   begin
-    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM {#AppExeName} /T',
+    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM {#AppExeName} >nul 2>&1',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(250);
+    Sleep(200);
   end;
   Result := '';
 end;
 
-{ Windows caches extracted icon bitmaps per shortcut path and doesn't
-  always notice when the target .exe's embedded icon changes underneath
-  it - users who installed an early build (with the old, poorly-cropped
-  icon) can keep seeing it on their taskbar/desktop/Start Menu even after
-  updating to a build with the corrected icon. ie4uinit.exe -show asks
-  Explorer to rebuild its icon cache without restarting explorer.exe, so
-  there's no visible disruption (no taskbar flicker). Recreating the
-  shortcuts first (the [Icons] section already does this on every
-  install) plus this refresh clears the stale bitmap for most users. }
 procedure RefreshIconCache;
 var
   ResultCode: Integer;
@@ -103,19 +80,9 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
-  AppExePath: String;
 begin
   if CurStep = ssPostInstall then
   begin
     RefreshIconCache;
-    { When running silently (e.g. triggered by an in-app auto-update or legacy
-      updater scripts), automatically relaunch the newly installed Vortex.exe. }
-    if WizardSilent then
-    begin
-      AppExePath := ExpandConstant('{app}\{#AppExeName}');
-      Exec(AppExePath, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
-    end;
   end;
 end;
