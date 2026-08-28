@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# App data (per-machine, never commit real account data)
+database.sqlite
+database.sqlite-wal
+database.sqlite-shm
+
+# Build artifacts
+build/
+dist/
+dist_installer/
+*.spec.bak
+installer_output/
+
+# Leftover/unrelated
+lol-account-manager-main/
+.ui_backup/
+
+# Editor/OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
