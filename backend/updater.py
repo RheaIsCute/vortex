@@ -42,6 +42,13 @@ def check_for_update() -> Optional[Dict[str, Any]]:
         "Pragma": "no-cache"
     }
 
+    best: Optional[Dict[str, Any]] = None
+    best_parsed = None
+
+    # Every source is consulted rather than stopping at the first reachable
+    # one: GitHub Raw is CDN-cached for minutes after a release, so the first
+    # source can answer successfully with a stale manifest. Whichever source
+    # advertises the highest version wins.
     for base_url in VERSION_CHECK_URLS:
         try:
             url = f"{base_url}?_t={int(time.time())}"
@@ -62,22 +69,30 @@ def check_for_update() -> Optional[Dict[str, Any]]:
                 continue
 
             try:
-                is_newer = parse_version(remote_version) > parse_version(APP_VERSION)
+                parsed = parse_version(remote_version)
             except InvalidVersion:
                 continue
 
-            if not is_newer:
-                return None
-
-            return {
-                "version": remote_version,
-                "url": download_url,
-                "notes": data.get("changelog", "")
-            }
+            if best_parsed is None or parsed > best_parsed:
+                best_parsed = parsed
+                best = {
+                    "version": remote_version,
+                    "url": download_url,
+                    "notes": data.get("changelog", "")
+                }
         except Exception:
             continue
 
-    return None
+    if best is None or best_parsed is None:
+        return None
+
+    try:
+        if best_parsed <= parse_version(APP_VERSION):
+            return None
+    except InvalidVersion:
+        return None
+
+    return best
 
 
 def download_installer(download_url: str, version: str = "", progress_cb=None) -> Optional[str]:
@@ -188,8 +203,15 @@ if exist "{exe_path}" (
 del "{norm_installer}" >nul 2>&1
 (goto) 2>nul & del "%~f0"
 """
-        with open(updater_bat, "w", encoding="utf-8") as f:
-            f.write(bat_content)
+        # cmd.exe parses a .bat in the machine's ANSI/OEM codepage, so a
+        # UTF-8 file corrupts as soon as a path leaves ASCII - which %TEMP%
+        # does for any non-ASCII Windows username.
+        try:
+            with open(updater_bat, "w", encoding="mbcs", errors="replace") as f:
+                f.write(bat_content)
+        except LookupError:
+            with open(updater_bat, "w", encoding="utf-8") as f:
+                f.write(bat_content)
 
         flags = 0
         if os.name == "nt":

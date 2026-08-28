@@ -74,12 +74,6 @@ class StatScraper:
         and recent 10 match history for any Riot ID (Name#TAG) over the web.
         """
         result = {
-            "rank_tier": "UNRANKED",
-            "rank_division": "",
-            "lp": 0,
-            "winrate": 0.0,
-            "games_played": 0,
-            "rank_icon_url": get_official_rank_icon("UNRANKED"),
             "peak_rank_tier": "",
             "peak_rank_division": "",
             "peak_rank_icon_url": "",
@@ -137,12 +131,11 @@ class StatScraper:
                             if curr_data:
                                 curr_tier_patched = curr_data.get("currenttierpatched", "Unranked")
                                 parts = curr_tier_patched.split()
-                                if len(parts) >= 1:
+                                if parts:
                                     result["rank_tier"] = parts[0].upper()
-                                if len(parts) >= 2:
-                                    result["rank_division"] = parts[1]
-                                result["lp"] = curr_data.get("ranking_in_tier", 0)
-                                result["games_played"] = curr_data.get("games_needed_for_rating", 0)
+                                    result["rank_division"] = parts[1] if len(parts) >= 2 else ""
+                                    result["lp"] = curr_data.get("ranking_in_tier", 0)
+                                    result["games_played"] = curr_data.get("games_needed_for_rating", 0)
 
                             # Peak rank
                             peak_data = mmr_data.get("highest_rank", {})
@@ -174,8 +167,13 @@ class StatScraper:
             except Exception:
                 pass
 
-        # Generate official rank icon URLs
-        result["rank_icon_url"] = get_official_rank_icon(result["rank_tier"], result["rank_division"])
+        # Generate official rank icon URLs - only for ranks this call actually
+        # resolved, so a failed lookup can't replace a stored emblem with the
+        # unranked one.
+        if result.get("rank_tier"):
+            result["rank_icon_url"] = get_official_rank_icon(
+                result["rank_tier"], result.get("rank_division", "")
+            )
         if result["peak_rank_tier"]:
             result["peak_rank_icon_url"] = get_official_rank_icon(result["peak_rank_tier"], result["peak_rank_division"])
 

@@ -121,6 +121,26 @@ def account_needs_check(acc: Dict[str, Any]) -> bool:
     return not (has_riot_id and was_synced and status not in ("UNVERIFIED", "BANNED", "SUSPENDED"))
 
 
+# Which account this process last saw signed in. The session poll runs every
+# few seconds, so "last login" is only stamped when the signed-in account
+# actually changes - otherwise it would just track "last seen" and rewrite the
+# row (and re-render the roster) on every single tick.
+_ACTIVE_SESSION: Dict[str, Any] = {"account_id": None}
+
+
+def _mark_session_login(account_id: int, stored_last_login: Optional[str]) -> bool:
+    """True when this sync is a new sign-in worth stamping a login time on."""
+    if _ACTIVE_SESSION["account_id"] == account_id and stored_last_login:
+        return False
+    _ACTIVE_SESSION["account_id"] = account_id
+    return True
+
+
+def note_account_login(account_id: int) -> None:
+    """Records an explicit login/launch as this process's active session."""
+    _ACTIVE_SESSION["account_id"] = account_id
+
+
 def apply_account_update(account_id: int, update_payload: dict) -> bool:
     """
     Persists a live-info update for an account, then moves it into the
@@ -722,6 +742,8 @@ async def sync_active_account():
     if matched_acc:
         update_data = {k: v for k, v in info.items() if k not in ("found", "username")}
         update_data["last_updated"] = datetime.now().isoformat()
+        if _mark_session_login(matched_acc["id"], matched_acc.get("last_login")):
+            update_data["last_login"] = datetime.now().isoformat()
         moved = apply_account_update(matched_acc["id"], update_data)
         return {
             "success": True,
@@ -783,6 +805,8 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks):
     )
 
     # Automatically watch, sync Level, Region, Rank, Peak Rank, and link Riot ID
+    db.update_account(account_id, {"last_login": datetime.now().isoformat()})
+    note_account_login(account_id)
     background_tasks.add_task(background_auto_detect_and_link, account_id)
     
     return {
@@ -1489,6 +1513,9 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
                     "Couldn't start VALORANT - check the Riot Client path in Settings."}
         return {"success": True, "switched": False,
                 "message": f"Starting VALORANT as {account.get('display_name') or account['username']}..."}
+
+    db.update_account(account_id, {"last_login": datetime.now().isoformat()})
+    note_account_login(account_id)
 
     # Different account signed in (or none) - log in first, then launch.
     result = await asyncio.to_thread(

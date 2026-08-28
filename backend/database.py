@@ -84,6 +84,7 @@ class Database:
                     match_history TEXT DEFAULT '[]',
                     status TEXT DEFAULT 'PLAYABLE',
                     favorite INTEGER DEFAULT 0,
+                    last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT ''
                 )
@@ -101,7 +102,8 @@ class Database:
                 ("peak_rank_season", "TEXT DEFAULT ''"),
                 ("card_small_url", "TEXT DEFAULT ''"),
                 ("match_history", "TEXT DEFAULT '[]'"),
-                ("status", "TEXT DEFAULT 'PLAYABLE'")
+                ("status", "TEXT DEFAULT 'PLAYABLE'"),
+                ("last_login", "TEXT DEFAULT ''")
             ]
 
             for col_name, col_def in new_columns:
@@ -140,11 +142,20 @@ class Database:
                     match_history TEXT DEFAULT '[]',
                     status TEXT DEFAULT 'BANNED',
                     favorite INTEGER DEFAULT 0,
+                    last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT '',
                     banned_at TEXT DEFAULT ''
                 )
             """)
+
+            cursor.execute("PRAGMA table_info(banned_accounts)")
+            existing_banned_cols = [col["name"] for col in cursor.fetchall()]
+            if "last_login" not in existing_banned_cols:
+                try:
+                    cursor.execute("ALTER TABLE banned_accounts ADD COLUMN last_login TEXT DEFAULT ''")
+                except Exception:
+                    pass
 
             # App Settings table
             cursor.execute("""
@@ -441,6 +452,11 @@ class Database:
                     # vanish from every listing (see the ghost-account repair
                     # in init_db).
                     continue
+                if key in ("winrate", "games_played") and not val:
+                    # A wiped winrate / match count is always a failed lookup,
+                    # never a real result - an account with games played can't
+                    # drop back to zero of them.
+                    continue
                 if key == "level" and (not isinstance(val, int) or val < 1):
                     # Level 0/None/garbage only ever comes from a failed
                     # lookup. The producers already omit "level" entirely
@@ -486,7 +502,8 @@ class Database:
         "rank_tier", "rank_division", "lp", "level", "winrate", "games_played",
         "top_champs", "rank_icon_url", "peak_rank_tier", "peak_rank_division",
         "peak_rank_icon_url", "peak_rank_season", "card_small_url",
-        "match_history", "status", "favorite", "last_updated", "created_at"
+        "match_history", "status", "favorite", "last_login", "last_updated",
+        "created_at"
     ]
 
     def move_to_banned(self, account_id: int) -> bool:

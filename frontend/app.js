@@ -307,7 +307,7 @@ function startContinuousSync() {
             const res = await fetch("/api/sync-active-account");
             const data = await res.json();
             if (data.synced) {
-                fetchAccounts();
+                fetchAccounts(true);
                 fetchStatsSummary();
                 if (data.moved_to_banned) {
                     showToast(`${data.display_name || 'Account'} is banned/suspended - moved to Banned Accounts.`, "warning");
@@ -761,7 +761,33 @@ async function handleCheckAllAccounts() {
 // DATA & API
 // ==========================================================================
 
-async function fetchAccounts() {
+/**
+ * Fingerprint of everything a card/row actually draws.
+ *
+ * Stringifying the whole payload was both expensive (it drags along every
+ * account's stored match history) and unstable - the background sync rewrites
+ * last_updated every few seconds, so the fingerprint changed on every tick and
+ * the roster was rebuilt anyway. Timestamps are bucketed to the minute, which
+ * is the finest granularity formatTimeAgo can actually show.
+ */
+function accountsSignature(list) {
+    const minute = (iso) => {
+        if (!iso) return "";
+        const t = Date.parse(iso);
+        return isNaN(t) ? "" : Math.floor(t / 60000);
+    };
+
+    return list.map(a => [
+        a.id, a.username, a.display_name, a.region, a.tag, a.notes,
+        a.rank_tier, a.rank_division, a.lp, a.level, a.winrate, a.games_played,
+        a.rank_icon_url, a.peak_rank_tier, a.peak_rank_division,
+        a.peak_rank_icon_url, a.peak_rank_season, a.status, a.favorite,
+        a.needs_check, minute(a.last_login)
+    ].join("")).join("")
+        + "|" + state.activeAccountId + "|" + state.viewMode;
+}
+
+async function fetchAccounts(silent = false) {
     try {
         let tagParam = state.currentTag;
         let url = `/api/accounts?search=${encodeURIComponent(state.searchQuery)}&region=${encodeURIComponent(state.currentRegion)}&sort_by=${encodeURIComponent(state.currentSort)}`;
@@ -778,16 +804,24 @@ async function fetchAccounts() {
 
         const res = await fetch(url);
         const data = await res.json();
-        state.accounts = data.accounts || [];
+        let newAccounts = data.accounts || [];
 
         if (tagParam === "FAVORITES") {
-            state.accounts = state.accounts.filter(a => a.favorite);
+            newAccounts = newAccounts.filter(a => a.favorite);
         }
 
-        renderAccounts();
+        // Avoid unnecessary DOM rebuilds if data hasn't changed
+        const signature = accountsSignature(newAccounts);
+        if (silent && state._lastAccountsSignature === signature) {
+            return;
+        }
+        state._lastAccountsSignature = signature;
+        state.accounts = newAccounts;
+
+        renderAccounts(silent);
     } catch (err) {
         if (DOM.skeletonGrid) DOM.skeletonGrid.style.display = "none";
-        showToast("Failed to load accounts", "error");
+        if (!silent) showToast("Failed to load accounts", "error");
     }
 }
 
@@ -1004,14 +1038,13 @@ function getStatusBadge(status) {
     }
 }
 
-function renderAccounts() {
+function renderAccounts(silent = false) {
     if (DOM.skeletonGrid) DOM.skeletonGrid.style.display = "none";
 
     // Entrance animations only replay when the visible set actually changed —
-    // the background sync re-renders every few seconds and would otherwise
-    // restart them mid-hover.
+    // the background sync re-renders silently and shouldn't restart animations.
     const signature = state.accounts.map(a => a.id).join(",") + "|" + state.viewMode;
-    const isNewSet = signature !== state._renderSignature;
+    const isNewSet = !silent && (signature !== state._renderSignature);
     state._renderSignature = signature;
 
     if (DOM.resultCount) {
@@ -1061,6 +1094,12 @@ function buildAccountView(acc) {
     const needsCheck = acc.needs_check === true;
     const isHighlighted = state.highlightId === acc.id;
 
+    const lastLoginFormatted = isActive
+        ? '<span class="last-login-val is-active"><span class="live-dot-mini"></span> Active Now</span>'
+        : (acc.last_login
+            ? `<span class="last-login-val">${formatTimeAgo(acc.last_login)}</span>`
+            : '<span class="last-login-val is-never">Never</span>');
+
     return {
         isActive,
         needsCheck,
@@ -1081,7 +1120,8 @@ function buildAccountView(acc) {
         wrClass: winrate >= 55 ? "wr-high" : (winrate >= 45 ? "wr-mid" : "wr-low"),
         tierClass: `tier-${tier.toLowerCase()}`,
         statusBadge: getStatusBadge(acc.status),
-        displayName: acc.display_name || acc.username
+        displayName: acc.display_name || acc.username,
+        lastLoginFormatted
     };
 }
 
@@ -1092,7 +1132,7 @@ function renderHeroAccountCard(acc) {
     const sessionInfo = sessionStateInfo(state.live);
 
     return `
-        <div class="account-card account-card-hero is-active-session ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:0">
+        <div class="account-card account-card-hero is-active-session ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}">
             <div class="hero-ambient-glow"></div>
 
             <!-- Hero Top Header -->
@@ -1106,6 +1146,7 @@ function renderHeroAccountCard(acc) {
                     <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
                     ${v.statusBadge}
                     <span class="session-state-chip ${sessionInfo.cls}">${isValRunning ? sessionInfo.label : "Riot Session Active"}</span>
+                    <span class="hero-last-login"><i class="fa-regular fa-clock"></i> Last Login: <strong>Active Now</strong></span>
                 </div>
                 <div class="hero-header-right">
                     <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
@@ -1145,9 +1186,9 @@ function renderHeroAccountCard(acc) {
                             <span class="hero-stat-label">WIN RATE</span>
                             <span class="hero-stat-value ${v.wrClass}">${v.winrate}%</span>
                         </div>
-                        <div class="hero-stat-card">
-                            <span class="hero-stat-label">MATCHES</span>
-                            <span class="hero-stat-value">${acc.games_played || 0}</span>
+                        <div class="hero-stat-card hero-stat-card-dashboard" onclick="openDashboard()" title="Open Live Match Dashboard & Lobby Tracker">
+                            <span class="hero-stat-label"><i class="fa-solid fa-gauge-high text-ok"></i> DASHBOARD</span>
+                            <span class="hero-stat-value hero-stat-dashboard-val">Open Tracker <i class="fa-solid fa-arrow-up-right-from-square"></i></span>
                         </div>
                         <div class="hero-stat-card">
                             <span class="hero-stat-label">PEAK RANK</span>
@@ -1156,7 +1197,7 @@ function renderHeroAccountCard(acc) {
                     </div>
 
                     <div class="hero-winrate-track">
-                        <div class="winrate-bar-fill ${v.wrClass}" data-width="${v.winrate}"></div>
+                        <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
                     </div>
 
                     <div class="hero-creds-box">
@@ -1197,13 +1238,9 @@ function renderHeroAccountCard(acc) {
                     </button>
 
                     <div class="hero-aux-actions">
-                        <button class="btn btn-secondary hero-action-btn" onclick="openDashboard()" title="Live match lobby & instalock">
-                            <i class="fa-solid fa-gauge-high text-ok"></i>
-                            <span>Dashboard</span>
-                        </button>
-                        <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Live Rank Details">
+                        <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
-                            <span>Matches</span>
+                            <span>Matches (${acc.games_played || 0})</span>
                         </button>
                         <button class="btn btn-secondary hero-action-btn" onclick="openEditModal(${acc.id})" title="Edit Account">
                             <i class="fa-solid fa-pen"></i>
@@ -1276,7 +1313,7 @@ function renderGridView() {
                         <span>Matches <strong>${acc.games_played || 0}</strong></span>
                     </div>
                     <div class="winrate-bar-track">
-                        <div class="winrate-bar-fill ${v.wrClass}" data-width="${v.winrate}"></div>
+                        <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
                     </div>
                 </div>
 
@@ -1303,6 +1340,12 @@ function renderGridView() {
                             </button>
                         </span>
                     </div>
+                </div>
+
+                <!-- Last Logged In -->
+                <div class="card-last-login">
+                    <span class="last-login-label"><i class="fa-regular fa-clock"></i> Last Logged In:</span>
+                    ${v.lastLoginFormatted}
                 </div>
 
                 <!-- Verify prompt for accounts Riot hasn't confirmed yet -->
@@ -1347,7 +1390,6 @@ function renderGridView() {
     }).join("");
 
     DOM.accountsGrid.innerHTML = html;
-    animateWinrateBars(DOM.accountsGrid);
 }
 
 function renderTableView() {
@@ -1410,6 +1452,7 @@ function renderTableView() {
                 <td><span class="level-chip">LV ${acc.level || "-"}</span></td>
                 <td>${v.winrate}% <span class="text-dim">(${acc.games_played || 0}G)</span></td>
                 <td><span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span></td>
+                <td>${v.lastLoginFormatted}</td>
                 <td>
                     <div class="table-actions">
                         ${v.isActive ? `
@@ -1433,16 +1476,6 @@ function renderTableView() {
             </tr>
         `;
     }).join("");
-}
-
-/** Meters start at 0 and grow on the next frame so the fill always animates. */
-function animateWinrateBars(root) {
-    const bars = root.querySelectorAll(".winrate-bar-fill[data-width]");
-    requestAnimationFrame(() => {
-        bars.forEach(bar => {
-            bar.style.width = `${bar.dataset.width}%`;
-        });
-    });
 }
 
 function setViewMode(mode) {
@@ -2193,6 +2226,28 @@ function escapeHtml(str) {
         .replace(/'/g, "&#039;");
 }
 
+function formatTimeAgo(isoString) {
+    if (!isoString) return "Never";
+    try {
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return "Never";
+        const now = new Date();
+        const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
+        if (diffSec < 0 || diffSec < 60) return "Just now";
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        if (diffHr < 24) return `${diffHr}h ago`;
+        const diffDays = Math.floor(diffHr / 24);
+        if (diffDays === 1) return "Yesterday";
+        if (diffDays < 7) return `${diffDays}d ago`;
+        if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+        return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch (e) {
+        return "Never";
+    }
+}
+
 // ==========================================================================
 // UI ENHANCEMENT LAYER
 // Purely presentational wiring: click ripples, cursor-tracked card lighting,
@@ -2361,8 +2416,14 @@ async function pollLiveSession() {
         refreshInstalockStatus();
     }
 
-    // A finished match is the moment the profile is actually out of date.
-    if (state._wasInMatch && !live.match) refreshPlayerStats(true);
+    // A finished match is the moment the profile is actually out of date -
+    // but rebuilding it costs a round of Riot requests plus a match-details
+    // fetch per game, so a closed dashboard just drops the cache and lets the
+    // next open pay for it.
+    if (state._wasInMatch && !live.match) {
+        if (state.dashboardOpen) refreshPlayerStats(true);
+        else state._statsDirty = true;
+    }
     state._wasInMatch = !!live.match;
 
     // Re-render only when the active card actually moved, so the badge and
@@ -2560,12 +2621,9 @@ async function openDashboard() {
     pollLiveSession();
     startQueueClock();
 
-    // The roster is gone from view, so bring the dashboard into it.
-    if (!PREFERS_REDUCED_MOTION) {
-        setTimeout(() => {
-            if (DOM.dashView) DOM.dashView.scrollIntoView({ behavior: "smooth", block: "start" });
-        }, 60);
-    }
+    // The roster collapses out from under the page, so anchor back to the
+    // top rather than leaving the view stranded mid-document.
+    window.scrollTo({ top: 0, behavior: PREFERS_REDUCED_MOTION ? "auto" : "smooth" });
 }
 
 function closeDashboard() {
@@ -2748,8 +2806,6 @@ function renderRoster(el, players) {
  * game disappears again - never while a launch is still in flight.
  */
 function renderPlayButton(live) {
-    if (!DOM.btnDashPlay) return;
-
     const launch = (live && live.launch) || {};
     const running = !!(live && live.valorant_running);
     const launching = !!launch.active || (state.playPending && !running);
@@ -2787,11 +2843,14 @@ function renderPlayButton(live) {
         title = launch.message || "VALORANT didn't start - try again.";
     }
 
-    DOM.btnDashPlay.className = cls;
-    DOM.btnDashPlay.disabled = disabled;
-    DOM.btnDashPlay.title = title;
-    DOM.btnDashPlay.querySelector("i").className = icon;
-    if (DOM.dashPlayLabel) DOM.dashPlayLabel.textContent = label;
+    if (DOM.btnDashPlay) {
+        DOM.btnDashPlay.className = cls;
+        DOM.btnDashPlay.disabled = disabled;
+        DOM.btnDashPlay.title = title;
+        const iconEl = DOM.btnDashPlay.querySelector("i");
+        if (iconEl) iconEl.className = icon;
+        if (DOM.dashPlayLabel) DOM.dashPlayLabel.textContent = label;
+    }
 
     if (DOM.btnSessionPlay) {
         DOM.btnSessionPlay.disabled = disabled;
@@ -3125,6 +3184,11 @@ const STATS_REFRESH = 30000;
 async function refreshPlayerStats(force = false) {
     clearTimeout(state._statsTimer);
 
+    if (state._statsDirty) {
+        force = true;
+        state._statsDirty = false;
+    }
+
     try {
         const res = await fetch(`/api/live/stats${force ? "?force=true" : ""}`);
         state.playerStats = await res.json();
@@ -3316,8 +3380,8 @@ function renderSparkline(points) {
     return `<svg class="stat-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
         <defs>
             <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="currentColor" stop-opacity="0.35"/>
-                <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+                <stop offset="0%" stop-color="var(--a-soft)" stop-opacity="0.4"/>
+                <stop offset="100%" stop-color="var(--a-soft)" stop-opacity="0"/>
             </linearGradient>
         </defs>
         <polygon class="stat-spark-area" points="0,${h} ${coords.join(" ")} ${w},${h}"/>
