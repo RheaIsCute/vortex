@@ -172,6 +172,8 @@ const DOM = {
     btnAutoDetectClient: document.getElementById("btn-auto-detect-client"),
     settingsAppVersion: document.getElementById("settings-app-version"),
     btnCheckUpdate: document.getElementById("btn-check-update"),
+    settingsLogPath: document.getElementById("settings-log-path"),
+    btnOpenLog: document.getElementById("btn-open-log"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -191,6 +193,9 @@ const DOM = {
     // Quick Launch Modal
     modalLaunch: document.getElementById("modal-launch"),
     btnCloseLaunch: document.getElementById("btn-close-launch"),
+    btnRetryLaunch: document.getElementById("btn-retry-launch"),
+    launchStatusPill: document.getElementById("launch-status-pill"),
+    launchBgHint: document.getElementById("launch-bg-hint"),
     launchUserVal: document.getElementById("launch-user-val"),
     launchPassVal: document.getElementById("launch-pass-val"),
     btnCopyLaunchUser: document.getElementById("btn-copy-launch-user"),
@@ -530,6 +535,7 @@ function initEventListeners() {
     DOM.btnSaveSettings.addEventListener("click", saveSettings);
     DOM.btnAutoDetectClient.addEventListener("click", autoDetectClientPath);
     if (DOM.btnCheckUpdate) DOM.btnCheckUpdate.addEventListener("click", () => checkForUpdate(true));
+    if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -553,12 +559,21 @@ function initEventListeners() {
     if (DOM.modalBannedClose) DOM.modalBannedClose.addEventListener("click", () => closeModal(DOM.modalBanned));
 
     DOM.btnCloseLaunch.addEventListener("click", () => {
+        const stillRunning = !!state._launchPoll;
         closeModal(DOM.modalLaunch);
         stopLaunchPolling();
-        showToast("Login continues in the background", "info");
-        // Backend login worker keeps running; refresh once it's had time to finish.
-        setTimeout(() => { fetchAccounts(); fetchStatsSummary(); }, 8000);
+        if (stillRunning) {
+            showToast("Login continues in the background", "info");
+            // Backend login worker keeps running; refresh once it's had time to finish.
+            setTimeout(() => { fetchAccounts(); fetchStatsSummary(); }, 8000);
+        }
     });
+
+    if (DOM.btnRetryLaunch) {
+        DOM.btnRetryLaunch.addEventListener("click", () => {
+            if (typeof state._launchRetry === "function") state._launchRetry();
+        });
+    }
 
     if (DOM.btnCopyLaunchUser) {
         DOM.btnCopyLaunchUser.addEventListener("click", () => {
@@ -1636,6 +1651,11 @@ async function handleSyncAll() {
 
 const LAUNCH_STAGE_ORDER = ["opening", "signout", "waiting_window", "typing", "submitted"];
 
+const LAUNCH_STATUS_LABEL = {
+    done: "Ready",
+    error: "Failed",
+};
+
 function renderLaunchProgress(prog) {
     const sub = document.getElementById("launch-modal-sub");
     const anim = document.getElementById("launch-anim");
@@ -1654,6 +1674,23 @@ function renderLaunchProgress(prog) {
             stage === "error" ? "fa-triangle-exclamation" :
             "fa-arrow-right-to-bracket"
         );
+    }
+
+    // Status pill: a plain-language "where are we" that doesn't require
+    // reading the step list - Working / Ready / Failed.
+    if (DOM.launchStatusPill) {
+        DOM.launchStatusPill.textContent = LAUNCH_STATUS_LABEL[stage] || "Working";
+        DOM.launchStatusPill.classList.toggle("is-done", stage === "done");
+        DOM.launchStatusPill.classList.toggle("is-error", stage === "error");
+    }
+
+    // Retry only makes sense once something has actually failed.
+    if (DOM.btnRetryLaunch) DOM.btnRetryLaunch.style.display = stage === "error" ? "inline-flex" : "none";
+    if (DOM.btnCloseLaunch) {
+        DOM.btnCloseLaunch.textContent = stage === "done" ? "Done" : (stage === "error" ? "Close" : "Run in background");
+    }
+    if (DOM.launchBgHint) {
+        DOM.launchBgHint.style.display = (stage === "done" || stage === "error") ? "none" : "block";
     }
 
     const idx = LAUNCH_STAGE_ORDER.indexOf(stage);
@@ -1735,6 +1772,7 @@ async function launchAccount(id) {
     if (!acc) return;
 
     state.activeLaunchAcc = acc;
+    state._launchRetry = () => launchAccount(id);
     DOM.launchUserVal.textContent = acc.username;
     setLaunchModalTitle("Logging In to Riot Client");
     renderLaunchProgress({ stage: "opening", message: "Starting…" });
@@ -1744,9 +1782,15 @@ async function launchAccount(id) {
     fetch(`/api/accounts/${id}/launch`, { method: "POST" })
         .then(r => r.json())
         .then(data => {
-            if (!data.success) showToast(data.message || "Could not start login", "info");
+            if (!data.success) {
+                showToast(data.message || "Could not start login", "info");
+                renderLaunchProgress({ stage: "error", message: data.message || "Could not start login." });
+            }
         })
-        .catch(() => showToast("Failed to open Riot Client", "error"));
+        .catch(() => {
+            showToast("Failed to open Riot Client", "error");
+            renderLaunchProgress({ stage: "error", message: "Failed to reach the app's backend." });
+        });
 
     startLaunchPolling({ openDashboardWhenDone: true });
 
@@ -1770,7 +1814,29 @@ function openSettingsModal() {
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
+    loadLoginLogPath();
     openModal(DOM.modalSettings);
+}
+
+async function loadLoginLogPath() {
+    if (!DOM.settingsLogPath) return;
+    try {
+        const res = await fetch("/api/login-log-path");
+        const data = await res.json();
+        DOM.settingsLogPath.value = data.path || "";
+    } catch (err) {
+        DOM.settingsLogPath.value = "";
+    }
+}
+
+async function openLoginLog() {
+    try {
+        const res = await fetch("/api/open-login-log", { method: "POST" });
+        const data = await res.json();
+        if (!data.success) showToast(data.message || "Couldn't open the log", "info");
+    } catch (err) {
+        showToast("Couldn't open the log", "error");
+    }
 }
 
 async function saveSettings() {
@@ -2186,6 +2252,7 @@ async function playAccount(id) {
         // Switching accounts means a full Riot Client login first - show the
         // same progress modal the LOGIN button uses.
         state.activeLaunchAcc = acc;
+        state._launchRetry = () => playAccount(id);
         DOM.launchUserVal.textContent = acc.username;
         setLaunchModalTitle("Switching Account & Starting VALORANT");
         renderLaunchProgress({ stage: "opening", message: "Opening Riot Client…" });
@@ -2200,9 +2267,16 @@ async function playAccount(id) {
                   data.success ? "success" : "error");
         if (data.success && !data.switched) {
             setTimeout(pollLiveSession, 2500);
+        } else if (!data.success && !isActive) {
+            stopLaunchPolling();
+            renderLaunchProgress({ stage: "error", message: data.message || "Couldn't start VALORANT." });
         }
     } catch (err) {
         showToast("Failed to start VALORANT", "error");
+        if (!isActive) {
+            stopLaunchPolling();
+            renderLaunchProgress({ stage: "error", message: "Failed to reach the app's backend." });
+        }
     }
 }
 
@@ -2220,6 +2294,7 @@ async function checkAccount(id) {
     }
 
     state.activeLaunchAcc = acc;
+    state._launchRetry = () => checkAccount(id);
     DOM.launchUserVal.textContent = acc.username;
     setLaunchModalTitle("Checking Account");
     renderLaunchProgress({ stage: "opening", message: "Verifying these credentials with Riot…" });

@@ -492,6 +492,17 @@
                     <p class="field-help" id="update-status-text">Updates are hosted at asarii.xyz.</p>
                 </div>
 
+                <div class="form-group">
+                    <label><i class="fa-solid fa-bug"></i> Debug Log</label>
+                    <div class="input-with-action">
+                        <input type="text" id="settings-log-path" class="form-control" readonly placeholder="login_debug.log">
+                        <button type="button" class="btn btn-secondary" id="btn-open-log">
+                            <i class="fa-solid fa-folder-open"></i> Open Log
+                        </button>
+                    </div>
+                    <p class="field-help">Every login/check attempt is recorded here - useful if one fails and you need to see why.</p>
+                </div>
+
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
                     <button type="button" class="btn btn-primary" id="btn-save-settings">
@@ -583,6 +594,7 @@
                 <i class="fa-solid fa-arrow-right-to-bracket launch-anim-icon" id="launch-anim-icon"></i>
             </div>
             <h2 id="launch-modal-title">Logging In to Riot Client</h2>
+            <span class="launch-status-pill" id="launch-status-pill">Working</span>
             <p id="launch-modal-sub" class="modal-sub">Starting…</p>
 
             <ul class="launch-steps" id="launch-steps">
@@ -605,8 +617,11 @@
                     <button class="btn-mini-copy" id="btn-copy-launch-pass" title="Copy Password"><i class="fa-regular fa-copy"></i></button>
                 </div>
             </div>
-            <p class="launch-bg-hint">Runs in the background — you can close this and keep working.</p>
+            <p class="launch-bg-hint" id="launch-bg-hint">Runs in the background — you can close this and keep working.</p>
             <div class="modal-footer justify-center">
+                <button class="btn btn-secondary" id="btn-retry-launch" style="display:none;">
+                    <i class="fa-solid fa-rotate-right"></i> Retry
+                </button>
                 <button class="btn btn-primary" id="btn-close-launch">Run in background</button>
             </div>
         </div>

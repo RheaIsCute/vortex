@@ -10,6 +10,7 @@ env/
 database.sqlite
 database.sqlite-wal
 database.sqlite-shm
+login_debug.log*
 
 # Build artifacts
 build/

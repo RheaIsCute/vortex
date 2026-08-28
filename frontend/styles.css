@@ -2855,6 +2855,48 @@ select.form-control option {
     margin-bottom: 4px;
 }
 
+.launch-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 auto 8px;
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    color: var(--a-soft);
+    border: 1px solid rgba(var(--a-rgb), 0.4);
+    background: rgba(var(--a-rgb), 0.12);
+}
+
+.launch-status-pill::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: live-pulse 1.6s ease-out infinite;
+}
+
+.launch-status-pill.is-done {
+    color: var(--ok);
+    border-color: rgba(var(--ok-rgb), 0.45);
+    background: rgba(var(--ok-rgb), 0.14);
+}
+
+.launch-status-pill.is-error {
+    color: var(--danger);
+    border-color: rgba(var(--danger-rgb), 0.45);
+    background: rgba(var(--danger-rgb), 0.14);
+}
+
+.launch-status-pill.is-done::before,
+.launch-status-pill.is-error::before {
+    animation: none;
+}
+
 .launch-steps {
     list-style: none;
     text-align: left;

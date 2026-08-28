@@ -8,8 +8,11 @@ Handles:
 """
 
 import os
+import sys
 import json
 import time
+import logging
+import logging.handlers
 import subprocess
 import winreg
 import ctypes
@@ -26,6 +29,25 @@ from typing import Optional, Dict, Any, Tuple, List, Callable
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pyautogui.PAUSE = 0.04
 
+# Same per-user writable location the database uses in a packaged build, so
+# the log survives updates and is somewhere a user can actually find it.
+if getattr(sys, "frozen", False):
+    _LOG_DIR = os.path.join(os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "Vortex")
+else:
+    _LOG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(_LOG_DIR, exist_ok=True)
+LOGIN_LOG_FILE = os.path.join(_LOG_DIR, "login_debug.log")
+
+login_logger = logging.getLogger("vortex.login")
+login_logger.setLevel(logging.DEBUG)
+if not login_logger.handlers:
+    _handler = logging.handlers.RotatingFileHandler(
+        LOGIN_LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8"
+    )
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    login_logger.addHandler(_handler)
+    login_logger.propagate = False
+
 # Live per-session login progress, polled by the frontend to drive the
 # "logging into Riot Client" animation. Single active login at a time.
 LOGIN_PROGRESS: Dict[str, Any] = {
@@ -34,6 +56,8 @@ LOGIN_PROGRESS: Dict[str, Any] = {
     "stage": "idle",   # idle | opening | signout | waiting_window | typing | submitted | done | error
     "message": "",
     "started_at": 0.0,
+    "attempt": 0,
+    "can_retry": False,
 }
 
 
@@ -46,6 +70,13 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
         LOGIN_PROGRESS["active"] = True
     if stage in ("done", "error", "idle"):
         LOGIN_PROGRESS["active"] = False
+    LOGIN_PROGRESS["can_retry"] = (stage == "error")
+
+    # Every stage transition is logged so a failure can be diagnosed after
+    # the fact - the UI only ever shows the last message, this keeps the
+    # full sequence that led up to it.
+    level = logging.ERROR if stage == "error" else logging.INFO
+    login_logger.log(level, "[%s] stage=%s msg=%s", LOGIN_PROGRESS.get("username", ""), stage, message)
 
 DEFAULT_VALORANT_PATHS = [
     r"C:\Riot Games\Riot Client\RiotClientServices.exe",
@@ -616,6 +647,7 @@ class ClientLauncher:
         If VALORANT is running, exits VALORANT before proceeding.
         """
         LOGIN_PROGRESS["started_at"] = time.time()
+        LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
         _set_login_stage("opening", "Opening Riot Client...", username)
 
         # If Valorant is running, terminate it so Riot Client can switch accounts cleanly
@@ -640,18 +672,25 @@ class ClientLauncher:
             if not was_running:
                 subprocess.Popen([target_path], shell=False)
 
+            def _run_autofill():
+                # This runs on its own thread with no caller left to see an
+                # uncaught exception - without this it would just leave the
+                # login modal stuck on its last stage forever.
+                try:
+                    cls.auto_fill_credentials_pure_keyboard(username, password, not was_running)
+                except Exception as e:
+                    login_logger.exception("[%s] auto-fill worker crashed", username)
+                    _set_login_stage("error", f"Login automation crashed: {e}", username)
+
             import threading
-            threading.Thread(
-                target=cls.auto_fill_credentials_pure_keyboard,
-                args=(username, password, not was_running),
-                daemon=True
-            ).start()
+            threading.Thread(target=_run_autofill, daemon=True).start()
 
             return {
                 "success": True,
                 "message": f"Logging in to {username}..."
             }
         except Exception as e:
+            login_logger.exception("[%s] login_account failed to start", username)
             _set_login_stage("error", f"Failed to start Riot Client: {str(e)}", username)
             return {
                 "success": False,

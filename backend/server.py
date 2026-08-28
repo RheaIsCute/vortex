@@ -8,6 +8,7 @@ and automated full-roster account checker ("Check Accounts").
 import os
 import time
 import asyncio
+import subprocess
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -158,10 +159,12 @@ async def background_auto_detect_and_link(account_id: int):
     acc_data = db.get_account_by_id(account_id)
     target_username = acc_data.get("username") if acc_data else None
 
+    detected = False
     for _ in range(15):
         await asyncio.sleep(2.0)
         info = await asyncio.to_thread(launcher.get_active_riot_account, target_username)
         if info and info.get("found") and (info.get("display_name") or info.get("username")):
+            detected = True
             client_launcher._set_login_stage(
                 "done", f"Logged in as {info.get('display_name') or info.get('username')}"
             )
@@ -186,6 +189,20 @@ async def background_auto_detect_and_link(account_id: int):
                 if stats.get("match_history"):
                     db.update_account(account_id, {"match_history": stats["match_history"]})
             break
+
+    # If we typed the credentials but Riot never confirmed a signed-in
+    # session in the time we waited, the modal would otherwise sit on
+    # "Waiting for Riot to sign in" forever with no way out. Surface it as
+    # an explicit, retryable error instead of a silent hang.
+    if not detected and client_launcher.LOGIN_PROGRESS.get("stage") not in ("done", "error", "idle"):
+        client_launcher.login_logger.warning(
+            "[%s] auto-detect timed out after login - no confirmed session within 30s", target_username
+        )
+        client_launcher._set_login_stage(
+            "error",
+            "Login didn't finish - Riot never confirmed the session. Check the credentials and try again.",
+            target_username
+        )
 
 
 async def run_batch_account_check():
@@ -815,6 +832,27 @@ async def update_settings(req: SettingsUpdate):
 async def detect_client():
     path = launcher.detect_riot_client_path()
     return {"found": bool(path), "path": path or ""}
+
+
+@app.get("/api/login-log-path")
+async def login_log_path():
+    """Where the login/check debug log lives, for Settings' 'Open Log' button."""
+    return {"path": client_launcher.LOGIN_LOG_FILE, "exists": os.path.exists(client_launcher.LOGIN_LOG_FILE)}
+
+
+@app.post("/api/open-login-log")
+async def open_login_log():
+    """Opens Explorer with the debug log selected, same pattern the updater uses."""
+    path = client_launcher.LOGIN_LOG_FILE
+    if not os.path.exists(path):
+        return {"success": False, "message": "No log file yet - nothing has been logged this session."}
+    try:
+        await asyncio.to_thread(
+            subprocess.Popen, ["explorer.exe", "/select,", os.path.normpath(path)]
+        )
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": f"Couldn't open the log folder: {e}"}
 
 
 @app.get("/api/app-version")
