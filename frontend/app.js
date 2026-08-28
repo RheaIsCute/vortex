@@ -1186,9 +1186,9 @@ function renderHeroAccountCard(acc) {
                             <span class="hero-stat-label">WIN RATE</span>
                             <span class="hero-stat-value ${v.wrClass}">${v.winrate}%</span>
                         </div>
-                        <div class="hero-stat-card hero-stat-card-dashboard" onclick="openDashboard()" title="Open Live Match Dashboard & Lobby Tracker">
-                            <span class="hero-stat-label"><i class="fa-solid fa-gauge-high text-ok"></i> DASHBOARD</span>
-                            <span class="hero-stat-value hero-stat-dashboard-val">Open Tracker <i class="fa-solid fa-arrow-up-right-from-square"></i></span>
+                        <div class="hero-stat-card">
+                            <span class="hero-stat-label">MATCHES</span>
+                            <span class="hero-stat-value">${acc.games_played || 0}</span>
                         </div>
                         <div class="hero-stat-card">
                             <span class="hero-stat-label">PEAK RANK</span>
@@ -1241,6 +1241,10 @@ function renderHeroAccountCard(acc) {
                         <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
                             <span>Matches (${acc.games_played || 0})</span>
+                        </button>
+                        <button class="btn btn-primary hero-action-btn hero-dashboard-btn" onclick="openDashboard()" title="Open Live Match Dashboard">
+                            <i class="fa-solid fa-gauge-high"></i>
+                            <span>Dashboard</span>
                         </button>
                         <button class="btn btn-secondary hero-action-btn" onclick="openEditModal(${acc.id})" title="Edit Account">
                             <i class="fa-solid fa-pen"></i>
@@ -2854,7 +2858,9 @@ function renderPlayButton(live) {
 
     if (DOM.btnSessionPlay) {
         DOM.btnSessionPlay.disabled = disabled;
-        DOM.sessionPlayLabel.textContent = running ? "Running" : (launching ? "Starting…" : "Play");
+        if (DOM.sessionPlayLabel) {
+            DOM.sessionPlayLabel.textContent = running ? "Running" : (launching ? "Starting…" : "Play");
+        }
     }
 }
 

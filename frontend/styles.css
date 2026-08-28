@@ -4162,6 +4162,19 @@ select.form-control option {
     transform: translateY(-1px);
 }
 
+.hero-action-btn.hero-dashboard-btn {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.22), rgba(139, 92, 246, 0.15));
+    border-color: rgba(168, 85, 247, 0.45);
+    color: #e9d5ff;
+}
+
+.hero-action-btn.hero-dashboard-btn:hover {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.4), rgba(139, 92, 246, 0.3));
+    border-color: rgba(168, 85, 247, 0.8);
+    color: #fff;
+    box-shadow: 0 0 14px rgba(168, 85, 247, 0.4);
+}
+
 .hero-delete-btn {
     width: 36px;
     height: 36px;
