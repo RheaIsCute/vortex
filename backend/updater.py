@@ -159,13 +159,14 @@ def reveal_installer(installer_path: str) -> bool:
 
 def apply_and_relaunch(installer_path: str) -> bool:
     """
-    Spawns a detached background PowerShell updater that waits for the running
+    Spawns a detached background updater that waits for the running
     Vortex process to exit, runs the installer silently (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-),
     relaunches the updated Vortex.exe, and cleans up temporary files.
     """
     try:
         tmp_dir = tempfile.gettempdir()
         updater_ps1 = os.path.join(tmp_dir, "vortex_updater.ps1")
+        updater_vbs = os.path.join(tmp_dir, "vortex_updater.vbs")
 
         current_pid = os.getpid()
         exe_path = os.path.normpath(sys.executable) if getattr(sys, "frozen", False) else ""
@@ -210,9 +211,9 @@ if ($parentExited) {{
     Write-Log "Parent process did not exit in time, forcing process cleanup..."
 }}
 
-# Step 2: Forcefully terminate any remaining Vortex instances to release locks
+# Step 2: Forcefully terminate any remaining Vortex instances to release file locks
 Get-Process -Name "Vortex" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
+Start-Sleep -Milliseconds 500
 
 # Step 3: Run Inno Setup installer silently
 Write-Log "Executing installer silently..."
@@ -223,15 +224,23 @@ Write-Log "Installer exited with code: $exitCode"
 Start-Sleep -Seconds 1
 
 # Step 4: Find installed Vortex.exe
-$targetExe = ""
 $candidates = @(
     '{default_target}',
+    "$env:LOCALAPPDATA\\Programs\\Vortex\\Vortex.exe",
     '{local_target}',
     '{exe_path}',
     '{alt_target}',
     '{x86_target}'
 )
 
+# Check Windows Registry for custom or exact install path
+$reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -eq "Vortex" }}
+if ($reg -and $reg.InstallLocation) {{
+    $regExe = Join-Path $reg.InstallLocation "Vortex.exe"
+    $candidates = @($regExe) + $candidates
+}}
+
+$targetExe = ""
 foreach ($c in $candidates) {{
     if ($c -and (Test-Path $c)) {{
         $targetExe = $c
@@ -241,37 +250,42 @@ foreach ($c in $candidates) {{
 
 if ($targetExe) {{
     Write-Log "Launching updated Vortex from: $targetExe"
-    Start-Process -FilePath $targetExe
+    Start-Process -FilePath "$targetExe"
 }} else {{
     Write-Log "ERROR: Could not locate installed Vortex.exe to relaunch!"
 }}
 
-# Step 5: Clean up temporary installer
-Start-Sleep -Seconds 2
+# Step 5: Clean up temporary installer and scripts
+Start-Sleep -Seconds 3
 Remove-Item -Path '{norm_installer}' -Force -ErrorAction SilentlyContinue
-Write-Log "Cleanup finished. Update successful."
+Write-Log "Cleanup finished. Update cycle complete."
 """
         with open(updater_ps1, "w", encoding="utf-8") as f:
             f.write(ps1_content)
 
-        flags = 0
-        if os.name == "nt":
-            flags = 0x00000008 | subprocess.CREATE_NEW_PROCESS_GROUP
-            if hasattr(subprocess, "CREATE_NO_WINDOW"):
-                flags |= subprocess.CREATE_NO_WINDOW
+        vbs_content = f'CreateObject("Wscript.Shell").Run "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -File ""{updater_ps1}""", 0, False\n'
+        with open(updater_vbs, "w", encoding="utf-8") as f:
+            f.write(vbs_content)
 
-        subprocess.Popen(
-            [
-                "powershell.exe",
-                "-WindowStyle", "Hidden",
-                "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", updater_ps1
-            ],
-            creationflags=flags,
-            close_fds=True
-        )
-        return True
+        try:
+            subprocess.Popen(["wscript.exe", updater_vbs])
+            return True
+        except Exception:
+            # Fallback to direct powershell spawn if wscript unavailable
+            subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-NonInteractive",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", updater_ps1
+                ],
+                creationflags=0x08000000,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return True
     except Exception:
         return False
 
