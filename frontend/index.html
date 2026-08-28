@@ -59,7 +59,11 @@
             </div>
 
             <!-- Header Action Buttons -->
-            <div class="header-actions">
+            <div class="header-actions" id="header-actions">
+                <button class="btn btn-secondary is-dash-toggle" id="btn-toggle-dashboard" title="Live match dashboard">
+                    <i class="fa-solid fa-gauge-high"></i>
+                    <span>Dashboard</span>
+                </button>
                 <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status">
                     <i class="fa-solid fa-list-check" id="check-all-icon"></i>
                     <span>Check Accounts</span>
@@ -119,6 +123,179 @@
                 </button>
             </div>
         </section>
+
+        <!-- LIVE DASHBOARD — takes over the page while it's open, and the
+             account tools collapse into the icon rail on the right. -->
+        <section class="dash-view" id="dash-view" aria-hidden="true">
+            <div class="dash-panel">
+                <!-- Identity header -->
+                <header class="dash-header">
+                    <div class="dash-identity">
+                        <div class="dash-rank-wrap">
+                            <img src="" alt="Rank" class="dash-rank-img" id="dash-rank-img" onerror="this.style.display='none';">
+                            <span class="dash-level" id="dash-level">LV -</span>
+                        </div>
+                        <div class="dash-identity-text">
+                            <h2 id="dash-riot-id">---</h2>
+                            <p class="dash-identity-sub" id="dash-identity-sub">Not signed in</p>
+                        </div>
+                    </div>
+
+                    <div class="dash-header-right">
+                        <button class="btn-dash-play" id="btn-dash-play" title="Force-start VALORANT for this account">
+                            <span class="dash-play-glow"></span>
+                            <i class="fa-solid fa-play"></i>
+                            <span id="dash-play-label">PLAY</span>
+                        </button>
+                        <span class="dash-state-chip" id="dash-state-chip">
+                            <span class="dash-state-dot"></span>
+                            <span id="dash-state-label">Offline</span>
+                        </span>
+                        <button class="modal-close" id="dash-close" title="Close the dashboard"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                </header>
+
+                <div class="dash-body">
+                    <!-- LEFT: live match + profile tracking -->
+                    <section class="dash-live">
+                        <nav class="dash-tabs" id="dash-tabs">
+                            <button class="dash-tab active" data-tab="match"><i class="fa-solid fa-satellite-dish"></i> Live Match</button>
+                            <button class="dash-tab" data-tab="stats"><i class="fa-solid fa-chart-simple"></i> Player Stats</button>
+                            <button class="dash-tab" data-tab="inventory"><i class="fa-solid fa-gun"></i> Inventory</button>
+                            <span class="dash-tab-glide" id="dash-tab-glide"></span>
+                        </nav>
+
+                        <!-- Tab: live match -->
+                        <div class="dash-tab-panel is-active" data-panel="match">
+                            <!-- Scoreboard banner -->
+                            <div class="dash-scoreboard" id="dash-scoreboard" style="display:none;">
+                                <div class="dash-map-art" id="dash-map-art"></div>
+                                <div class="dash-score-inner">
+                                    <div class="dash-score-side dash-score-ally">
+                                        <span class="dash-score-label">Your Team</span>
+                                        <span class="dash-score-value" id="dash-score-ally">0</span>
+                                    </div>
+                                    <div class="dash-score-center">
+                                        <span class="dash-round-chip" id="dash-round-chip">Round 1</span>
+                                        <span class="dash-map-name" id="dash-map-name">---</span>
+                                        <span class="dash-mode-name" id="dash-mode-name">---</span>
+                                    </div>
+                                    <div class="dash-score-side dash-score-enemy">
+                                        <span class="dash-score-label">Enemy</span>
+                                        <span class="dash-score-value" id="dash-score-enemy">0</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Agent select countdown -->
+                            <div class="dash-pregame-banner" id="dash-pregame-banner" style="display:none;">
+                                <i class="fa-solid fa-hourglass-half"></i>
+                                <span id="dash-pregame-text">Agent select is open</span>
+                                <span class="dash-pregame-timer" id="dash-pregame-timer">--</span>
+                            </div>
+
+                            <!-- Queue banner -->
+                            <div class="dash-queue-banner" id="dash-queue-banner" style="display:none;">
+                                <span class="dash-queue-pulse"></span>
+                                <span class="dash-queue-banner-text">
+                                    <strong>Matchmaking (In Queue)</strong>
+                                    <small id="dash-queue-banner-sub">Competitive</small>
+                                </span>
+                                <span class="dash-queue-clock" id="dash-queue-clock">0:00</span>
+                            </div>
+
+                            <!-- Idle / no-match placeholder -->
+                            <div class="dash-idle" id="dash-idle">
+                                <div class="dash-idle-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+                                <h3 id="dash-idle-title">No live match</h3>
+                                <p id="dash-idle-text">Start a match below and this panel tracks it round by round.</p>
+                            </div>
+
+                            <!-- Team rosters -->
+                            <div class="dash-teams" id="dash-teams" style="display:none;">
+                                <div class="dash-team">
+                                    <h4 class="dash-team-title dash-team-ally"><i class="fa-solid fa-user-group"></i> Your Team</h4>
+                                    <div class="dash-roster" id="dash-roster-ally"></div>
+                                </div>
+                                <div class="dash-team" id="dash-team-enemy-wrap">
+                                    <h4 class="dash-team-title dash-team-enemy"><i class="fa-solid fa-crosshairs"></i> Enemy Team</h4>
+                                    <div class="dash-roster" id="dash-roster-enemy"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tab: player stats -->
+                        <div class="dash-tab-panel" data-panel="stats">
+                            <div class="dash-stats" id="dash-stats-body"></div>
+                        </div>
+
+                        <!-- Tab: inventory -->
+                        <div class="dash-tab-panel" data-panel="inventory">
+                            <div class="dash-inventory" id="dash-inventory-body"></div>
+                        </div>
+                    </section>
+
+                    <!-- RIGHT: match controls -->
+                    <aside class="dash-side">
+                        <!-- Queue control -->
+                        <div class="dash-card">
+                            <h4 class="dash-card-title"><i class="fa-solid fa-play"></i> Start a Match</h4>
+
+                            <button class="btn-ranked-cta" id="btn-start-ranked">
+                                <i class="fa-solid fa-trophy" id="dash-cta-icon"></i>
+                                <span class="ranked-cta-text">
+                                    <strong id="dash-cta-title">Start Competitive Match</strong>
+                                    <small id="dash-cta-sub">Queues up for Competitive</small>
+                                </span>
+                            </button>
+
+                            <button class="btn btn-secondary btn-sm is-danger dash-cancel-queue" id="btn-queue-stop">
+                                <i class="fa-solid fa-xmark"></i> Cancel Queue
+                            </button>
+
+                            <p class="dash-queue-status" id="dash-queue-status">Mode: ---</p>
+                        </div>
+
+                        <!-- Mode switcher -->
+                        <div class="dash-card">
+                            <h4 class="dash-card-title"><i class="fa-solid fa-gamepad"></i> Game Mode</h4>
+                            <div class="dash-mode-grid" id="dash-mode-grid"></div>
+                        </div>
+
+                        <!-- Insta-lock -->
+                        <div class="dash-card">
+                            <h4 class="dash-card-title">
+                                <i class="fa-solid fa-bolt"></i> Insta-Lock
+                                <span class="dash-instalock-pill" id="dash-instalock-pill">OFF</span>
+                            </h4>
+                            <p class="dash-card-hint">Picks and locks your agent the moment agent select opens.</p>
+
+                            <div class="dash-agent-search">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                                <input type="text" id="dash-agent-search" placeholder="Search agents..." autocomplete="off" spellcheck="false">
+                            </div>
+
+                            <div class="dash-agent-grid" id="dash-agent-grid"></div>
+
+                            <div class="dash-instalock-actions">
+                                <button class="btn-instalock" id="btn-instalock-toggle" disabled>
+                                    <span class="instalock-glow"></span>
+                                    <i class="fa-solid fa-bolt"></i>
+                                    <span id="instalock-label">INSTALOCK</span>
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="btn-lock-now" disabled title="Lock this agent right now (agent select only)">
+                                    <i class="fa-solid fa-lock"></i> Lock Now
+                                </button>
+                            </div>
+                            <p class="dash-instalock-status" id="dash-instalock-status"></p>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+        </section>
+
+        <!-- ACCOUNT ROSTER — collapses out of the way while the dashboard is open -->
+        <div class="accounts-view" id="accounts-view">
 
         <!-- CONTROLS & FILTER BAR -->
         <section class="controls-bar">
@@ -242,6 +419,7 @@
                 </div>
             </div>
         </main>
+        </div><!-- /.accounts-view -->
     </div>
 
     <!-- ================= MODALS ================= -->
@@ -623,143 +801,6 @@
                     <i class="fa-solid fa-rotate-right"></i> Retry
                 </button>
                 <button class="btn btn-primary" id="btn-close-launch">Run in background</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- LIVE MATCH DASHBOARD (opens for the signed-in account) -->
-    <div class="modal-overlay dash-overlay" id="modal-dashboard">
-        <div class="dash-panel">
-            <!-- Identity header -->
-            <header class="dash-header">
-                <div class="dash-identity">
-                    <div class="dash-rank-wrap">
-                        <img src="" alt="Rank" class="dash-rank-img" id="dash-rank-img" onerror="this.style.display='none';">
-                        <span class="dash-level" id="dash-level">LV -</span>
-                    </div>
-                    <div class="dash-identity-text">
-                        <h2 id="dash-riot-id">---</h2>
-                        <p class="dash-identity-sub" id="dash-identity-sub">Not signed in</p>
-                    </div>
-                </div>
-
-                <div class="dash-header-right">
-                    <span class="dash-state-chip" id="dash-state-chip">
-                        <span class="dash-state-dot"></span>
-                        <span id="dash-state-label">Offline</span>
-                    </span>
-                    <button class="modal-close" id="modal-dashboard-close"><i class="fa-solid fa-xmark"></i></button>
-                </div>
-            </header>
-
-            <div class="dash-body">
-                <!-- LEFT: live match tracking -->
-                <section class="dash-live">
-                    <!-- Scoreboard banner -->
-                    <div class="dash-scoreboard" id="dash-scoreboard" style="display:none;">
-                        <div class="dash-map-art" id="dash-map-art"></div>
-                        <div class="dash-score-inner">
-                            <div class="dash-score-side dash-score-ally">
-                                <span class="dash-score-label">Your Team</span>
-                                <span class="dash-score-value" id="dash-score-ally">0</span>
-                            </div>
-                            <div class="dash-score-center">
-                                <span class="dash-round-chip" id="dash-round-chip">Round 1</span>
-                                <span class="dash-map-name" id="dash-map-name">---</span>
-                                <span class="dash-mode-name" id="dash-mode-name">---</span>
-                            </div>
-                            <div class="dash-score-side dash-score-enemy">
-                                <span class="dash-score-label">Enemy</span>
-                                <span class="dash-score-value" id="dash-score-enemy">0</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Agent select countdown -->
-                    <div class="dash-pregame-banner" id="dash-pregame-banner" style="display:none;">
-                        <i class="fa-solid fa-hourglass-half"></i>
-                        <span id="dash-pregame-text">Agent select is open</span>
-                        <span class="dash-pregame-timer" id="dash-pregame-timer">--</span>
-                    </div>
-
-                    <!-- Idle / no-match placeholder -->
-                    <div class="dash-idle" id="dash-idle">
-                        <div class="dash-idle-icon"><i class="fa-solid fa-satellite-dish"></i></div>
-                        <h3 id="dash-idle-title">No live match</h3>
-                        <p id="dash-idle-text">Start a match below and this panel tracks it round by round.</p>
-                    </div>
-
-                    <!-- Team rosters -->
-                    <div class="dash-teams" id="dash-teams" style="display:none;">
-                        <div class="dash-team">
-                            <h4 class="dash-team-title dash-team-ally"><i class="fa-solid fa-user-group"></i> Your Team</h4>
-                            <div class="dash-roster" id="dash-roster-ally"></div>
-                        </div>
-                        <div class="dash-team" id="dash-team-enemy-wrap">
-                            <h4 class="dash-team-title dash-team-enemy"><i class="fa-solid fa-crosshairs"></i> Enemy Team</h4>
-                            <div class="dash-roster" id="dash-roster-enemy"></div>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- RIGHT: match controls -->
-                <aside class="dash-side">
-                    <!-- Queue control -->
-                    <div class="dash-card">
-                        <h4 class="dash-card-title"><i class="fa-solid fa-play"></i> Start a Match</h4>
-
-                        <button class="btn-ranked-cta" id="btn-start-ranked">
-                            <i class="fa-solid fa-trophy"></i>
-                            <span class="ranked-cta-text">
-                                <strong>Start Ranked Match</strong>
-                                <small>Switches to Competitive and queues up</small>
-                            </span>
-                        </button>
-
-                        <div class="dash-queue-row">
-                            <button class="btn btn-secondary btn-sm flex-1" id="btn-queue-start">
-                                <i class="fa-solid fa-magnifying-glass"></i> Find Match
-                            </button>
-                            <button class="btn btn-secondary btn-sm flex-1 is-danger" id="btn-queue-stop">
-                                <i class="fa-solid fa-xmark"></i> Cancel Queue
-                            </button>
-                        </div>
-
-                        <p class="dash-queue-status" id="dash-queue-status">Mode: ---</p>
-                    </div>
-
-                    <!-- Mode switcher -->
-                    <div class="dash-card">
-                        <h4 class="dash-card-title"><i class="fa-solid fa-gamepad"></i> Game Mode</h4>
-                        <div class="dash-mode-grid" id="dash-mode-grid"></div>
-                    </div>
-
-                    <!-- Insta-lock -->
-                    <div class="dash-card">
-                        <h4 class="dash-card-title">
-                            <i class="fa-solid fa-bolt"></i> Insta-Lock
-                            <span class="dash-instalock-pill" id="dash-instalock-pill">Off</span>
-                        </h4>
-                        <p class="dash-card-hint">Picks and locks your agent the moment agent select opens.</p>
-
-                        <div class="dash-agent-search">
-                            <i class="fa-solid fa-magnifying-glass"></i>
-                            <input type="text" id="dash-agent-search" placeholder="Search agents..." autocomplete="off" spellcheck="false">
-                        </div>
-
-                        <div class="dash-agent-grid" id="dash-agent-grid"></div>
-
-                        <div class="dash-instalock-actions">
-                            <button class="btn btn-primary btn-sm flex-1" id="btn-instalock-toggle" disabled>
-                                <i class="fa-solid fa-bolt"></i> Arm Insta-Lock
-                            </button>
-                            <button class="btn btn-secondary btn-sm" id="btn-lock-now" disabled title="Lock this agent right now (agent select only)">
-                                <i class="fa-solid fa-lock"></i> Lock Now
-                            </button>
-                        </div>
-                        <p class="dash-instalock-status" id="dash-instalock-status"></p>
-                    </div>
-                </aside>
             </div>
         </div>
     </div>

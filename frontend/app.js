@@ -28,7 +28,14 @@ const state = {
     modes: [],
     instalock: {},
     selectedAgentId: null,
-    highlightId: null
+    highlightId: null,
+
+    // Dashboard view
+    dashTab: "match",
+    pendingQueueId: null,   // mode picked here, before the client confirms it
+    playPending: false,     // guards PLAY against a second click
+    queueStartedAt: 0,
+    playerStats: null
 };
 
 // Fallback tier mapping
@@ -211,9 +218,25 @@ const DOM = {
     sessionPlayLabel: document.getElementById("session-play-label"),
     btnOpenDashboard: document.getElementById("btn-open-dashboard"),
 
-    // Live Match Dashboard
-    modalDashboard: document.getElementById("modal-dashboard"),
-    modalDashboardClose: document.getElementById("modal-dashboard-close"),
+    // Live Dashboard view
+    headerActions: document.getElementById("header-actions"),
+    accountsView: document.getElementById("accounts-view"),
+    btnToggleDashboard: document.getElementById("btn-toggle-dashboard"),
+    dashView: document.getElementById("dash-view"),
+    dashClose: document.getElementById("dash-close"),
+    btnDashPlay: document.getElementById("btn-dash-play"),
+    dashPlayLabel: document.getElementById("dash-play-label"),
+    dashTabs: document.getElementById("dash-tabs"),
+    dashTabGlide: document.getElementById("dash-tab-glide"),
+    dashStatsBody: document.getElementById("dash-stats-body"),
+    dashInventoryBody: document.getElementById("dash-inventory-body"),
+    dashQueueBanner: document.getElementById("dash-queue-banner"),
+    dashQueueBannerSub: document.getElementById("dash-queue-banner-sub"),
+    dashQueueClock: document.getElementById("dash-queue-clock"),
+    dashCtaTitle: document.getElementById("dash-cta-title"),
+    dashCtaSub: document.getElementById("dash-cta-sub"),
+    dashCtaIcon: document.getElementById("dash-cta-icon"),
+    instalockLabel: document.getElementById("instalock-label"),
     dashRiotId: document.getElementById("dash-riot-id"),
     dashIdentitySub: document.getElementById("dash-identity-sub"),
     dashRankImg: document.getElementById("dash-rank-img"),
@@ -240,7 +263,6 @@ const DOM = {
     dashModeGrid: document.getElementById("dash-mode-grid"),
     dashQueueStatus: document.getElementById("dash-queue-status"),
     btnStartRanked: document.getElementById("btn-start-ranked"),
-    btnQueueStart: document.getElementById("btn-queue-start"),
     btnQueueStop: document.getElementById("btn-queue-stop"),
     dashAgentGrid: document.getElementById("dash-agent-grid"),
     dashAgentSearch: document.getElementById("dash-agent-search"),
@@ -362,7 +384,11 @@ async function installPendingUpdate() {
 
     if (DOM.btnInstallUpdate) {
         DOM.btnInstallUpdate.disabled = true;
-        DOM.btnInstallUpdate.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Downloading...`;
+        DOM.btnInstallUpdate.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Updating...`;
+    }
+
+    if (DOM.updateBannerText) {
+        DOM.updateBannerText.textContent = `Downloading v${state.pendingUpdate.latest_version} & restarting Vortex...`;
     }
 
     try {
@@ -372,27 +398,24 @@ async function installPendingUpdate() {
             showToast(data.message || "Update failed. Please try again.", "error");
             if (DOM.btnInstallUpdate) {
                 DOM.btnInstallUpdate.disabled = false;
-                DOM.btnInstallUpdate.innerHTML = "Install Update";
+                DOM.btnInstallUpdate.innerHTML = "Update Now";
             }
             return;
         }
-        // The installer is downloaded and Explorer is open with it selected.
-        // The user runs it themselves - the app doesn't launch it, since some
-        // AV software blocks app-spawned installers.
-        showToast(data.message || "Update downloaded - run VortexSetup to install.", "success");
-        if (DOM.updateBannerText) {
-            DOM.updateBannerText.textContent = "Downloaded! Close Vortex, then run VortexSetup (opened in Explorer).";
-        }
-        if (DOM.btnInstallUpdate) {
-            DOM.btnInstallUpdate.disabled = false;
-            DOM.btnInstallUpdate.innerHTML = `<i class="fa-solid fa-folder-open"></i> Show File`;
+
+        if (data.relaunching) {
+            showToast("Update downloaded! Restarting Vortex...", "success");
+            if (DOM.updateBannerText) {
+                DOM.updateBannerText.innerHTML = `<i class="fa-solid fa-arrows-rotate rotating"></i> Restarting Vortex with update v${state.pendingUpdate.latest_version}...`;
+            }
+            if (DOM.btnInstallUpdate) {
+                DOM.btnInstallUpdate.innerHTML = `<i class="fa-solid fa-arrows-rotate rotating"></i> Restarting...`;
+            }
+        } else {
+            showToast(data.message || "Update downloaded.", "info");
         }
     } catch (err) {
-        showToast("Couldn't download the update. Check your connection.", "error");
-        if (DOM.btnInstallUpdate) {
-            DOM.btnInstallUpdate.disabled = false;
-            DOM.btnInstallUpdate.innerHTML = "Install Update";
-        }
+        showToast("Applying update and restarting...", "success");
     }
 }
 
@@ -523,9 +546,7 @@ function initEventListeners() {
     DOM.modalMatchesClose.addEventListener("click", () => closeModal(DOM.modalMatches));
     DOM.btnRefreshMatches.addEventListener("click", () => {
         if (state.activeMatchAccId) {
-            refreshAccountStats(state.activeMatchAccId).then(() => {
-                openMatchesModal(state.activeMatchAccId);
-            });
+            openMatchesModal(state.activeMatchAccId);
         }
     });
 
@@ -600,7 +621,10 @@ function initEventListeners() {
             DOM.searchInput.select();
         }
         if (e.key === "Escape") {
-            closeAllModals();
+            // A modal sits on top of the dashboard, so it closes first.
+            const openModalEl = document.querySelector(".modal-overlay.active");
+            if (openModalEl) closeAllModals();
+            else if (state.dashboardOpen) closeDashboard();
         }
     });
 }
@@ -1061,13 +1085,156 @@ function buildAccountView(acc) {
     };
 }
 
+function renderHeroAccountCard(acc) {
+    const v = buildAccountView(acc);
+    const peakBadge = buildPeakBadge(acc);
+    const isValRunning = state.live && state.live.valorant_running;
+    const sessionInfo = sessionStateInfo(state.live);
+
+    return `
+        <div class="account-card account-card-hero is-active-session ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:0">
+            <div class="hero-ambient-glow"></div>
+
+            <!-- Hero Top Header -->
+            <div class="hero-header">
+                <div class="hero-header-left">
+                    <span class="badge-live-hero" title="Currently signed in to Riot Client">
+                        <span class="live-dot-hero"></span>
+                        <span class="live-label-hero">CURRENTLY LOGGED IN</span>
+                    </span>
+                    <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
+                    <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
+                    ${v.statusBadge}
+                    <span class="session-state-chip ${sessionInfo.cls}">${isValRunning ? sessionInfo.label : "Riot Session Active"}</span>
+                </div>
+                <div class="hero-header-right">
+                    <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
+                        <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Hero Body -->
+            <div class="hero-body">
+                <!-- Hero Left: Massive Emblem & Identity -->
+                <div class="hero-identity-col">
+                    <div class="hero-emblem-wrap ${v.tierClass}" title="Current Rank: ${v.rankTitle}">
+                        <img src="${v.rankIconSrc}" alt="${v.rankTitle}" class="hero-emblem-img" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
+                        <span class="hero-level-chip">LV ${acc.level || "-"}</span>
+                    </div>
+                    <div class="hero-name-block">
+                        <div class="hero-summoner-row">
+                            <h2 class="hero-summoner-name" title="${escapeHtml(v.displayName)}">${escapeHtml(v.displayName)}</h2>
+                            ${acc.display_name ? `
+                                <button class="btn-mini-copy hero-copy-btn" onclick="copyText('${escapeHtml(acc.display_name)}', 'Riot ID copied')" title="Copy Riot ID">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            ` : ''}
+                        </div>
+                        <div class="hero-rank-row">
+                            <span class="hero-rank-tier ${v.rankInfo.colorClass}">${v.rankTitle}</span>
+                            ${peakBadge}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hero Center: Stats, Winrate & Credentials -->
+                <div class="hero-stats-col">
+                    <div class="hero-stats-panel">
+                        <div class="hero-stat-card">
+                            <span class="hero-stat-label">WIN RATE</span>
+                            <span class="hero-stat-value ${v.wrClass}">${v.winrate}%</span>
+                        </div>
+                        <div class="hero-stat-card">
+                            <span class="hero-stat-label">MATCHES</span>
+                            <span class="hero-stat-value">${acc.games_played || 0}</span>
+                        </div>
+                        <div class="hero-stat-card">
+                            <span class="hero-stat-label">PEAK RANK</span>
+                            <span class="hero-stat-value text-gold">${acc.peak_rank_tier ? `${escapeHtml(acc.peak_rank_tier)} ${escapeHtml(acc.peak_rank_division || '')}` : 'Unranked'}</span>
+                        </div>
+                    </div>
+
+                    <div class="hero-winrate-track">
+                        <div class="winrate-bar-fill ${v.wrClass}" data-width="${v.winrate}"></div>
+                    </div>
+
+                    <div class="hero-creds-box">
+                        <div class="cred-row">
+                            <span class="cred-label"><i class="fa-solid fa-user"></i> User</span>
+                            <span class="cred-val-wrap">
+                                <span class="cred-text">${escapeHtml(acc.username)}</span>
+                                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.username)}', 'Username copied')" title="Copy Username">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </span>
+                        </div>
+                        <div class="cred-row">
+                            <span class="cred-label"><i class="fa-solid fa-key"></i> Pass</span>
+                            <span class="cred-val-wrap">
+                                <span class="masked" id="pass-mask-${acc.id}">••••••••</span>
+                                <button class="btn-mini-copy" onclick="togglePasswordVisibility(${acc.id}, '${escapeHtml(acc.password)}')" title="Toggle View">
+                                    <i class="fa-regular fa-eye" id="eye-icon-${acc.id}"></i>
+                                </button>
+                                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.password)}', 'Password copied')" title="Copy Password">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </span>
+                        </div>
+                    </div>
+
+                    ${acc.notes ? `<div class="hero-notes" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</div>` : ''}
+                </div>
+
+                <!-- Hero Right: Launch & Actions -->
+                <div class="hero-actions-col">
+                    <button class="btn-hero-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
+                        <div class="hero-play-icon-wrap"><i class="fa-solid fa-play"></i></div>
+                        <div class="hero-play-text-wrap">
+                            <span class="hero-play-title">${isValRunning ? 'VALORANT RUNNING' : 'PLAY VALORANT'}</span>
+                            <span class="hero-play-sub">${isValRunning ? 'Client Active' : 'Launch Game Client'}</span>
+                        </div>
+                    </button>
+
+                    <div class="hero-aux-actions">
+                        <button class="btn btn-secondary hero-action-btn" onclick="openDashboard()" title="Live match lobby & instalock">
+                            <i class="fa-solid fa-gauge-high text-ok"></i>
+                            <span>Dashboard</span>
+                        </button>
+                        <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Live Rank Details">
+                            <i class="fa-solid fa-clock-rotate-left"></i>
+                            <span>Matches</span>
+                        </button>
+                        <button class="btn btn-secondary hero-action-btn" onclick="openEditModal(${acc.id})" title="Edit Account">
+                            <i class="fa-solid fa-pen"></i>
+                            <span>Edit</span>
+                        </button>
+                        <button class="btn btn-icon hero-delete-btn is-danger" onclick="deleteAccount(${acc.id})" title="Delete Account">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderGridView() {
-    DOM.accountsGrid.innerHTML = state.accounts.map((acc, i) => {
+    const activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
+    const regularAccounts = activeAcc ? state.accounts.filter(a => a.id !== state.activeAccountId) : state.accounts;
+
+    let html = "";
+    if (activeAcc) {
+        html += renderHeroAccountCard(activeAcc);
+    }
+
+    html += regularAccounts.map((acc, i) => {
         const v = buildAccountView(acc);
         const peakBadge = buildPeakBadge(acc);
+        const animIndex = (activeAcc ? 1 : 0) + i;
 
         return `
-            <div class="account-card ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:${Math.min(i, 24)}">
+            <div class="account-card ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:${Math.min(animIndex, 24)}">
                 <!-- Header -->
                 <div class="card-header">
                     <div class="card-badges">
@@ -1167,9 +1334,6 @@ function renderGridView() {
                         <button class="btn btn-icon btn-sm" onclick="openMatchesModal(${acc.id})" title="View Match History & Live Rank Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
                         </button>
-                        <button class="btn btn-icon btn-sm" id="btn-refresh-${acc.id}" onclick="refreshAccountStats(${acc.id})" title="Sync Stats with Riot Servers">
-                            <i class="fa-solid fa-arrows-rotate"></i>
-                        </button>
                         <button class="btn btn-icon btn-sm" onclick="openEditModal(${acc.id})" title="Edit Account">
                             <i class="fa-solid fa-pen"></i>
                         </button>
@@ -1182,11 +1346,17 @@ function renderGridView() {
         `;
     }).join("");
 
+    DOM.accountsGrid.innerHTML = html;
     animateWinrateBars(DOM.accountsGrid);
 }
 
 function renderTableView() {
-    DOM.accountsTableBody.innerHTML = state.accounts.map((acc, i) => {
+    const activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
+    const sorted = activeAcc
+        ? [activeAcc, ...state.accounts.filter(a => a.id !== state.activeAccountId)]
+        : state.accounts;
+
+    DOM.accountsTableBody.innerHTML = sorted.map((acc, i) => {
         const v = buildAccountView(acc);
 
         return `
@@ -1256,7 +1426,6 @@ function renderTableView() {
                             <button class="btn btn-icon btn-sm is-warning" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Check Account - verify the credentials and pull live data"><i class="fa-solid fa-shield-halved"></i></button>
                         ` : ''}
                         <button class="btn btn-icon btn-sm" onclick="openMatchesModal(${acc.id})" title="Recent Matches"><i class="fa-solid fa-clock-rotate-left"></i></button>
-                        <button class="btn btn-icon btn-sm" onclick="refreshAccountStats(${acc.id})" title="Sync Stats"><i class="fa-solid fa-arrows-rotate"></i></button>
                         <button class="btn btn-icon btn-sm" onclick="openEditModal(${acc.id})" title="Edit Account"><i class="fa-solid fa-pen"></i></button>
                         <button class="btn btn-icon btn-sm is-danger" onclick="deleteAccount(${acc.id})" title="Delete Account"><i class="fa-solid fa-trash"></i></button>
                     </div>
@@ -1978,7 +2147,6 @@ function closeModal(el) {
 
 function closeAllModals() {
     document.querySelectorAll(".modal-overlay").forEach(m => m.classList.remove("active"));
-    state.dashboardOpen = false;
 }
 
 const TOAST_ICONS = {
@@ -2193,6 +2361,10 @@ async function pollLiveSession() {
         refreshInstalockStatus();
     }
 
+    // A finished match is the moment the profile is actually out of date.
+    if (state._wasInMatch && !live.match) refreshPlayerStats(true);
+    state._wasInMatch = !!live.match;
+
     // Re-render only when the active card actually moved, so the badge and
     // the PLAY button appear without restarting animations every poll.
     if (previousId !== state.activeAccountId) renderAccounts();
@@ -2237,10 +2409,9 @@ function renderSessionBar(live) {
         DOM.sessionStateChip.textContent = live.valorant_running ? info.label : "VALORANT closed";
     }
 
-    if (DOM.btnSessionPlay) {
-        DOM.btnSessionPlay.disabled = !!live.valorant_running;
-        DOM.sessionPlayLabel.textContent = live.valorant_running ? "Running" : "Play";
-    }
+    // The Play buttons are driven together by renderPlayButton, which also
+    // knows about a launch that's still in flight.
+    renderPlayButton(live);
 }
 
 async function playAccount(id) {
@@ -2362,25 +2533,59 @@ function highlightAccount(id) {
 }
 
 // ==========================================================================
-// LIVE MATCH DASHBOARD
+// LIVE DASHBOARD
+// The dashboard is a view rather than a modal: opening it collapses the
+// roster and shrinks the account tools into an icon rail, and closing it
+// puts everything back.
 // ==========================================================================
 
 async function openDashboard() {
+    if (state.dashboardOpen) return;
     state.dashboardOpen = true;
-    openModal(DOM.modalDashboard);
+
+    document.body.classList.add("dashboard-mode");
+    if (DOM.dashView) {
+        DOM.dashView.classList.add("is-open");
+        DOM.dashView.setAttribute("aria-hidden", "false");
+    }
+    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.add("is-active");
 
     if (!state.agents.length) await loadLiveAgents();
     renderModeGrid();
     renderAgentGrid();
     refreshInstalockStatus();
+    moveTabGlide();
 
     if (state.live) renderDashboard(state.live);
     pollLiveSession();
+    startQueueClock();
+
+    // The roster is gone from view, so bring the dashboard into it.
+    if (!PREFERS_REDUCED_MOTION) {
+        setTimeout(() => {
+            if (DOM.dashView) DOM.dashView.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 60);
+    }
 }
 
 function closeDashboard() {
+    if (!state.dashboardOpen) return;
     state.dashboardOpen = false;
-    closeModal(DOM.modalDashboard);
+
+    document.body.classList.remove("dashboard-mode");
+    if (DOM.dashView) {
+        DOM.dashView.classList.remove("is-open");
+        DOM.dashView.setAttribute("aria-hidden", "true");
+    }
+    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.remove("is-active");
+
+    stopQueueClock();
+    clearTimeout(state._statsTimer);
+}
+
+function toggleDashboard() {
+    if (state.dashboardOpen) closeDashboard();
+    else openDashboard();
 }
 
 async function loadLiveAgents() {
@@ -2395,8 +2600,37 @@ async function loadLiveAgents() {
     }
 }
 
+// -- tabs ----------------------------------------------------------------
+
+function switchDashTab(tab) {
+    state.dashTab = tab;
+
+    document.querySelectorAll(".dash-tab").forEach(b => {
+        b.classList.toggle("active", b.dataset.tab === tab);
+    });
+    document.querySelectorAll(".dash-tab-panel").forEach(p => {
+        p.classList.toggle("is-active", p.dataset.panel === tab);
+    });
+
+    moveTabGlide();
+
+    if (tab === "stats" || tab === "inventory") refreshPlayerStats();
+}
+
+/** Slides the pill under the active tab. */
+function moveTabGlide() {
+    if (!DOM.dashTabGlide || !DOM.dashTabs) return;
+    const active = DOM.dashTabs.querySelector(".dash-tab.active");
+    if (!active) return;
+
+    DOM.dashTabGlide.style.width = `${active.offsetWidth}px`;
+    DOM.dashTabGlide.style.transform = `translateX(${active.offsetLeft - 4}px)`;
+}
+
+// -- dashboard rendering --------------------------------------------------
+
 function renderDashboard(live) {
-    if (!DOM.modalDashboard) return;
+    if (!DOM.dashView) return;
 
     // -- identity ------------------------------------------------------
     DOM.dashRiotId.textContent = live.display_name || live.username || "Not signed in";
@@ -2425,13 +2659,15 @@ function renderDashboard(live) {
     const match = live.match;
     const inPregame = !!match && match.phase === "agent_select";
     const inMatch = !!match && match.phase === "in_match";
+    const inQueue = !!(live.party && live.party.in_queue);
 
     DOM.dashScoreboard.style.display = inMatch ? "block" : "none";
     DOM.dashPregameBanner.style.display = inPregame ? "flex" : "none";
+    DOM.dashQueueBanner.style.display = (inQueue && !match) ? "flex" : "none";
     DOM.dashTeams.style.display = match ? "grid" : "none";
-    DOM.dashIdle.style.display = match ? "none" : "flex";
+    DOM.dashIdle.style.display = (match || inQueue) ? "none" : "flex";
 
-    if (!match) {
+    if (!match && !inQueue) {
         DOM.dashIdleTitle.textContent = live.available
             ? (live.valorant_running ? "No live match" : "VALORANT isn't running")
             : "No Riot Client session";
@@ -2462,25 +2698,22 @@ function renderDashboard(live) {
         DOM.dashTeamEnemyWrap.style.display = (match.enemy && match.enemy.length) ? "block" : "none";
     }
 
-    // -- queue controls ------------------------------------------------
-    const inQueue = !!(live.party && live.party.in_queue);
-    const canControl = !!live.valorant_running;
+    // -- queue timing --------------------------------------------------
+    if (inQueue) {
+        // Anchored to the backend's elapsed count so the clock survives a
+        // reload mid-queue instead of restarting at zero.
+        state.queueStartedAt = Date.now() - (live.queue_elapsed || 0) * 1000;
+        if (DOM.dashQueueBannerSub) {
+            DOM.dashQueueBannerSub.textContent = live.queue_label || "Searching for a match";
+        }
+        renderQueueClock();
+    } else {
+        state.queueStartedAt = 0;
+    }
 
-    DOM.dashQueueStatus.textContent = inQueue
-        ? `Searching for a ${live.queue_label || "match"}…`
-        : `Mode: ${live.queue_label || "not set"}`;
-    DOM.dashQueueStatus.classList.toggle("is-searching", inQueue);
-
-    DOM.btnStartRanked.disabled = !canControl || inQueue;
-    DOM.btnQueueStart.disabled = !canControl || inQueue;
-    DOM.btnQueueStop.disabled = !canControl || !inQueue;
-
-    DOM.dashModeGrid.querySelectorAll(".dash-mode-btn").forEach(b => {
-        b.classList.toggle("active", b.dataset.queue === live.queue_id);
-        b.disabled = !canControl;
-    });
-
-    DOM.btnLockNow.disabled = !inPregame || !state.selectedAgentId;
+    renderQueueControls(live);
+    renderPlayButton(live);
+    updateInstalockControls();
 }
 
 function renderRoster(el, players) {
@@ -2507,7 +2740,156 @@ function renderRoster(el, players) {
     `).join("");
 }
 
+// -- PLAY -----------------------------------------------------------------
+
+/**
+ * One click only. The button re-opens when the game is confirmed running
+ * (nothing left to do), when the launch is confirmed failed, or when the
+ * game disappears again - never while a launch is still in flight.
+ */
+function renderPlayButton(live) {
+    if (!DOM.btnDashPlay) return;
+
+    const launch = (live && live.launch) || {};
+    const running = !!(live && live.valorant_running);
+    const launching = !!launch.active || (state.playPending && !running);
+
+    // The optimistic lock is dropped as soon as the backend owns the state.
+    if (state.playPending && (launch.active || running || launch.stage === "failed")) {
+        state.playPending = false;
+    }
+
+    let label = "PLAY";
+    let icon = "fa-solid fa-play";
+    let disabled = false;
+    let cls = "btn-dash-play";
+    let title = "Force-start VALORANT for this account";
+
+    if (!live || !live.available) {
+        label = "NO SESSION";
+        disabled = true;
+        title = "Sign in to an account first.";
+    } else if (running) {
+        label = "RUNNING";
+        icon = "fa-solid fa-circle-check";
+        disabled = true;
+        cls += " is-running";
+        title = "VALORANT is already running.";
+    } else if (launching) {
+        label = "STARTING…";
+        icon = "fa-solid fa-circle-notch";
+        disabled = true;
+        cls += " is-launching";
+        title = launch.message || "Starting VALORANT…";
+    } else if (launch.stage === "failed") {
+        label = "RETRY";
+        icon = "fa-solid fa-rotate-right";
+        title = launch.message || "VALORANT didn't start - try again.";
+    }
+
+    DOM.btnDashPlay.className = cls;
+    DOM.btnDashPlay.disabled = disabled;
+    DOM.btnDashPlay.title = title;
+    DOM.btnDashPlay.querySelector("i").className = icon;
+    if (DOM.dashPlayLabel) DOM.dashPlayLabel.textContent = label;
+
+    if (DOM.btnSessionPlay) {
+        DOM.btnSessionPlay.disabled = disabled;
+        DOM.sessionPlayLabel.textContent = running ? "Running" : (launching ? "Starting…" : "Play");
+    }
+}
+
+async function forceLaunchValorant() {
+    if (state.playPending) return;
+    state.playPending = true;
+    renderPlayButton(state.live);
+
+    try {
+        const res = await fetch("/api/live/launch", { method: "POST" });
+        const data = await res.json();
+        showToast(data.message || "Starting VALORANT…", data.success ? "success" : "error");
+
+        if (!data.success) state.playPending = false;
+        if (data.launch) state.live = { ...(state.live || {}), launch: data.launch };
+        renderPlayButton(state.live);
+    } catch (err) {
+        state.playPending = false;
+        showToast("Couldn't reach the app's backend", "error");
+        renderPlayButton(state.live);
+    }
+
+    // The backend confirms the process itself; this just gets the first
+    // update on screen quickly.
+    setTimeout(pollLiveSession, 1500);
+}
+
 // -- queue & mode control ------------------------------------------------
+
+/** Queue the dashboard will start: the pending pick, else what the client has. */
+function activeQueueId(live) {
+    return state.pendingQueueId || (live && live.queue_id) || "competitive";
+}
+
+function modeById(queueId) {
+    return (state.modes || []).find(m => m.id === queueId) || null;
+}
+
+function renderQueueControls(live) {
+    const inQueue = !!(live.party && live.party.in_queue);
+    const inMatch = !!live.match;
+    const canControl = !!live.valorant_running;
+
+    const queueId = activeQueueId(live);
+    const mode = modeById(queueId);
+    const modeName = mode ? mode.name : (live.queue_label || "Competitive");
+
+    // The client caught up with the pending pick - stop overriding it.
+    if (state.pendingQueueId && live.queue_id === state.pendingQueueId) {
+        state.pendingQueueId = null;
+    }
+
+    // -- CTA -----------------------------------------------------------
+    if (DOM.dashCtaIcon) DOM.dashCtaIcon.className = mode ? mode.icon : "fa-solid fa-trophy";
+
+    let ctaTitle = `Start ${modeName} Match`;
+    let ctaSub = `Queues up for ${modeName}`;
+
+    if (!canControl) {
+        ctaTitle = "VALORANT isn't running";
+        ctaSub = "Press PLAY to start the game first";
+    } else if (inMatch) {
+        ctaTitle = live.match.phase === "agent_select" ? "In agent select" : "You're in a match";
+        ctaSub = "Finish or leave it before queueing again";
+    } else if (inQueue) {
+        ctaTitle = "Matchmaking (In Queue)";
+        ctaSub = `Searching for ${live.queue_label || modeName}`;
+    }
+
+    if (DOM.dashCtaTitle) DOM.dashCtaTitle.textContent = ctaTitle;
+    if (DOM.dashCtaSub) DOM.dashCtaSub.textContent = ctaSub;
+
+    DOM.btnStartRanked.disabled = !canControl || inQueue || inMatch;
+    DOM.btnStartRanked.classList.toggle("is-queued", inQueue);
+
+    DOM.btnQueueStop.disabled = !canControl || !inQueue;
+    DOM.btnQueueStop.style.display = inQueue ? "flex" : "none";
+
+    // -- status line ---------------------------------------------------
+    if (inQueue) {
+        DOM.dashQueueStatus.textContent =
+            `Matchmaking (In Queue) · ${live.queue_label || modeName} · ${formatClock(live.queue_elapsed || 0)}`;
+    } else if (inMatch) {
+        DOM.dashQueueStatus.textContent = `In a ${live.match.mode || modeName} match`;
+    } else {
+        DOM.dashQueueStatus.textContent = `Mode: ${modeName}`;
+    }
+    DOM.dashQueueStatus.classList.toggle("is-searching", inQueue);
+
+    DOM.dashModeGrid.querySelectorAll(".dash-mode-btn").forEach(b => {
+        b.classList.toggle("active", b.dataset.queue === queueId);
+        b.disabled = !canControl || inQueue || inMatch;
+    });
+}
 
 function renderModeGrid() {
     if (!DOM.dashModeGrid) return;
@@ -2525,6 +2907,11 @@ function renderModeGrid() {
 }
 
 async function changeMode(queueId) {
+    // Reflect the pick immediately - the CTA is the thing people watch to
+    // confirm the mode took.
+    state.pendingQueueId = queueId;
+    if (state.live) renderQueueControls(state.live);
+
     try {
         const res = await fetch("/api/live/mode", {
             method: "POST",
@@ -2532,25 +2919,33 @@ async function changeMode(queueId) {
             body: JSON.stringify({ queue_id: queueId })
         });
         const data = await res.json();
-        showToast(data.message || (data.success ? "Mode changed" : "Couldn't change mode"),
-                  data.success ? "success" : "error");
-        if (data.success) pollLiveSession();
+        if (!data.success) {
+            state.pendingQueueId = null;
+            showToast(data.message || "Couldn't change mode", "error");
+        }
+        pollLiveSession();
     } catch (err) {
+        state.pendingQueueId = null;
         showToast("Couldn't reach the game client", "error");
     }
 }
 
 async function startQueue(queueId) {
+    const target = queueId || activeQueueId(state.live);
     try {
         const res = await fetch("/api/live/queue/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ queue_id: queueId || null })
+            body: JSON.stringify({ queue_id: target || null })
         });
         const data = await res.json();
-        showToast(data.message || (data.success ? "Queue started" : "Couldn't start the queue"),
+        showToast(data.message || (data.success ? "Matchmaking started" : "Couldn't start the queue"),
                   data.success ? "success" : "error");
-        if (data.success) pollLiveSession();
+        if (data.success) {
+            state.queueStartedAt = Date.now();
+            startQueueClock();
+        }
+        pollLiveSession();
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
     }
@@ -2561,10 +2956,36 @@ async function stopQueue() {
         const res = await fetch("/api/live/queue/stop", { method: "POST" });
         const data = await res.json();
         showToast(data.message || "Left the queue", data.success ? "info" : "error");
-        if (data.success) pollLiveSession();
+        if (data.success) state.queueStartedAt = 0;
+        pollLiveSession();
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
     }
+}
+
+// -- queue clock ----------------------------------------------------------
+
+function formatClock(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function renderQueueClock() {
+    if (!DOM.dashQueueClock) return;
+    const elapsed = state.queueStartedAt ? (Date.now() - state.queueStartedAt) / 1000 : 0;
+    DOM.dashQueueClock.textContent = formatClock(elapsed);
+}
+
+// Ticks locally so the timer counts every second instead of jumping with
+// the poll interval.
+function startQueueClock() {
+    stopQueueClock();
+    state._queueTimer = setInterval(renderQueueClock, 1000);
+}
+
+function stopQueueClock() {
+    clearInterval(state._queueTimer);
+    state._queueTimer = null;
 }
 
 // -- insta-lock ----------------------------------------------------------
@@ -2609,18 +3030,28 @@ function updateInstalockControls() {
     if (DOM.btnInstalockToggle) {
         DOM.btnInstalockToggle.disabled = !armed && !state.selectedAgentId;
         DOM.btnInstalockToggle.classList.toggle("is-armed", armed);
-        DOM.btnInstalockToggle.innerHTML = armed
-            ? `<i class="fa-solid fa-power-off"></i> Turn Off (${escapeHtml(lock.agent_name || "armed")})`
-            : `<i class="fa-solid fa-bolt"></i> Arm Insta-Lock${agent ? ` · ${escapeHtml(agent.name)}` : ""}`;
+        DOM.btnInstalockToggle.title = armed
+            ? `Insta-lock is on for ${lock.agent_name || "your agent"} - click to turn it off`
+            : "Locks your agent the moment agent select opens";
+        if (DOM.instalockLabel) {
+            DOM.instalockLabel.textContent = armed
+                ? `INSTALOCK · ${(lock.agent_name || "ON").toUpperCase()}`
+                : "INSTALOCK";
+        }
     }
 
     if (DOM.dashInstalockPill) {
-        DOM.dashInstalockPill.textContent = armed ? (lock.status === "locked" ? "Locked" : "Armed") : "Off";
-        DOM.dashInstalockPill.className = `dash-instalock-pill ${armed ? "is-armed" : ""}`;
+        const locked = lock.status === "locked";
+        DOM.dashInstalockPill.textContent = armed ? (locked ? "LOCKED" : "ON") : "OFF";
+        DOM.dashInstalockPill.className =
+            `dash-instalock-pill ${armed ? "is-armed" : ""} ${locked ? "is-locked" : ""}`;
     }
 
     if (DOM.dashInstalockStatus) {
-        DOM.dashInstalockStatus.textContent = lock.message || "";
+        DOM.dashInstalockStatus.textContent = lock.message ||
+            (state.selectedAgentId && !armed
+                ? `${agent ? agent.name : "Agent"} ready - press INSTALOCK to turn it on.`
+                : "");
         DOM.dashInstalockStatus.className =
             `dash-instalock-status ${lock.status === "failed" ? "is-error" : (lock.status === "locked" ? "is-ok" : "")}`;
     }
@@ -2685,29 +3116,290 @@ async function lockAgentNow() {
     }
 }
 
+// ==========================================================================
+// PLAYER STATS & INVENTORY
+// ==========================================================================
+
+const STATS_REFRESH = 30000;
+
+async function refreshPlayerStats(force = false) {
+    clearTimeout(state._statsTimer);
+
+    try {
+        const res = await fetch(`/api/live/stats${force ? "?force=true" : ""}`);
+        state.playerStats = await res.json();
+    } catch (err) {
+        state.playerStats = { available: false, message: "Couldn't reach the app's backend." };
+    }
+
+    renderPlayerStats();
+    renderInventory();
+
+    // Keep polling while a stats tab is on screen - the first response is
+    // usually still building in the background.
+    if (state.dashboardOpen && (state.dashTab === "stats" || state.dashTab === "inventory")) {
+        const wait = state.playerStats && state.playerStats.loading ? 3000 : STATS_REFRESH;
+        state._statsTimer = setTimeout(() => refreshPlayerStats(), wait);
+    }
+}
+
+function statsPlaceholder(stats) {
+    if (stats && stats.loading) {
+        return `<div class="dash-stats-empty">
+            <i class="fa-solid fa-circle-notch fa-spin"></i>
+            <span>Reading your profile from Riot…</span>
+        </div>`;
+    }
+    return `<div class="dash-stats-empty">
+        <i class="fa-solid fa-chart-simple"></i>
+        <span>${escapeHtml((stats && stats.message) || "Start VALORANT to load your live profile.")}</span>
+    </div>`;
+}
+
+function renderPlayerStats() {
+    if (!DOM.dashStatsBody) return;
+    const s = state.playerStats;
+
+    if (!s || !s.available) {
+        DOM.dashStatsBody.innerHTML = statsPlaceholder(s);
+        return;
+    }
+
+    const rank = s.rank || {};
+    const peak = s.peak || {};
+    const combat = s.combat || {};
+    const lifetime = s.lifetime || {};
+    const act = s.act || {};
+
+    const rrPct = Math.max(0, Math.min(100, rank.rr || 0));
+    const streakCls = s.streak_type === "Win" ? "is-win" : "is-loss";
+
+    DOM.dashStatsBody.innerHTML = `
+        <div class="stat-hero">
+            <div class="stat-hero-rank">
+                <img src="${rank.icon || DEFAULT_TIER_ICON}" alt="${escapeHtml(rank.label || "Unranked")}"
+                     onerror="this.style.visibility='hidden';">
+                <div class="stat-hero-label">
+                    <strong>${escapeHtml(rank.label || "Unranked")}</strong>
+                    <span>${rank.leaderboard ? `Leaderboard #${rank.leaderboard}` : (act.label || "Current act")}</span>
+                </div>
+            </div>
+
+            <div class="stat-rr">
+                <div class="stat-rr-top">
+                    <span>Rank Rating</span>
+                    <b>${rank.rr || 0} RR</b>
+                </div>
+                <div class="stat-rr-track"><div class="stat-rr-fill" style="width:${rrPct}%"></div></div>
+                <div class="stat-rr-top">
+                    <span>${act.label || "This act"}</span>
+                    <b>${act.wins || 0}W · ${act.losses || 0}L</b>
+                </div>
+            </div>
+
+            <div class="stat-hero-peak">
+                <img src="${peak.icon || DEFAULT_TIER_ICON}" alt="Peak rank" onerror="this.style.display='none';">
+                <div>
+                    <small>Peak</small>
+                    <b>${escapeHtml(peak.label || "Unranked")}${peak.season ? ` · ${escapeHtml(peak.season)}` : ""}</b>
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-tiles">
+            ${statTile("Winrate", `${act.winrate || 0}%`,
+                       `${act.games || 0} ranked games`, winrateClass(act.winrate))}
+            ${statTile("Headshot %", `${combat.hs || 0}%`,
+                       `Last ${combat.matches || 0} matches`, "is-accent")}
+            ${statTile("K/D", combat.kd || 0, `KDA ${combat.kda || 0}`, combat.kd >= 1 ? "is-ok" : "is-bad")}
+            ${statTile("ACS", combat.acs || 0, "Avg combat score", "is-gold")}
+            ${statTile("Avg K/D/A", `${combat.avg_kills || 0}/${combat.avg_deaths || 0}/${combat.avg_assists || 0}`,
+                       "Per match", "")}
+            ${statTile("Lifetime", `${lifetime.winrate || 0}%`,
+                       `${lifetime.wins || 0}W · ${lifetime.losses || 0}L`, winrateClass(lifetime.winrate))}
+        </div>
+
+        <div class="stat-block">
+            <h5 class="stat-block-title">
+                <i class="fa-solid fa-wave-square"></i> Recent Form
+                ${s.streak ? `<span class="stat-streak ${streakCls}">
+                    <i class="fa-solid ${s.streak_type === "Win" ? "fa-fire" : "fa-arrow-trend-down"}"></i>
+                    ${s.streak} ${s.streak_type === "Win" ? "win" : "loss"} streak
+                </span>` : `<span class="stat-block-note">${s.recent_wins || 0}W · ${s.recent_losses || 0}L in the last ${(s.form || []).length}</span>`}
+            </h5>
+            <div class="stat-form">
+                ${(s.form || []).map((f, i) => `
+                    <span class="form-pip ${f.result === "Win" ? "is-win" : f.result === "Loss" ? "is-loss" : "is-draw"}"
+                          style="animation-delay:${i * 40}ms"
+                          title="${escapeHtml(f.map || "")} · ${f.rr > 0 ? "+" : ""}${f.rr} RR">
+                        ${f.result === "Win" ? "W" : f.result === "Loss" ? "L" : "D"}
+                    </span>
+                `).join("") || '<span class="dash-roster-empty">No ranked games yet.</span>'}
+            </div>
+            ${renderSparkline(s.rr_history || [])}
+        </div>
+
+        ${(s.top_agents || []).length ? `
+        <div class="stat-block">
+            <h5 class="stat-block-title"><i class="fa-solid fa-user-ninja"></i> Top Agents
+                <span class="stat-block-note">Last ${combat.matches || 0} matches</span>
+            </h5>
+            <div class="stat-agents">
+                ${s.top_agents.map(a => `
+                    <div class="stat-agent-row">
+                        <img src="${a.icon}" alt="${escapeHtml(a.name)}" onerror="this.style.visibility='hidden';">
+                        <div class="stat-agent-meta">
+                            <strong>${escapeHtml(a.name)}</strong>
+                            <div class="stat-agent-bar"><span style="width:${a.winrate}%"></span></div>
+                        </div>
+                        <div class="stat-agent-nums">
+                            <span>${a.winrate}% WR</span>
+                            <small>${a.matches} played · ${a.kd} K/D</small>
+                        </div>
+                    </div>
+                `).join("")}
+            </div>
+        </div>` : ""}
+
+        ${(s.recent || []).length ? `
+        <div class="stat-block">
+            <h5 class="stat-block-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent Matches</h5>
+            <div class="stat-matches">
+                ${s.recent.map(m => `
+                    <div class="stat-match ${m.result === "Win" ? "is-win" : m.result === "Loss" ? "is-loss" : ""}">
+                        <span class="stat-match-flag"></span>
+                        <img src="${m.agent_icon}" alt="${escapeHtml(m.agent)}" onerror="this.style.visibility='hidden';">
+                        <div class="stat-match-meta">
+                            <strong>${escapeHtml(m.map || "Unknown")}</strong>
+                            <small>${escapeHtml(m.mode || "")} · ${m.hs}% HS · ${m.acs} ACS</small>
+                        </div>
+                        <span class="stat-match-score">${m.rounds_won}–${m.rounds_lost}</span>
+                        <div class="stat-match-kda">
+                            <span>${m.kills}/${m.deaths}/${m.assists}</span>
+                            <small>${m.kd} K/D</small>
+                        </div>
+                    </div>
+                `).join("")}
+            </div>
+        </div>` : ""}
+    `;
+}
+
+function winrateClass(wr) {
+    if (!wr) return "";
+    return wr >= 50 ? "is-ok" : "is-bad";
+}
+
+function statTile(label, value, sub, cls) {
+    return `<div class="stat-tile">
+        <span class="stat-tile-label">${escapeHtml(label)}</span>
+        <span class="stat-tile-value ${cls || ""}">${escapeHtml(String(value))}</span>
+        <span class="stat-tile-sub">${escapeHtml(sub || "")}</span>
+    </div>`;
+}
+
+/** RR over the last games, drawn as a self-scaling sparkline. */
+function renderSparkline(points) {
+    if (!points || points.length < 2) return "";
+
+    const w = 100, h = 30;
+    const min = Math.min(...points);
+    const max = Math.max(...points);
+    const span = Math.max(max - min, 1);
+
+    const coords = points.map((p, i) => {
+        const x = (i / (points.length - 1)) * w;
+        const y = h - ((p - min) / span) * (h - 4) - 2;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+    });
+
+    return `<svg class="stat-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="currentColor" stop-opacity="0.35"/>
+                <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+            </linearGradient>
+        </defs>
+        <polygon class="stat-spark-area" points="0,${h} ${coords.join(" ")} ${w},${h}"/>
+        <polyline class="stat-spark-line" points="${coords.join(" ")}"/>
+    </svg>`;
+}
+
+function renderInventory() {
+    if (!DOM.dashInventoryBody) return;
+    const s = state.playerStats;
+
+    if (!s || !s.available || !s.inventory) {
+        DOM.dashInventoryBody.innerHTML = statsPlaceholder(s);
+        return;
+    }
+
+    const inv = s.inventory;
+    const pct = inv.skins_total ? Math.round((inv.skins_owned / inv.skins_total) * 100) : 0;
+
+    DOM.dashInventoryBody.innerHTML = `
+        <div class="stat-tiles inv-collection">
+            ${statTile("Skins Owned", inv.skins_owned || 0, `${pct}% of ${inv.skins_total || 0}`, "is-gold")}
+            ${statTile("Collection Value", `${(inv.value_vp || 0).toLocaleString()}`, "VP spent on skins", "is-accent")}
+            ${statTile("Agents", inv.agents_owned || 0, "Unlocked", "")}
+            ${statTile("Buddies", inv.buddies || 0, "Gun charms", "")}
+            ${statTile("Sprays", inv.sprays || 0, "Owned", "")}
+            ${statTile("Player Cards", inv.cards || 0, "Owned", "")}
+        </div>
+
+        <div class="stat-block">
+            <h5 class="stat-block-title">
+                <i class="fa-solid fa-gun"></i> Equipped Loadout
+                <span class="stat-block-note">${(inv.loadout || []).length} weapons</span>
+            </h5>
+            ${(inv.loadout || []).length ? `
+            <div class="inv-loadout">
+                ${inv.loadout.map(g => `
+                    <div class="inv-skin" style="--skin-tint:${g.tier_color ? g.tier_color + "33" : "transparent"}">
+                        <div class="inv-skin-top">
+                            <span class="inv-skin-weapon">${escapeHtml(g.weapon)}</span>
+                            ${g.tier_icon ? `<img class="inv-skin-tier" src="${g.tier_icon}" alt="${escapeHtml(g.tier)}" title="${escapeHtml(g.tier)}" onerror="this.style.display='none';">` : ""}
+                        </div>
+                        <span class="inv-skin-name ${g.is_default ? "is-default" : ""}">${escapeHtml(g.skin)}</span>
+                        ${g.icon ? `<img class="inv-skin-art" src="${g.icon}" alt="" onerror="this.style.display='none';">` : ""}
+                    </div>
+                `).join("")}
+            </div>` : '<p class="dash-roster-empty">Loadout unavailable - open VALORANT to the menus.</p>'}
+        </div>
+    `;
+}
+
+// ==========================================================================
+
 function initLiveEventListeners() {
     if (DOM.btnSessionPlay) {
         DOM.btnSessionPlay.addEventListener("click", () => {
             if (state.activeAccountId) playAccount(state.activeAccountId);
-            else showToast("No matching account found for this session.", "info");
+            else forceLaunchValorant();
         });
     }
 
     if (DOM.btnOpenDashboard) DOM.btnOpenDashboard.addEventListener("click", openDashboard);
-    if (DOM.modalDashboardClose) DOM.modalDashboardClose.addEventListener("click", closeDashboard);
+    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.addEventListener("click", toggleDashboard);
+    if (DOM.dashClose) DOM.dashClose.addEventListener("click", closeDashboard);
+    if (DOM.btnDashPlay) DOM.btnDashPlay.addEventListener("click", forceLaunchValorant);
 
-    if (DOM.btnStartRanked) DOM.btnStartRanked.addEventListener("click", () => startQueue("competitive"));
-    if (DOM.btnQueueStart) DOM.btnQueueStart.addEventListener("click", () => startQueue(null));
+    if (DOM.dashTabs) {
+        DOM.dashTabs.querySelectorAll(".dash-tab").forEach(btn => {
+            btn.addEventListener("click", () => switchDashTab(btn.dataset.tab));
+        });
+    }
+
+    if (DOM.btnStartRanked) DOM.btnStartRanked.addEventListener("click", () => startQueue(null));
     if (DOM.btnQueueStop) DOM.btnQueueStop.addEventListener("click", stopQueue);
 
     if (DOM.btnInstalockToggle) DOM.btnInstalockToggle.addEventListener("click", toggleInstalock);
     if (DOM.btnLockNow) DOM.btnLockNow.addEventListener("click", lockAgentNow);
     if (DOM.dashAgentSearch) DOM.dashAgentSearch.addEventListener("input", renderAgentGrid);
 
-    // The dashboard has its own teardown, so route Escape/backdrop through it.
-    if (DOM.modalDashboard) {
-        DOM.modalDashboard.addEventListener("mousedown", (e) => {
-            if (e.target === DOM.modalDashboard) closeDashboard();
-        });
-    }
+    // The glide pill is measured from layout, so it has to re-settle when the
+    // panel changes width.
+    window.addEventListener("resize", () => {
+        if (state.dashboardOpen) moveTabGlide();
+    });
 }

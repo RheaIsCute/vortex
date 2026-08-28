@@ -419,7 +419,7 @@ class Database:
     # failure. Without this guard, a single failed background sync would
     # wipe out a peak rank that was correctly fetched moments earlier.
     STICKY_NON_EMPTY_FIELDS = {
-        "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season"
+        "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season", "match_history", "top_champs"
     }
 
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> bool:

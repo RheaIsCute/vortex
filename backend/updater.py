@@ -10,6 +10,7 @@ Manifest format matches the existing precedent in the RheaIsCute/asa repo
 """
 
 import os
+import sys
 import subprocess
 import tempfile
 from typing import Optional, Dict, Any
@@ -107,24 +108,80 @@ def download_installer(download_url: str, version: str = "", progress_cb=None) -
 def reveal_installer(installer_path: str) -> bool:
     """
     Opens Explorer with the downloaded installer selected, so the user can
-    run it themselves.
-
-    We deliberately do NOT launch the installer from this process. Some
-    security software (Avira's self-protection, for one) blocks one
-    executable spawning an installer and shows a scary dialog like
-    "Security validation failure: parent process has different executable!"
-    - that message comes from the AV, not from us or Inno Setup (the string
-    appears nowhere in Inno Setup's source or in our binaries). A user
-    double-clicking the file themselves isn't blocked, so handing off to
-    Explorer is the approach that works regardless of what AV is installed.
+    run it manually if needed.
     """
     try:
         subprocess.Popen(["explorer.exe", "/select,", os.path.normpath(installer_path)])
         return True
     except Exception:
-        # Fall back to just opening the containing folder.
         try:
             os.startfile(os.path.dirname(installer_path))
             return True
         except Exception:
             return False
+
+
+def apply_and_relaunch(installer_path: str) -> bool:
+    """
+    Spawns a detached background updater script that waits for the running
+    Vortex process to exit, runs the installer silently (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-),
+    relaunches the updated Vortex.exe, and cleans up the temporary files.
+    """
+    try:
+        tmp_dir = tempfile.gettempdir()
+        updater_bat = os.path.join(tmp_dir, "vortex_silent_update.bat")
+
+        exe_path = sys.executable if getattr(sys, "frozen", False) else ""
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        program_files = os.environ.get("ProgramFiles", "")
+
+        default_target = os.path.join(local_app_data, "Programs", "Vortex", "Vortex.exe")
+        alt_target = os.path.join(program_files, "Vortex", "Vortex.exe")
+
+        norm_installer = os.path.normpath(installer_path)
+
+        bat_content = f"""@echo off
+setlocal
+:: Wait 2 seconds for parent Vortex process to exit cleanly
+timeout /t 2 /nobreak >nul
+
+:: Terminate any lingering Vortex instance to release file lock
+taskkill /F /IM Vortex.exe /T >nul 2>&1
+
+:: Run Inno Setup installer silently
+"{norm_installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+
+:: Small delay to let filesystem finalize installation
+timeout /t 1 /nobreak >nul
+
+:: Launch updated Vortex
+if exist "{exe_path}" (
+    start "" "{exe_path}"
+) else if exist "{default_target}" (
+    start "" "{default_target}"
+) else if exist "{alt_target}" (
+    start "" "{alt_target}"
+)
+
+:: Clean up installer and this temporary script
+del "{norm_installer}" >nul 2>&1
+(goto) 2>nul & del "%~f0"
+"""
+        with open(updater_bat, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+
+        flags = 0
+        if os.name == "nt":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                flags |= subprocess.CREATE_NO_WINDOW
+
+        subprocess.Popen(
+            ["cmd.exe", "/c", updater_bat],
+            creationflags=flags,
+            close_fds=True
+        )
+        return True
+    except Exception:
+        return False
+

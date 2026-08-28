@@ -85,8 +85,7 @@ class StatScraper:
             "peak_rank_icon_url": "",
             "peak_rank_season": "",
             "card_small_url": "",
-            "top_champs": [],
-            "match_history": []
+            "top_champs": []
         }
 
         if not display_name or "#" not in display_name:
@@ -167,9 +166,8 @@ class StatScraper:
                         data = await resp.json()
                         raw_matches = data.get("data", [])
                         parsed_matches = self._parse_matches(raw_matches, name, tag)
-                        result["match_history"] = parsed_matches
-
                         if parsed_matches:
+                            result["match_history"] = parsed_matches
                             wins = sum(1 for m in parsed_matches if m.get("outcome") == "VICTORY")
                             result["winrate"] = round((wins / len(parsed_matches)) * 100, 1)
                             result["games_played"] = len(parsed_matches)

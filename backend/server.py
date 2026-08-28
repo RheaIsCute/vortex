@@ -8,8 +8,9 @@ and automated full-roster account checker ("Check Accounts").
 import os
 import time
 import asyncio
+import threading
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -883,13 +884,7 @@ async def check_update():
 @app.post("/api/download-and-install-update")
 async def download_and_install_update():
     """
-    Downloads the latest installer and opens Explorer with it selected so
-    the user can run it themselves.
-
-    The app deliberately doesn't launch the installer directly: some
-    security software blocks an app from spawning an installer and shows an
-    alarming "Security validation failure" dialog. Handing off to Explorer
-    avoids that entirely.
+    Downloads the latest installer and triggers an automated silent update & relaunch.
     """
     update_info = await asyncio.to_thread(updater.check_for_update)
     if not update_info:
@@ -899,11 +894,27 @@ async def download_and_install_update():
     if not installer_path:
         return {"success": False, "message": "Failed to download the update. Check your connection and try again."}
 
-    await asyncio.to_thread(updater.reveal_installer, installer_path)
+    launched = await asyncio.to_thread(updater.apply_and_relaunch, installer_path)
+    if not launched:
+        # Fallback to reveal if silent spawn fails
+        await asyncio.to_thread(updater.reveal_installer, installer_path)
+        return {
+            "success": True,
+            "relaunching": False,
+            "message": f"Version {update_info['version']} downloaded. Run the installer to finish updating."
+        }
+
+    # Schedule clean app exit after 1.2s so response reaches client
+    def _exit_app():
+        time.sleep(1.2)
+        os._exit(0)
+
+    threading.Thread(target=_exit_app, daemon=True).start()
+
     return {
         "success": True,
-        "installer_path": installer_path,
-        "message": f"Version {update_info['version']} downloaded. Close Vortex, then run VortexSetup to finish updating."
+        "relaunching": True,
+        "message": f"Updating to v{update_info['version']}... Vortex will restart in a moment."
     }
 
 
@@ -980,6 +991,40 @@ class InstalockRequest(BaseModel):
 
 class LockNowRequest(BaseModel):
     agent_id: str
+
+
+# Matchmaking start time. The party payload carries one, but it's only
+# trustworthy while the party is actually queueing - the fallback is the
+# moment this process first saw the party flip into MATCHMAKING.
+_QUEUE_TIMER: Dict[str, Any] = {"key": "", "started_at": 0.0}
+
+
+def _queue_elapsed(party: Dict[str, Any], in_queue: bool) -> int:
+    """Seconds spent in the current queue, or 0 when not queueing."""
+    if not in_queue:
+        _QUEUE_TIMER.update({"key": "", "started_at": 0.0})
+        return 0
+
+    raw = (party.get("QueueEntryTime") or "").strip()
+    started = 0.0
+    if raw and not raw.startswith("0001"):
+        for fmt in ("%Y.%m.%d-%H.%M.%S", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                started = parsed.replace(tzinfo=timezone.utc).timestamp()
+                break
+            except ValueError:
+                continue
+
+    key = f"{party.get('ID', '')}:{(party.get('MatchmakingData') or {}).get('QueueID', '')}"
+    if started <= 0:
+        if _QUEUE_TIMER["key"] != key or not _QUEUE_TIMER["started_at"]:
+            _QUEUE_TIMER.update({"key": key, "started_at": time.time()})
+        started = _QUEUE_TIMER["started_at"]
+    else:
+        _QUEUE_TIMER.update({"key": key, "started_at": started})
+
+    return max(0, int(time.time() - started))
 
 
 def _match_account_to_session(username: str) -> Optional[Dict[str, Any]]:
@@ -1120,6 +1165,8 @@ def build_live_snapshot() -> Dict[str, Any]:
         "queue_label": "",
         "party": {},
         "match": None,
+        "queue_elapsed": 0,
+        "launch": valorant_client.launch_state(),
         "message": "No Riot Client session detected.",
     }
 
@@ -1182,6 +1229,9 @@ def build_live_snapshot() -> Dict[str, Any]:
             snapshot["queue_label"] = valorant_client.MODE_LABELS.get(
                 snapshot["queue_id"], snapshot["queue_id"]
             )
+        snapshot["queue_elapsed"] = _queue_elapsed(party, snapshot["party"]["in_queue"])
+    else:
+        _queue_elapsed({}, False)
 
     try:
         if loop_state == "PREGAME":
@@ -1194,7 +1244,7 @@ def build_live_snapshot() -> Dict[str, Any]:
     if snapshot["match"]:
         snapshot["message"] = ""
     elif snapshot["party"].get("in_queue"):
-        snapshot["message"] = f"In queue for {snapshot['queue_label'] or 'a match'}..."
+        snapshot["message"] = f"Matchmaking (In Queue) - {snapshot['queue_label'] or 'a match'}"
     else:
         snapshot["message"] = "In the menus - pick a mode and start a match."
 
@@ -1266,19 +1316,25 @@ async def live_start_queue(req: QueueStartRequest):
     """
     def _run():
         client = _connected_client()
-        if req.queue_id:
-            client.change_queue(req.queue_id)
-            time.sleep(0.4)
+        queue_id = req.queue_id or ""
+        if queue_id:
+            client.change_queue(queue_id)
+            # The party needs a beat to settle on the new queue before it will
+            # accept a matchmaking join for it.
+            time.sleep(0.5)
+        else:
+            queue_id = (client.party().get("MatchmakingData") or {}).get("QueueID", "") or ""
         client.start_queue()
-        return valorant_client.MODE_LABELS.get(req.queue_id or "", "") or "the selected mode"
+        return valorant_client.MODE_LABELS.get(queue_id, "") or "the selected mode"
 
     try:
         label = await asyncio.to_thread(_run)
     except valorant_client.LiveClientError as e:
         return {"success": False, "message": str(e)}
 
+    _QUEUE_TIMER.update({"key": "", "started_at": time.time()})
     invalidate_live_snapshot()
-    return {"success": True, "message": f"Searching for a {label} match..."}
+    return {"success": True, "message": f"Matchmaking for {label}..."}
 
 
 @app.post("/api/live/queue/stop")
@@ -1342,6 +1398,41 @@ async def live_lock_now(req: LockNowRequest):
     return {"success": True, "message": f"Locked {agent['name']}."}
 
 
+@app.get("/api/live/stats")
+async def live_player_stats(force: bool = False):
+    """
+    Tracker-style profile for the signed-in account: rank and RR, peak rank,
+    win/loss form and streak, combat averages, top agents, recent matches and
+    the skin collection. Served from cache and refreshed in the background,
+    so this returns instantly even on the very first call.
+    """
+    if not await asyncio.to_thread(valorant_client.is_game_running):
+        return {"available": False, "loading": False,
+                "message": "Start VALORANT to load your live profile."}
+
+    return await asyncio.to_thread(valorant_client.get_player_stats, force)
+
+
+@app.post("/api/live/launch")
+async def live_launch():
+    """
+    Force-starts VALORANT for whoever is signed into the Riot Client. Unlike
+    the per-account Play, this never switches accounts - it just makes sure
+    the game actually comes up for the current session.
+    """
+    settings = db.get_settings()
+    client_path = settings.get("riot_client_path", "") or ""
+
+    result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
+    invalidate_live_snapshot()
+    return {**result, "launch": valorant_client.launch_state()}
+
+
+@app.get("/api/live/launch-state")
+async def live_launch_state():
+    return valorant_client.launch_state()
+
+
 async def background_login_then_play(account_id: int):
     """
     Waits for a freshly started login to land, then launches VALORANT for it.
@@ -1392,10 +1483,12 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
             return {"success": True, "already_running": True, "switched": False,
                     "message": "VALORANT is already running for this account."}
 
-        launched = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
-        if not launched:
-            return {"success": False, "message": "Couldn't start VALORANT - check the Riot Client path in Settings."}
-        return {"success": True, "switched": False, "message": f"Starting VALORANT as {account.get('display_name') or account['username']}..."}
+        result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
+        if not result.get("success"):
+            return {"success": False, "message": result.get("message") or
+                    "Couldn't start VALORANT - check the Riot Client path in Settings."}
+        return {"success": True, "switched": False,
+                "message": f"Starting VALORANT as {account.get('display_name') or account['username']}..."}
 
     # Different account signed in (or none) - log in first, then launch.
     result = await asyncio.to_thread(
