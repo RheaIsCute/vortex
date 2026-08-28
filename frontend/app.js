@@ -3273,7 +3273,7 @@ function renderPlayerStats() {
                             <strong>${escapeHtml(m.map || "Unknown")}</strong>
                             <small>${escapeHtml(m.mode || "")} · ${m.hs}% HS · ${m.acs} ACS</small>
                         </div>
-                        <span class="stat-match-score">${m.rounds_won}–${m.rounds_lost}</span>
+                        <span class="stat-match-score">${m.placement ? `#${m.placement}` : `${m.rounds_won}–${m.rounds_lost}`}</span>
                         <div class="stat-match-kda">
                             <span>${m.kills}/${m.deaths}/${m.assists}</span>
                             <small>${m.kd} K/D</small>

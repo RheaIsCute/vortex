@@ -20,43 +20,64 @@ from packaging.version import parse as parse_version, InvalidVersion
 
 from backend.version import APP_VERSION
 
-VERSION_CHECK_URL = "https://asarii.xyz/vortex/version.json"
+import json
+import time
+
+VERSION_CHECK_URLS = [
+    "https://raw.githubusercontent.com/RheaIsCute/asa/master/public/vortex/version.json",
+    "https://asarii.xyz/vortex/version.json"
+]
 REQUEST_TIMEOUT = 6.0
 
 
 def check_for_update() -> Optional[Dict[str, Any]]:
     """
-    Queries the version manifest. Returns a dict with 'version', 'url', and
-    optional 'notes' if a newer version is available, otherwise None.
+    Queries the version manifest from GitHub Raw / asarii.xyz.
+    Returns a dict with 'version', 'url', and optional 'notes' if a newer
+    version is available, otherwise None.
     Never raises - any network/parsing failure is treated as "no update".
     """
-    try:
-        res = requests.get(VERSION_CHECK_URL, timeout=REQUEST_TIMEOUT)
-        if res.status_code != 200:
-            return None
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
+    }
 
-        data = res.json()
-        remote_version = str(data.get("version", "")).strip()
-        download_url = str(data.get("download_url", "")).strip()
-
-        if not remote_version or not download_url:
-            return None
-
+    for base_url in VERSION_CHECK_URLS:
         try:
-            is_newer = parse_version(remote_version) > parse_version(APP_VERSION)
-        except InvalidVersion:
-            return None
+            url = f"{base_url}?_t={int(time.time())}"
+            res = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            if res.status_code != 200:
+                continue
 
-        if not is_newer:
-            return None
+            raw_text = res.text.strip()
+            # Handle potential literal escaped newlines from shell formatting
+            if "\\r\\n" in raw_text or "\\n" in raw_text:
+                raw_text = raw_text.replace("\\r\\n", "\n").replace("\\n", "\n")
 
-        return {
-            "version": remote_version,
-            "url": download_url,
-            "notes": data.get("changelog", "")
-        }
-    except Exception:
-        return None
+            data = json.loads(raw_text)
+            remote_version = str(data.get("version", "")).strip()
+            download_url = str(data.get("download_url", "")).strip()
+
+            if not remote_version or not download_url:
+                continue
+
+            try:
+                is_newer = parse_version(remote_version) > parse_version(APP_VERSION)
+            except InvalidVersion:
+                continue
+
+            if not is_newer:
+                return None
+
+            return {
+                "version": remote_version,
+                "url": download_url,
+                "notes": data.get("changelog", "")
+            }
+        except Exception:
+            continue
+
+    return None
 
 
 def download_installer(download_url: str, version: str = "", progress_cb=None) -> Optional[str]:

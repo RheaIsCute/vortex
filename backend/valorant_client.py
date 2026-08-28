@@ -1240,6 +1240,25 @@ def get_weapon_data() -> Dict[str, Any]:
     return result
 
 
+_ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10}
+
+
+def _season_number(name: str) -> str:
+    """
+    Act/episode number out of a display name. Riot writes acts in roman
+    numerals ("ACT II") and episodes in digits ("EPISODE 9"), so both forms
+    have to resolve or the peak-rank caption falls back to raw text.
+    """
+    if not name:
+        return ""
+    digits = re.sub(r"\D", "", name)
+    if digits:
+        return digits
+    tail = name.strip().split()[-1].lower()
+    value = _ROMAN.get(tail)
+    return str(value) if value else ""
+
+
 def get_seasons() -> Dict[str, str]:
     """Act uuid -> readable label ("E9 A2"), for the peak-rank caption."""
     with _STATIC_LOCK:
@@ -1262,8 +1281,8 @@ def get_seasons() -> Dict[str, str]:
         if not parent:
             continue
         ep = episodes.get(parent, "")
-        ep_num = re.sub(r"\D", "", ep) or ""
-        act_num = re.sub(r"\D", "", name) or ""
+        ep_num = _season_number(ep)
+        act_num = _season_number(name)
         labels[s.get("uuid", "")] = (
             f"E{ep_num} A{act_num}" if ep_num and act_num else (name or ep)
         )
@@ -1291,30 +1310,27 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
     score = int(stats.get("score", 0) or 0)
 
     team_id = me.get("teamId") or me.get("TeamId") or ""
-    own = enemy = None
-    for t in details.get("teams") or []:
-        tid = t.get("teamId") or t.get("TeamId") or ""
-        if tid == team_id:
-            own = t
+    teams = details.get("teams") or []
+    own = next((t for t in teams if (t.get("teamId") or t.get("TeamId") or "") == team_id), None)
+    others = [t for t in teams if t is not own]
+
+    rounds_won = rounds_lost = placement = 0
+
+    if len(teams) == 2 and own is not None:
+        rounds_won = int(own.get("roundsWon", 0) or 0)
+        rounds_lost = int((others[0] if others else {}).get("roundsWon", 0) or 0)
+        if rounds_won == rounds_lost:
+            result = "Draw"
         else:
-            enemy = t
-
-    rounds_won = int((own or {}).get("roundsWon", 0) or 0)
-    rounds_lost = int((enemy or {}).get("roundsWon", 0) or 0)
-    won = bool((own or {}).get("won", False))
-
-    if own is None:
-        # Deathmatch and friends have no meaningful team - rank by score.
+            result = "Win" if own.get("won") else "Loss"
+    else:
+        # Deathmatch and the other free-for-alls give every player their own
+        # "team", so a win is a placement rather than a round score.
         ranked_scores = sorted(
             (int(((p.get("stats") or {}).get("score", 0)) or 0) for p in players), reverse=True
         )
         placement = ranked_scores.index(score) + 1 if score in ranked_scores else 0
-        won = placement == 1
-        result = "Win" if won else "Loss"
-    elif rounds_won == rounds_lost:
-        result = "Draw"
-    else:
-        result = "Win" if won else "Loss"
+        result = "Win" if placement == 1 else "Loss"
 
     # Hit locations only exist per round, which is also how trackers do it.
     head = body = leg = 0
@@ -1341,6 +1357,7 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         "result": result,
         "rounds_won": rounds_won,
         "rounds_lost": rounds_lost,
+        "placement": placement,
         "kills": kills,
         "deaths": deaths,
         "assists": assists,
