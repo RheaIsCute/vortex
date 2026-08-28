@@ -68,16 +68,20 @@ Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName} /T"; Flags: run
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-{ Close any running instance BEFORE files are copied. The old script did
-  this from [Run], which fires after installation - far too late to
-  release the file lock during an in-app auto-update. }
+{ Close any running instance BEFORE files are copied. Aggressively kills any
+  process (including if an old client batch script tried to launch too early)
+  so the destination executable is completely unlocked. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
+  I: Integer;
 begin
-  Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM {#AppExeName} /T',
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(500);
+  for I := 1 to 3 do
+  begin
+    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM {#AppExeName} /T',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(250);
+  end;
   Result := '';
 end;
 
@@ -99,7 +103,19 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  AppExePath: String;
 begin
   if CurStep = ssPostInstall then
+  begin
     RefreshIconCache;
+    { When running silently (e.g. triggered by an in-app auto-update or legacy
+      updater scripts), automatically relaunch the newly installed Vortex.exe. }
+    if WizardSilent then
+    begin
+      AppExePath := ExpandConstant('{app}\{#AppExeName}');
+      Exec(AppExePath, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+    end;
+  end;
 end;
