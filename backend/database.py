@@ -171,6 +171,16 @@ class Database:
             # Migrate auto-applied legacy 'Main' tags to 'Ranked' / 'Unrated' unless user explicitly sets it
             cursor.execute("UPDATE accounts SET tag = CASE WHEN level >= 20 THEN 'Ranked' ELSE 'Unrated' END WHERE UPPER(tag) = 'MAIN'")
 
+            # Repair "ghost" accounts: rows whose status ended up NULL or blank
+            # (e.g. added while no Riot Client session was detected, so the
+            # status default never got applied). SQLite treats
+            # `UPPER(NULL) NOT IN (...)` as NULL, so these rows silently drop
+            # out of every listing without being moved to the banned table.
+            cursor.execute(
+                "UPDATE accounts SET status = 'PLAYABLE' "
+                "WHERE status IS NULL OR TRIM(status) = ''"
+            )
+
             # Auto-migrate any banned/suspended accounts currently lingering in the accounts table
             cursor.execute("SELECT id FROM accounts WHERE UPPER(status) IN ('BANNED', 'SUSPENDED')")
             lingering_rows = cursor.fetchall()
@@ -190,6 +200,26 @@ class Database:
                     cursor.execute("DELETE FROM accounts WHERE id = ?", (b_id,))
 
             conn.commit()
+        finally:
+            conn.close()
+
+    def repair_ghost_accounts(self) -> int:
+        """
+        Fixes rows whose status is NULL or blank by setting it to 'PLAYABLE'.
+        Such rows are present in the database but silently excluded from every
+        listing (SQLite evaluates `UPPER(NULL) NOT IN (...)` as NULL, not
+        true) and are never moved to the banned table either. Returns the
+        number of rows repaired.
+        """
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE accounts SET status = 'PLAYABLE' "
+                "WHERE status IS NULL OR TRIM(status) = ''"
+            )
+            conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
 
@@ -225,7 +255,12 @@ class Database:
                         cursor.execute("DELETE FROM accounts WHERE id = ?", (b_id,))
                 conn.commit()
 
-            query = "SELECT * FROM accounts WHERE UPPER(status) NOT IN ('BANNED', 'SUSPENDED')"
+            # NULL-safe: a row with a NULL/blank status is still an active
+            # account, not a hidden one.
+            query = (
+                "SELECT * FROM accounts "
+                "WHERE (status IS NULL OR UPPER(status) NOT IN ('BANNED', 'SUSPENDED'))"
+            )
             params = []
 
             if search:
@@ -249,6 +284,9 @@ class Database:
             if status and status.upper() != "ALL":
                 if status.upper() == "BANNED":
                     query += " AND UPPER(status) IN ('BANNED', 'SUSPENDED')"
+                elif status.upper() == "PLAYABLE":
+                    # Treat NULL/blank status as playable too.
+                    query += " AND (status IS NULL OR TRIM(status) = '' OR UPPER(status) = 'PLAYABLE')"
                 else:
                     query += " AND UPPER(status) = ?"
                     params.append(status.upper())
@@ -359,7 +397,7 @@ class Database:
                 account.get("peak_rank_season", ""),
                 account.get("card_small_url", ""),
                 match_history_json,
-                account.get("status", "PLAYABLE"),
+                (account.get("status") or "PLAYABLE"),
                 1 if account.get("favorite") else 0,
                 now,
                 now
@@ -397,6 +435,11 @@ class Database:
                 if key in self.STICKY_NON_EMPTY_FIELDS and not val:
                     # Don't blank out a previously-synced value with an
                     # empty result from a failed/partial fetch.
+                    continue
+                if key == "status" and not val:
+                    # Never write a NULL/blank status - it would make the row
+                    # vanish from every listing (see the ghost-account repair
+                    # in init_db).
                     continue
                 if key == "level" and (not isinstance(val, int) or val < 1):
                     # Level 0/None/garbage only ever comes from a failed

@@ -381,9 +381,16 @@ async def recheck_banned_account(account_id: int):
 async def add_account(account: AccountCreate, background_tasks: BackgroundTasks):
     account_dict = account.dict()
     
-    # Auto-fill from active Riot Client if fields were empty
+    # Auto-fill from active Riot Client only when the logged-in session is
+    # actually the account being added. Without this guard, adding account B
+    # while account X is signed into the Riot Client stamps X's Riot ID, rank
+    # and level onto B.
+    typed_username = (account_dict.get("username") or "").strip()
     if not account_dict.get("display_name"):
-        info = await asyncio.to_thread(launcher.get_active_riot_account)
+        info = await asyncio.to_thread(
+            launcher.get_active_riot_account,
+            typed_username or None,
+        )
         if info and info.get("found"):
             if not account_dict.get("username"):
                 account_dict["username"] = info.get("username", "")
@@ -488,11 +495,24 @@ async def kill_riot_client():
 
 
 
-@app.post("/api/accounts/refresh-all")
-async def refresh_all_accounts():
+async def run_full_refresh() -> int:
+    """
+    Refreshes every active account against Riot: live rank/RR, level, peak
+    rank, match history, and ban status. Also repairs "ghost" accounts that
+    are present in the database but missing a status, so they reappear in
+    the roster. Returns the number of accounts whose stats were fetched.
+
+    Shared by the manual "Sync All" button and the periodic auto-refresh.
+    """
+    global LAST_FULL_REFRESH_AT
+
+    # Repair ghost rows first (NULL/blank status -> PLAYABLE) so they're
+    # included in the sync below.
+    db.repair_ghost_accounts()
+
     accounts = db.get_all_accounts()
 
-    # Auto-sync active account in Riot Client
+    # Auto-sync the account currently signed into the Riot Client.
     active_info = await asyncio.to_thread(launcher.get_active_riot_account)
     if active_info and active_info.get("found"):
         act_user = (active_info.get("username") or "").lower()
@@ -506,7 +526,7 @@ async def refresh_all_accounts():
 
     settings = db.get_settings()
     scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
-    
+
     async def process_acc(acc):
         if not acc.get("display_name"):
             return
@@ -514,13 +534,49 @@ async def refresh_all_accounts():
         stats["last_updated"] = datetime.now().isoformat()
         apply_account_update(acc["id"], stats)
 
-    # Fetch up to date accounts
     accounts = db.get_all_accounts()
     tasks = [process_acc(acc) for acc in accounts if acc.get("display_name")]
     if tasks:
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    return {"success": True, "refreshed_count": len(tasks)}
+    LAST_FULL_REFRESH_AT = time.time()
+    return len(tasks)
+
+
+@app.post("/api/accounts/refresh-all")
+async def refresh_all_accounts():
+    count = await run_full_refresh()
+    return {"success": True, "refreshed_count": count}
+
+
+# How often the background auto-refresh sweeps the whole roster.
+AUTO_REFRESH_INTERVAL_SECONDS = 30 * 60
+LAST_FULL_REFRESH_AT = 0.0
+_auto_refresh_task = None
+
+
+async def _auto_refresh_loop():
+    """Periodically runs a full roster refresh in the background."""
+    # Small initial delay so it doesn't fight the first-launch UI load.
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await run_full_refresh()
+        except Exception:
+            pass
+        await asyncio.sleep(AUTO_REFRESH_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_background_workers():
+    global _auto_refresh_task
+    # Repair ghost accounts immediately on boot, even before the first sweep.
+    try:
+        db.repair_ghost_accounts()
+    except Exception:
+        pass
+    if _auto_refresh_task is None:
+        _auto_refresh_task = asyncio.create_task(_auto_refresh_loop())
 
 
 # DYNAMIC PARAMETERIZED ROUTES

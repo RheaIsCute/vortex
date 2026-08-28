@@ -261,6 +261,17 @@ document.addEventListener("DOMContentLoaded", () => {
     startLiveSessionPolling();
     loadAppVersion();
     checkForUpdate(false);
+
+    // Re-check for updates every 6h for long-running sessions.
+    setInterval(() => checkForUpdate(false), 6 * 60 * 60 * 1000);
+
+    // Pick up the backend's periodic full roster refresh (rank/level/history
+    // updates and ghost-account repairs) without needing a manual sync.
+    setInterval(() => {
+        fetchAccounts();
+        fetchStatsSummary();
+        fetchBannedAccounts();
+    }, 5 * 60 * 1000);
 });
 
 function startContinuousSync() {
@@ -325,7 +336,13 @@ async function checkForUpdate(manual) {
             DOM.updateBannerText.textContent = `Version ${data.latest_version} is available (you have v${data.current_version}).`;
         }
         if (DOM.updateBanner) DOM.updateBanner.style.display = "flex";
-        if (manual) showToast(`Update available: v${data.latest_version}`, "info");
+        // Surface it on every detection (startup included), but only toast
+        // once per session for the same version so the periodic re-check
+        // doesn't nag.
+        if (manual || state._notifiedUpdateVersion !== data.latest_version) {
+            showToast(`Update available: v${data.latest_version}`, "info");
+            state._notifiedUpdateVersion = data.latest_version;
+        }
         if (DOM.updateStatusText) {
             DOM.updateStatusText.textContent = `v${data.latest_version} is available.`;
         }
@@ -1604,6 +1621,7 @@ async function handleSyncAll() {
         showToast(`Synced ${data.refreshed_count || 0} accounts`, "success");
         fetchAccounts();
         fetchStatsSummary();
+        fetchBannedAccounts();
     } catch (err) {
         showToast("Batch sync error", "error");
     } finally {
