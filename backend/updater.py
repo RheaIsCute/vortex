@@ -184,17 +184,17 @@ timeout /t 2 /nobreak >nul
 :: Terminate any lingering Vortex instance to release file lock
 taskkill /F /IM Vortex.exe /T >nul 2>&1
 
-:: Run Inno Setup installer silently
-"{norm_installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+:: Run Inno Setup installer silently and wait for installation to complete
+start "" /wait "{norm_installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 
 :: Small delay to let filesystem finalize installation
 timeout /t 1 /nobreak >nul
 
 :: Launch updated Vortex
-if exist "{exe_path}" (
-    start "" "{exe_path}"
-) else if exist "{default_target}" (
+if exist "{default_target}" (
     start "" "{default_target}"
+) else if exist "{exe_path}" (
+    start "" "{exe_path}"
 ) else if exist "{alt_target}" (
     start "" "{alt_target}"
 )
@@ -215,7 +215,7 @@ del "{norm_installer}" >nul 2>&1
 
         flags = 0
         if os.name == "nt":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP
             if hasattr(subprocess, "CREATE_NO_WINDOW"):
                 flags |= subprocess.CREATE_NO_WINDOW
 
