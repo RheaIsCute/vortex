@@ -305,6 +305,32 @@ body {
     animation: drift-c 24s ease-in-out infinite;
 }
 
+/* WebView2 keeps compositing large blurred layers even when the app is behind
+   the game. JavaScript applies this class while VALORANT is running or the
+   document is hidden, preserving the UI while releasing the expensive
+   ambient layers. */
+body.effects-paused .bg-glow {
+    visibility: hidden;
+    animation: none !important;
+    will-change: auto;
+}
+
+body.effects-paused .brand-mark i,
+body.effects-paused .brand-wordmark {
+    animation-play-state: paused;
+}
+
+body.effects-paused .app-header,
+body.effects-paused .controls-bar,
+body.effects-paused .accounts-table th,
+body.effects-paused .modal-overlay.active,
+body.effects-paused .toast,
+body.effects-paused .update-banner,
+body.effects-paused .scroll-top-btn {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
 /* Vignette so the flat black never reads as a dead panel. */
 .bg-vignette {
     position: fixed;
@@ -1088,6 +1114,15 @@ body {
     transition: transform var(--dur-3) var(--ease-spring),
                 border-color var(--dur-3) ease,
                 box-shadow var(--dur-3) ease;
+}
+
+/* Large account collections no longer require layout and paint work for cards
+   far outside the viewport. `auto` lets Chromium remember the real size after
+   a card has been rendered, avoiding scroll jumps on later visits. */
+.account-card:not(.account-card-hero) {
+    content-visibility: auto;
+    contain: layout paint style;
+    contain-intrinsic-size: auto 460px;
 }
 
 /* Cursor-tracking spotlight — coordinates come from app.js. */
@@ -3338,8 +3373,8 @@ select.form-control option {
 /* ==========================================================================
    8. MOTION
    Entrance animations are opt-in: app.js adds .animate-in to the grid/list
-   only when the rendered set actually changed, so the 1.5s background sync
-   poll never restarts them mid-hover.
+   only when the rendered set actually changed, so background sync never
+   restarts them mid-hover.
    ========================================================================== */
 
 .accounts-grid.animate-in .account-card {
@@ -7435,3 +7470,32 @@ body.dashboard-mode .session-bar {
 }
 
 .preset-advanced > summary:hover { color: var(--text-main); }
+
+.overlay-hotkey-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.overlay-hotkey-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.overlay-hotkey-input {
+    flex: 1;
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.overlay-hotkey-input.is-invalid {
+    border-color: var(--danger);
+}
+
+#overlay-hotkey-help.is-error {
+    color: var(--danger);
+}

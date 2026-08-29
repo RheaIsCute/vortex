@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "cyan-balanced",
+      "name": "Cyan Balanced",
+      "description": "A clear, medium-size four-line crosshair for general use.",
+      "code": "0;P;c;5;h;0;f;0;0b;0;0t;1;0l;4;0o;2;0a;1;0f;0;1b;0",
+      "preview": { "color": "#29f2ff", "length": 13, "gap": 5, "thickness": 2 }
+    },
+    {
+      "id": "green-compact",
+      "name": "Green Compact",
+      "description": "Short inner lines and a small gap for a quieter sight picture.",
+      "code": "0;P;c;1;h;0;f;0;0b;0;0t;1;0l;3;0o;2;0a;1;0f;0;1b;0",
+      "preview": { "color": "#43ff86", "length": 10, "gap": 5, "thickness": 2 }
+    },
+    {
+      "id": "white-tight",
+      "name": "White Tight",
+      "description": "A small, neutral crosshair that keeps the center uncluttered.",
+      "code": "0;P;c;7;h;0;f;0;0b;0;0t;1;0l;2;0o;2;0a;1;0f;0;1b;0",
+      "preview": { "color": "#ffffff", "length": 8, "gap": 5, "thickness": 2 }
+    },
+    {
+      "id": "yellow-open",
+      "name": "Yellow Open",
+      "description": "A wider center gap with bright lines for busy backgrounds.",
+      "code": "0;P;c;2;h;0;f;0;0b;0;0t;1;0l;4;0o;3;0a;1;0f;0;1b;0",
+      "preview": { "color": "#ffe45c", "length": 13, "gap": 7, "thickness": 2 }
+    },
+    {
+      "id": "pink-extended",
+      "name": "Pink Extended",
+      "description": "Longer lines with a compact center gap for strong visibility.",
+      "code": "0;P;c;6;h;0;f;0;0b;0;0t;1;0l;5;0o;2;0a;1;0f;0;1b;0",
+      "preview": { "color": "#ff72d2", "length": 16, "gap": 5, "thickness": 2 }
+    },
+    {
+      "id": "vortex-red",
+      "name": "Vortex Red",
+      "description": "A compact custom-red preset with a little extra center space.",
+      "code": "0;P;c;8;u;FF4655FF;h;0;f;0;0b;0;0t;1;0l;3;0o;3;0a;1;0f;0;1b;0",
+      "preview": { "color": "#ff4655", "length": 10, "gap": 7, "thickness": 2 }
+    }
+  ]
+}

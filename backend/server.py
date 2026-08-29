@@ -10,11 +10,11 @@ import time
 import asyncio
 import threading
 import subprocess
+import json
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -29,14 +29,6 @@ from backend.version import APP_VERSION
 from backend import updater
 
 app = FastAPI(title="Vortex Valorant Account Manager API", version=APP_VERSION)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 db = Database()
 launcher = ClientLauncher()
@@ -119,8 +111,9 @@ def account_needs_check(acc: Dict[str, Any]) -> bool:
     """
     has_riot_id = bool(acc.get("display_name") and "#" in acc.get("display_name", ""))
     was_synced = bool(acc.get("last_updated"))
+    has_region = bool((acc.get("region") or "").strip())
     status = (acc.get("status") or "").upper()
-    return not (has_riot_id and was_synced and status not in ("UNVERIFIED", "BANNED", "SUSPENDED"))
+    return not (has_riot_id and was_synced and has_region and status not in ("UNVERIFIED", "BANNED", "SUSPENDED"))
 
 
 # Which account this process last saw signed in. The session poll runs every
@@ -912,16 +905,18 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks,
         not in_place
     )
 
-    # Automatically watch, sync Level, Region, Rank, Peak Rank, and link Riot ID
-    db.update_account(account_id, {"last_login": datetime.now().isoformat()})
-    note_account_login(account_id)
-    background_tasks.add_task(background_auto_detect_and_link, account_id)
+    # Only a login that actually started should change account history or arm
+    # a verifier.  Failed/busy clicks previously looked like successful use.
+    if result.get("success"):
+        db.update_account(account_id, {"last_login": datetime.now().isoformat()})
+        note_account_login(account_id)
+        background_tasks.add_task(background_auto_detect_and_link, account_id)
     
     return {
         "success": result["success"],
         "message": result["message"],
-        "account": account,
-        "copied": "password"
+        "account_id": account_id,
+        "copied": "password" if result.get("success") else ""
     }
 
 
@@ -1134,6 +1129,13 @@ async def import_text_accounts(req: ImportTextRequest, background_tasks: Backgro
 _LIVE_SNAPSHOT: Dict[str, Any] = {"data": None, "built_at": 0.0}
 _LIVE_SNAPSHOT_TTL = 1.2
 
+# Identity seen on the previous poll for a username that isn't in the DB yet,
+# keyed by username: (identity_tuple, seen_at). Used to require a stable read
+# before auto-creating an account row - see build_live_snapshot().
+_PENDING_AUTO_ADD: Dict[str, Any] = {}
+_LIVE_SNAPSHOT_LOCK = threading.Lock()
+_LIVE_OWNER_PUUID = ""
+
 # Roster names don't change inside a match, so they're resolved once per match.
 _NAME_CACHE: Dict[str, Dict[str, str]] = {}
 
@@ -1189,6 +1191,16 @@ class GameConfigCopyAllRequest(BaseModel):
 class GameConfigBorderlessRequest(BaseModel):
     account_id: Optional[int] = None  # omitted = whoever's signed in now
     all_accounts: bool = False        # set every account that has config here
+
+
+class OverlaySettingsRequest(BaseModel):
+    overlay_enabled: Optional[bool] = None
+    fps_enabled: Optional[bool] = None
+
+
+class OverlaySwitchRequest(BaseModel):
+    launch_game: bool = True
+    confirm_close_game: bool = False
 
 
 # Matchmaking start time. The party payload carries one, but it's only
@@ -1280,12 +1292,21 @@ def _match_banned_to_session(username: str, display_name: str = "") -> Optional[
 
 
 _PLAYER_MMR_CACHE: Dict[str, Dict[str, Any]] = {}
+_PLAYER_MMR_TTL = 10 * 60.0
+_PLAYER_MMR_NEGATIVE_TTL = 30.0
+
+
+def _player_stats_cache_fresh(puuid: str) -> bool:
+    cached = _PLAYER_MMR_CACHE.get(puuid) or {}
+    cached_at = float(cached.get("_cached_at") or 0.0)
+    ttl = float(cached.get("_cache_ttl") or _PLAYER_MMR_TTL)
+    return bool(cached_at and (time.monotonic() - cached_at) < ttl)
 
 
 def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, Any]:
     if not puuid:
         return valorant_client.parse_player_mmr({})
-    if puuid in _PLAYER_MMR_CACHE:
+    if _player_stats_cache_fresh(puuid):
         return _PLAYER_MMR_CACHE[puuid]
 
     try:
@@ -1321,6 +1342,13 @@ def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, A
             stats["peak_tier"] = fallback_tier
             stats["peak_tier_label"] = stats["tier_label"]
             stats["peak_tier_icon"] = stats["tier_icon"]
+
+    has_real_data = bool(
+        stats.get("tier") or stats.get("games") or stats.get("last5_games")
+        or stats.get("kills") or stats.get("deaths")
+    )
+    stats["_cached_at"] = time.monotonic()
+    stats["_cache_ttl"] = _PLAYER_MMR_TTL if has_real_data else _PLAYER_MMR_NEGATIVE_TTL
 
     if len(_PLAYER_MMR_CACHE) > 60:
         _PLAYER_MMR_CACHE.clear()
@@ -1373,7 +1401,7 @@ def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_pu
     }
 
 
-_MY_PARTY: Dict[str, Any] = {"at": 0.0, "members": []}
+_MY_PARTY: Dict[str, Any] = {"at": 0.0, "puuid": "", "members": []}
 
 
 def _my_party_members(client) -> List[str]:
@@ -1382,7 +1410,7 @@ def _my_party_members(client) -> List[str]:
     outright, so it anchors the premade detection. Cached briefly - party
     membership can't change mid-match and the snapshot already calls it.
     """
-    if time.time() - _MY_PARTY["at"] < 8.0:
+    if _MY_PARTY.get("puuid") == client.puuid and time.time() - _MY_PARTY["at"] < 8.0:
         return _MY_PARTY["members"]
     try:
         members = [
@@ -1392,7 +1420,7 @@ def _my_party_members(client) -> List[str]:
         ]
     except Exception:
         members = []
-    _MY_PARTY.update({"at": time.time(), "members": members})
+    _MY_PARTY.update({"at": time.time(), "puuid": client.puuid, "members": members})
     return members
 
 
@@ -1459,18 +1487,28 @@ _LAST_MATCH_MAX_TRIES = 12
 _SESSION: Dict[str, Any] = {"puuid": "", "ids": [], "matches": [], "started_at": 0.0}
 
 
-def _side_for_round(starting_side: str, rounds_played: int) -> str:
+def _half_length(queue_id: str) -> int:
+    """Regulation rounds per half for the queues that use round halves."""
+    return {
+        "swiftplay": 4,
+        "spikerush": 3,
+    }.get((queue_id or "").lower(), 12)
+
+
+def _side_for_round(starting_side: str, rounds_played: int, queue_id: str = "") -> str:
     """Which side you are on for the round after `rounds_played` completed ones."""
     other = "Attacker" if starting_side == "Defender" else "Defender"
-    if rounds_played < 12:
+    half = _half_length(queue_id)
+    if rounds_played < half:
         return starting_side
-    if rounds_played < 24:
+    if rounds_played < half * 2:
         return other
-    # Overtime runs in pairs, alternating from the second half's side.
-    return other if ((rounds_played - 24) // 2) % 2 == 0 else starting_side
+    # Competitive overtime swaps attack/defence after every round.
+    return other if (rounds_played - half * 2) % 2 == 0 else starting_side
 
 
-def _track_rounds(match_id: str, ally: int, enemy: int, starting_side: str) -> List[Dict[str, Any]]:
+def _track_rounds(match_id: str, ally: int, enemy: int, starting_side: str,
+                  queue_id: str = "") -> List[Dict[str, Any]]:
     """
     Appends whatever rounds have completed since the last poll and returns the
     full ledger. A match the dashboard joined late is seeded from the score
@@ -1480,7 +1518,7 @@ def _track_rounds(match_id: str, ally: int, enemy: int, starting_side: str) -> L
     p = _MATCH_PROGRESS
     total = ally + enemy
 
-    if p["match_id"] != match_id or ally < p["ally"] or enemy < p["enemy"]:
+    if p["match_id"] != match_id:
         seeded = (
             [{"n": 0, "won": True, "known": False, "side": ""} for _ in range(ally)] +
             [{"n": 0, "won": False, "known": False, "side": ""} for _ in range(enemy)]
@@ -1493,19 +1531,28 @@ def _track_rounds(match_id: str, ally: int, enemy: int, starting_side: str) -> L
         })
         return p["rounds"]
 
+    # A transient empty presence can report 0-0 in the middle of a match.
+    # Never rewind the ledger for the same match; wait for a monotonic score.
+    if ally < p["ally"] or enemy < p["enemy"]:
+        return p["rounds"]
+
+    ally_delta = ally - p["ally"]
+    enemy_delta = enemy - p["enemy"]
+    delta_total = ally_delta + enemy_delta
     played = len(p["rounds"])
-    for _ in range(ally - p["ally"]):
-        played += 1
-        p["rounds"].append({
-            "n": played, "won": True, "known": True,
-            "side": _side_for_round(starting_side, played - 1),
-        })
-    for _ in range(enemy - p["enemy"]):
-        played += 1
-        p["rounds"].append({
-            "n": played, "won": False, "known": True,
-            "side": _side_for_round(starting_side, played - 1),
-        })
+
+    # Only a one-round delta has a knowable winner/order.  If the app slept
+    # through several rounds, retain the score but mark those pips unknown
+    # instead of inventing a win/loss order and a false streak.
+    for won, count in ((True, ally_delta), (False, enemy_delta)):
+        for _ in range(count):
+            played += 1
+            p["rounds"].append({
+                "n": played,
+                "won": won,
+                "known": delta_total == 1,
+                "side": _side_for_round(starting_side, played - 1, queue_id) if delta_total == 1 else "",
+            })
 
     p["ally"], p["enemy"] = ally, enemy
 
@@ -1520,10 +1567,12 @@ def _round_streak(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Length and kind of the run of rounds ending the ledger."""
     if not rounds:
         return {"count": 0, "won": False}
+    if not rounds[-1].get("known"):
+        return {"count": 0, "won": False}
     won = rounds[-1]["won"]
     count = 0
     for entry in reversed(rounds):
-        if entry["won"] != won:
+        if not entry.get("known") or entry["won"] != won:
             break
         count += 1
     return {"count": count, "won": won}
@@ -1532,16 +1581,17 @@ def _round_streak(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _build_progress(match_id: str, ally: int, enemy: int, starting_side: str,
                     current_side: str, queue_id: str) -> Dict[str, Any]:
     """The rounds-won/lost header block for a match that's running."""
-    rounds = _track_rounds(match_id, ally, enemy, starting_side)
+    rounds = _track_rounds(match_id, ally, enemy, starting_side, queue_id)
     played = ally + enemy
     target = ROUNDS_TO_WIN.get((queue_id or "").lower(), 0)
 
-    if played < 12:
+    half_len = _half_length(queue_id)
+    if played < half_len:
         half = "1st Half"
-    elif played < 24:
+    elif played < half_len * 2:
         half = "2nd Half"
     else:
-        half = f"Overtime {((played - 24) // 2) + 1}"
+        half = f"Overtime {(played - half_len * 2) + 1}"
     if target and target < 13:
         half = ""
 
@@ -1586,9 +1636,12 @@ def _live_probe(client, match_id: str, rounds_played: int = -1) -> Optional[Dict
 
     p["next_at"] = time.time() + _LIVE_PROBE_INTERVAL
     fresh = valorant_client.personal_match_summary(client, match_id, live=True)
+    # Record the attempted score even on the expected ranked/unrated miss.
+    # Otherwise every 1.2s snapshot sees the same round as "changed" and
+    # defeats the six-second backoff above.
+    p["at_rounds"] = rounds_played
     if fresh:
         p["data"] = fresh
-        p["at_rounds"] = rounds_played
     return p["data"]
 
 
@@ -1765,6 +1818,30 @@ def _record_session_match(puuid: str, summary: Dict[str, Any]) -> None:
         _SESSION["matches"] = _SESSION["matches"][-25:]
 
 
+def _reset_live_state_for_player(puuid: str) -> None:
+    """Partition all process-local match state by the signed-in player."""
+    global _LIVE_OWNER_PUUID
+    puuid = (puuid or "").strip()
+    if not puuid or puuid == _LIVE_OWNER_PUUID:
+        return
+
+    _LIVE_OWNER_PUUID = puuid
+    _MATCH_PROGRESS.update({
+        "match_id": "", "ally": 0, "enemy": 0,
+        "rounds": [], "started_at": 0.0,
+    })
+    _LIVE_PROBE.update({
+        "match_id": "", "next_at": 0.0, "data": None, "at_rounds": -1,
+    })
+    _LAST_MATCH.update({
+        "watch_id": "", "match_id": "", "data": None,
+        "next_at": 0.0, "tries": 0,
+    })
+    _SESSION.update({"puuid": puuid, "ids": [], "matches": [], "started_at": time.time()})
+    _MY_PARTY.update({"at": 0.0, "puuid": puuid, "members": []})
+    _NAME_CACHE.clear()
+
+
 def _session_block() -> Dict[str, Any]:
     """Aggregate of every match finished since the app started."""
     matches = _SESSION["matches"]
@@ -1818,6 +1895,10 @@ def _resolve_finished_match(client, in_match: bool, active_id: str) -> Optional[
             if summary:
                 lm.update({"match_id": watch, "data": summary, "watch_id": ""})
                 _record_session_match(client.puuid, summary)
+                # RR and rolling Last-5 values can change now; do not keep the
+                # pre-match roster snapshot for the rest of the process.
+                _PLAYER_MMR_CACHE.pop(client.puuid, None)
+                valorant_client.invalidate_player_stats()
         elif lm["tries"] >= _LAST_MATCH_MAX_TRIES:
             lm["watch_id"] = ""
 
@@ -1833,7 +1914,7 @@ def _warm_player_stats(client, players: List[Dict[str, Any]]) -> None:
     todo = []
     for p in players:
         subject = p.get("Subject", "")
-        if subject and subject not in _PLAYER_MMR_CACHE:
+        if subject and not _player_stats_cache_fresh(subject):
             tier = (p.get("SeasonalBadgeInfo") or {}).get("Rank") or p.get("CompetitiveTier") or 0
             todo.append((subject, tier))
 
@@ -2047,30 +2128,27 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
 
     ally_score = int(presence.get("partyOwnerMatchScoreAllyTeam", 0) or 0)
     enemy_score = int(presence.get("partyOwnerMatchScoreEnemyTeam", 0) or 0)
+    if _MATCH_PROGRESS.get("match_id") == match_id:
+        # Presence briefly disappears/returns 0-0 during reconnects and phase
+        # transitions.  Scores in a running match are monotonic, so preserve
+        # the last good values instead of resetting the tracker.
+        ally_score = max(ally_score, int(_MATCH_PROGRESS.get("ally") or 0))
+        enemy_score = max(enemy_score, int(_MATCH_PROGRESS.get("enemy") or 0))
     map_id = data.get("MapID") or presence.get("matchMap", "")
     total_rounds = ally_score + enemy_score
 
     starting_side = "Defender" if self_team.lower() == "blue" else "Attacker"
+    queue_id = (presence.get("queueId", "") or "").lower()
 
-    # Determine current side based on round/half switch & presence hint
+    # Only explicit attack/defence presence values are sides.  Blue/Red is a
+    # persistent TeamID and must not override the halftime calculation.
     pres_team = (presence.get("partyOwnerMatchCurrentTeam", "") or "").lower()
     if "defend" in pres_team or pres_team == "blue":
-        current_side = "Defender"
+        current_side = "Defender" if "defend" in pres_team else _side_for_round(starting_side, total_rounds, queue_id)
     elif "attack" in pres_team or pres_team == "red":
-        current_side = "Attacker"
+        current_side = "Attacker" if "attack" in pres_team else _side_for_round(starting_side, total_rounds, queue_id)
     else:
-        # Standard Valorant regulation: 12 rounds per half
-        if total_rounds < 12:
-            current_side = starting_side
-        elif total_rounds < 24:
-            current_side = "Attacker" if starting_side == "Defender" else "Defender"
-        else:
-            # Overtime (rounds 25+): switches every 2 rounds
-            ot_round = total_rounds - 24
-            switches = ot_round // 2
-            current_side = ("Attacker" if starting_side == "Defender" else "Defender") if (switches % 2 == 1) else starting_side
-
-    queue_id = (presence.get("queueId", "") or "").lower()
+        current_side = _side_for_round(starting_side, total_rounds, queue_id)
     _apply_parties(ally + enemy, _my_party_members(client))
     me = next((r for r in ally if r.get("is_self")), None)
 
@@ -2133,7 +2211,10 @@ def build_live_snapshot() -> Dict[str, Any]:
         "message": "No Riot Client session detected.",
     }
 
-    info = launcher.get_active_riot_account()
+    # Identity is read from the local Riot Client.  Rank/XP remote calls do
+    # not belong in a one-second match poll and are handled by the slower sync
+    # worker instead.
+    info = launcher.get_active_riot_session()
     if not info or not info.get("found"):
         return snapshot
 
@@ -2149,11 +2230,18 @@ def build_live_snapshot() -> Dict[str, Any]:
         "message": "Signed in - VALORANT isn't running yet.",
     })
 
-    matched = _match_account_to_session(info.get("username", ""), info.get("display_name", ""))
+    matched = _match_account_to_session(
+        info.get("username", ""), info.get("display_name", ""), info.get("puuid", "")
+    )
     if matched:
         snapshot["account_id"] = matched["id"]
         if not snapshot["display_name"]:
             snapshot["display_name"] = matched.get("display_name", "")
+        snapshot["level"] = int(matched.get("level", 0) or snapshot["level"] or 0)
+        stored_rank = f"{matched.get('rank_tier', 'UNRANKED').title()} {matched.get('rank_division', '')}".strip()
+        snapshot["rank_label"] = stored_rank or snapshot["rank_label"]
+        snapshot["rank_icon_url"] = matched.get("rank_icon_url", "") or snapshot["rank_icon_url"]
+        snapshot["region"] = matched.get("region", "") or snapshot["region"]
         # Learn this account's puuid the first time we ever see it signed in.
         # It's the key to its local settings folder, so recording it here is
         # what lets crosshair/keybind copying find the account later.
@@ -2185,29 +2273,44 @@ def build_live_snapshot() -> Dict[str, Any]:
             snapshot["account_banned"] = True
 
         uname = (info.get("username") or "").strip()
+        display = (info.get("display_name") or "").strip()
         if uname and riot_status not in ("BANNED", "SUSPENDED") and not db.account_exists(uname):
-            try:
-                new_acc_id = db.add_account({
-                    "username": uname,
-                    "password": "",
-                    "display_name": info.get("display_name", uname),
-                    "region": info.get("region", "NA"),
-                    "level": int(info.get("level", 0) or 0),
-                    "rank_tier": info.get("rank_tier", "UNRANKED"),
-                    "rank_division": info.get("rank_division", ""),
-                    "lp": int(info.get("lp", 0) or 0),
-                    "rank_icon_url": info.get("rank_icon_url", ""),
-                    "peak_rank_tier": info.get("peak_rank_tier", ""),
-                    "peak_rank_division": info.get("peak_rank_division", ""),
-                    "peak_rank_icon_url": info.get("peak_rank_icon_url", ""),
-                    "tag": "Ranked" if int(info.get("level", 0) or 0) >= 20 else "Unrated",
-                    "status": "PLAYABLE",
-                    "notes": "Auto-detected active session"
-                })
-                snapshot["account_id"] = new_acc_id
-                matched = db.get_account_by_id(new_acc_id)
-            except Exception:
-                pass
+            # A brand new Riot Client session can report a stale or half-empty
+            # identity for the first tick or two after it restarts - the same
+            # race that used to write a wrong region onto a new row and stamp
+            # one account's Riot ID onto another's during a fast account
+            # switch. Requiring the SAME (username, display_name) on back to
+            # back polls before ever creating a row costs one extra ~1s tick
+            # and closes both.
+            seen = _PENDING_AUTO_ADD.get(uname)
+            identity = (uname, display)
+            stable = bool(seen and seen[0] == identity and (time.time() - seen[1]) >= 0.8)
+            _PENDING_AUTO_ADD[uname] = (identity, time.time())
+
+            if display and stable:
+                try:
+                    new_acc_id = db.add_account({
+                        "username": uname,
+                        "password": "",
+                        "display_name": display,
+                        "region": info.get("region", "") or "",
+                        "level": int(info.get("level", 0) or 0),
+                        "rank_tier": info.get("rank_tier", "UNRANKED"),
+                        "rank_division": info.get("rank_division", ""),
+                        "lp": int(info.get("lp", 0) or 0),
+                        "rank_icon_url": info.get("rank_icon_url", ""),
+                        "peak_rank_tier": info.get("peak_rank_tier", ""),
+                        "peak_rank_division": info.get("peak_rank_division", ""),
+                        "peak_rank_icon_url": info.get("peak_rank_icon_url", ""),
+                        "tag": "Ranked" if int(info.get("level", 0) or 0) >= 20 else "Unrated",
+                        "status": "PLAYABLE",
+                        "notes": "Auto-detected active session"
+                    })
+                    snapshot["account_id"] = new_acc_id
+                    matched = db.get_account_by_id(new_acc_id)
+                    _PENDING_AUTO_ADD.pop(uname, None)
+                except Exception:
+                    pass
 
     snapshot["valorant_running"] = launcher.is_valorant_running()
     if not snapshot["valorant_running"]:
@@ -2219,6 +2322,7 @@ def build_live_snapshot() -> Dict[str, Any]:
         return snapshot
 
     snapshot["puuid"] = client.puuid
+    _reset_live_state_for_player(client.puuid)
     if snapshot.get("account_id") and client.puuid:
         try:
             stored = db.get_account_by_id(snapshot["account_id"])
@@ -2319,18 +2423,29 @@ def build_live_snapshot() -> Dict[str, Any]:
 
 def invalidate_live_snapshot() -> None:
     """Forces the next poll to rebuild instead of serving the cached view."""
-    _LIVE_SNAPSHOT["built_at"] = 0.0
+    with _LIVE_SNAPSHOT_LOCK:
+        _LIVE_SNAPSHOT["built_at"] = 0.0
 
 
 def get_live_snapshot(force: bool = False) -> Dict[str, Any]:
-    now = time.time()
+    now = time.monotonic()
     if not force and _LIVE_SNAPSHOT["data"] and (now - _LIVE_SNAPSHOT["built_at"]) < _LIVE_SNAPSHOT_TTL:
         return _LIVE_SNAPSHOT["data"]
 
-    data = build_live_snapshot()
-    _LIVE_SNAPSHOT["data"] = data
-    _LIVE_SNAPSHOT["built_at"] = now
-    return data
+    # Main UI, overlay and manual refreshes can arrive together.  Only one
+    # caller pays for the Riot request fan-out; everyone else re-checks the
+    # freshly populated cache after acquiring the lock.
+    with _LIVE_SNAPSHOT_LOCK:
+        now = time.monotonic()
+        if not force and _LIVE_SNAPSHOT["data"] and (now - _LIVE_SNAPSHOT["built_at"]) < _LIVE_SNAPSHOT_TTL:
+            return _LIVE_SNAPSHOT["data"]
+
+        data = build_live_snapshot()
+        _LIVE_SNAPSHOT["data"] = data
+        # Stamp completion, not start.  A slow build should still receive its
+        # full TTL instead of being stale the instant it returns.
+        _LIVE_SNAPSHOT["built_at"] = time.monotonic()
+        return data
 
 
 def _connected_client():
@@ -2971,6 +3086,7 @@ async def background_login_then_play(account_id: int):
     """
     acc = db.get_account_by_id(account_id)
     if not acc:
+        client_launcher._set_login_stage("error", "The account was removed before login finished.")
         return
 
     settings = db.get_settings()
@@ -2978,16 +3094,35 @@ async def background_login_then_play(account_id: int):
 
     for _ in range(40):
         await asyncio.sleep(1.0)
-        info = await asyncio.to_thread(launcher.get_active_riot_account, acc["username"])
+        info = await asyncio.to_thread(launcher.get_active_riot_session, acc["username"])
         if info and info.get("found"):
-            update_payload = {k: v for k, v in info.items() if k not in ("found", "username")}
+            # Pay for rank/XP only once, after the lightweight local identity
+            # proves the new session has landed.
+            full_info = await asyncio.to_thread(launcher.get_active_riot_account, acc["username"])
+            resolved = full_info if full_info and full_info.get("found") else info
+            update_payload = {k: v for k, v in resolved.items() if k not in ("found", "username")}
             update_payload["last_updated"] = datetime.now().isoformat()
             if apply_account_update(account_id, update_payload):
+                client_launcher._set_login_stage(
+                    "error", "This account is banned or suspended, so VALORANT was not started.", acc["username"]
+                )
                 return  # banned/suspended - don't launch
             await asyncio.sleep(1.5)
             await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
-            await asyncio.to_thread(valorant_client.launch_valorant, client_path)
+            launch = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
+            if launch.get("success"):
+                client_launcher._set_login_stage(
+                    "done", f"Signed in as {resolved.get('display_name') or acc['username']} and started VALORANT.", acc["username"]
+                )
+            else:
+                client_launcher._set_login_stage(
+                    "error", launch.get("message") or "Signed in, but VALORANT could not be started.", acc["username"]
+                )
             return
+
+    client_launcher._set_login_stage(
+        "error", "Login timed out before Riot confirmed the new session.", acc["username"]
+    )
 
 
 @app.post("/api/accounts/{account_id}/play")
@@ -3004,7 +3139,7 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
     settings = db.get_settings()
     client_path = settings.get("riot_client_path", "") or await asyncio.to_thread(launcher.detect_riot_client_path)
 
-    info = await asyncio.to_thread(launcher.get_active_riot_account)
+    info = await asyncio.to_thread(launcher.get_active_riot_session)
     is_active = bool(
         info and info.get("found")
         and (info.get("username") or "").strip().lower() == account["username"].strip().lower()
@@ -3023,18 +3158,18 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
         return {"success": True, "switched": False,
                 "message": f"Starting VALORANT as {account.get('display_name') or account['username']}..."}
 
-    db.update_account(account_id, {"last_login": datetime.now().isoformat()})
-    note_account_login(account_id)
-
     # Different account signed in (or none) - log in first, then launch.
     result = await asyncio.to_thread(
         launcher.login_account, account["username"], account["password"], client_path or None,
         _stay_signed_in_pref()
     )
-    background_tasks.add_task(background_login_then_play, account_id)
+    if result.get("success"):
+        db.update_account(account_id, {"last_login": datetime.now().isoformat()})
+        note_account_login(account_id)
+        background_tasks.add_task(background_login_then_play, account_id)
     return {
-        "success": result["success"],
-        "switched": True,
+        "success": bool(result.get("success")),
+        "switched": bool(result.get("success")),
         "message": result["message"] if not result["success"] else f"Switching to {account['username']}, then starting VALORANT...",
     }
 

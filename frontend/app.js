@@ -185,6 +185,9 @@ const DOM = {
     settingsForceBorderless: document.getElementById("settings-force-borderless"),
     settingsStaySignedIn: document.getElementById("settings-stay-signed-in"),
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
+    settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
+    settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
+    overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
     settingsProfileAccount: document.getElementById("settings-profile-account"),
     settingsProfileAutoapply: document.getElementById("settings-profile-autoapply"),
@@ -313,6 +316,8 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchBannedAccounts(true);
     startContinuousSync();
     startLiveSessionPolling();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    updateEffectsPausedState();
     loadAppVersion();
     checkForUpdate(false);
 
@@ -328,8 +333,51 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 5 * 60 * 1000);
 });
 
+const ACTIVE_SYNC_INTERVAL = 15000;
+const ACTIVE_SYNC_RECHECK_WHILE_MATCHING = 5000;
+const ACTIVE_SYNC_RECHECK_WHILE_HIDDEN = 30000;
+
 function startContinuousSync() {
-    setInterval(async () => {
+    scheduleContinuousSync(2500);
+}
+
+function isLiveMatchActive() {
+    const phase = state.live && state.live.match && state.live.match.phase;
+    const loopState = state.live && state.live.state;
+    return phase === "agent_select" || phase === "in_match" ||
+        loopState === "PREGAME" || loopState === "INGAME";
+}
+
+function continuousSyncDelay() {
+    if (document.hidden) return ACTIVE_SYNC_RECHECK_WHILE_HIDDEN;
+    if (isLiveMatchActive()) return ACTIVE_SYNC_RECHECK_WHILE_MATCHING;
+    return state.live && state.live.valorant_running
+        ? ACTIVE_SYNC_INTERVAL
+        : ACTIVE_SYNC_INTERVAL + 5000;
+}
+
+function scheduleContinuousSync(delay = continuousSyncDelay()) {
+    clearTimeout(state._continuousSyncTimer);
+    state._continuousSyncTimer = setTimeout(runContinuousSync, delay);
+}
+
+async function runContinuousSync() {
+    // The live snapshot already owns the fast path during a match. Re-running
+    // active-account discovery here would duplicate Riot/SQLite work at the
+    // exact moment the live dashboard needs the backend most.
+    if (document.hidden || isLiveMatchActive()) {
+        scheduleContinuousSync();
+        return;
+    }
+
+    // A visibility change can reschedule this function while an earlier call
+    // is still resolving. Keep the work single-flight just like live polling.
+    if (state._continuousSyncPromise) {
+        scheduleContinuousSync();
+        return state._continuousSyncPromise;
+    }
+
+    const task = (async () => {
         try {
             const res = await fetch("/api/sync-active-account");
             const data = await res.json();
@@ -347,7 +395,30 @@ function startContinuousSync() {
         } catch (err) {
             // Ignore background sync errors
         }
-    }, 4500);
+    })();
+
+    state._continuousSyncPromise = task;
+    try {
+        await task;
+    } finally {
+        if (state._continuousSyncPromise === task) state._continuousSyncPromise = null;
+        scheduleContinuousSync();
+    }
+}
+
+function updateEffectsPausedState() {
+    const shouldPause = document.hidden || !!(state.live && state.live.valorant_running);
+    document.body.classList.toggle("effects-paused", shouldPause);
+    document.body.classList.toggle("game-running", !!(state.live && state.live.valorant_running));
+}
+
+function handleVisibilityChange() {
+    updateEffectsPausedState();
+
+    // Becoming visible should feel immediate. Going into the background keeps
+    // lightweight timers alive only so state recovers cleanly on restore.
+    scheduleLivePoll(document.hidden ? getLivePollDelay() : 0);
+    scheduleContinuousSync(document.hidden ? continuousSyncDelay() : 750);
 }
 
 // ==========================================================================
@@ -598,6 +669,7 @@ function initEventListeners() {
     if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
     if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
     if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
+    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.addEventListener("input", renderOverlayHotkeyValidity);
     if (DOM.btnPresetCapture) DOM.btnPresetCapture.addEventListener("click", capturePreset);
     if (DOM.btnPresetApply) DOM.btnPresetApply.addEventListener("click", applyPresetToCurrent);
     if (DOM.btnPresetApplyAll) DOM.btnPresetApplyAll.addEventListener("click", applyPresetToAll);
@@ -2043,7 +2115,7 @@ async function restoreBannedAccount(id) {
             await fetchAccounts();
             await fetchBannedAccounts(true);
             fetchStatsSummary();
-            pollLiveSession();
+            scheduleLivePoll(0);
         } else {
             showToast(data.message || "Could not restore that account", "error");
         }
@@ -2321,7 +2393,7 @@ function startLaunchPolling(options = {}) {
                     settleTimer = setTimeout(() => {
                         fetchAccounts();
                         fetchStatsSummary();
-                        pollLiveSession();
+                        scheduleLivePoll(0);
                     }, 1500);
                 }
 
@@ -2392,9 +2464,54 @@ function openTrackerUrl(displayName) {
 // SETTINGS & BACKUP
 // ==========================================================================
 
+/**
+ * Same modifier+key grammar the backend's parse_hotkey() enforces
+ * (backend/overlay_hotkey.py) - kept in sync by hand since it's a small,
+ * stable rule set. Used only for instant feedback here; the backend is what
+ * actually decides whether a combination can be registered.
+ */
+function validateOverlayHotkey(spec) {
+    const trimmed = (spec || "").trim();
+    if (!trimmed) return "Enter a key combination, e.g. CTRL+SHIFT+F8.";
+    const parts = trimmed.toUpperCase().split(/[+\s]+/).filter(Boolean);
+    const mods = new Set(["CTRL", "CONTROL", "SHIFT", "ALT", "WIN", "WINDOWS", "META", "SUPER"]);
+    const named = new Set([
+        "SPACE", "TAB", "ESC", "ESCAPE", "ENTER", "RETURN", "BACKSPACE",
+        "INSERT", "DELETE", "DEL", "HOME", "END", "PAGEUP", "PAGEDOWN",
+        "UP", "DOWN", "LEFT", "RIGHT", "PRINTSCREEN", "PAUSE"
+    ]);
+    for (let n = 1; n <= 24; n++) named.add(`F${n}`);
+
+    let hasModifier = false, key = null;
+    for (const part of parts) {
+        if (mods.has(part)) { hasModifier = true; continue; }
+        if (key !== null) return `"${part}" isn't a modifier and a key was already given.`;
+        key = part;
+    }
+    if (key === null) return "Add a key after the modifiers, e.g. CTRL+SHIFT+F8.";
+    if (!hasModifier) return "Add at least one modifier (CTRL, ALT, SHIFT or WIN) so this doesn't fire on plain typing.";
+    if (!(named.has(key) || (key.length === 1 && /^[A-Z0-9]$/.test(key)))) {
+        return `"${key}" isn't a key this can bind - use a letter, digit, or F1-F24.`;
+    }
+    return null;
+}
+
+function renderOverlayHotkeyValidity() {
+    if (!DOM.settingsOverlayHotkey || !DOM.overlayHotkeyHelp) return;
+    const problem = validateOverlayHotkey(DOM.settingsOverlayHotkey.value);
+    DOM.settingsOverlayHotkey.classList.toggle("is-invalid", !!problem);
+    DOM.overlayHotkeyHelp.textContent = problem ||
+        "One or more of CTRL / ALT / SHIFT / WIN, plus a letter, digit, or F1-F24. Applies on next launch.";
+    DOM.overlayHotkeyHelp.classList.toggle("is-error", !!problem);
+    return !problem;
+}
+
 function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
+    if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
+    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "CTRL+SHIFT+F8";
+    renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
@@ -2650,10 +2767,17 @@ async function openLoginLog() {
 }
 
 async function saveSettings() {
+    if (DOM.settingsOverlayHotkey && !renderOverlayHotkeyValidity()) {
+        showToast("Fix the Quick Panel shortcut before saving.", "error");
+        return;
+    }
+
     const payload = {
         settings: {
             riot_client_path: DOM.settingsClientPath.value.trim(),
-            riot_api_key: DOM.settingsApiKey.value.trim()
+            riot_api_key: DOM.settingsApiKey.value.trim(),
+            overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
+            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "CTRL+SHIFT+F8").trim().toUpperCase()
         }
     };
 
@@ -2919,6 +3043,7 @@ function initCardSpotlight() {
     let lastEvent = null;
 
     DOM.accountsGrid.addEventListener("pointermove", (e) => {
+        if (document.body.classList.contains("effects-paused")) return;
         lastEvent = e;
         if (queued) return;
         queued = true;
@@ -3002,22 +3127,41 @@ const SESSION_STATES = {
     OFFLINE: { label: "Game Closed", cls: "state-offline", icon: "fa-solid fa-power-off" }
 };
 
-// The snapshot costs a handful of Riot requests, so it's only polled hard
-// while the dashboard is actually on screen.
-const LIVE_POLL_IDLE = 1500;
-const LIVE_POLL_ACTIVE = 1200;
+// Live rounds and agent select are time-sensitive even if the app is behind
+// VALORANT. Menus, closed clients and hidden idle windows can back off hard.
+const LIVE_POLL_CRITICAL = 1100;
+const LIVE_POLL_DASHBOARD = 1200;
+const LIVE_POLL_MENUS = 3500;
+const LIVE_POLL_SIGNED_IN = 7000;
+const LIVE_POLL_IDLE = 10000;
+const LIVE_POLL_HIDDEN = 15000;
+
+function getLivePollDelay() {
+    if (isLiveMatchActive()) return LIVE_POLL_CRITICAL;
+    if (state.dashboardOpen && !document.hidden) return LIVE_POLL_DASHBOARD;
+    if (document.hidden) return LIVE_POLL_HIDDEN;
+    if (state.live && state.live.valorant_running) return LIVE_POLL_MENUS;
+    if (state.live && state.live.available) return LIVE_POLL_SIGNED_IN;
+    return LIVE_POLL_IDLE;
+}
+
+function scheduleLivePoll(delay = getLivePollDelay()) {
+    clearTimeout(state._livePollTimer);
+    state._livePollTimer = setTimeout(runLivePollTick, Math.max(0, delay));
+}
+
+async function runLivePollTick() {
+    try {
+        await pollLiveSession();
+    } catch (err) {
+        // Never let one bad frame stop the loop.
+    } finally {
+        scheduleLivePoll();
+    }
+}
 
 function startLiveSessionPolling() {
-    const tick = async () => {
-        try {
-            await pollLiveSession();
-        } catch (err) {
-            // Never let one bad frame stop the loop.
-        }
-        clearTimeout(state._livePollTimer);
-        state._livePollTimer = setTimeout(tick, state.dashboardOpen ? LIVE_POLL_ACTIVE : LIVE_POLL_IDLE);
-    };
-    tick();
+    scheduleLivePoll(0);
 }
 
 function updateLiveHeroCardState(live) {
@@ -3045,6 +3189,18 @@ function updateLiveHeroCardState(live) {
 }
 
 async function pollLiveSession() {
+    if (state._livePollPromise) return state._livePollPromise;
+
+    const task = pollLiveSessionOnce();
+    state._livePollPromise = task;
+    try {
+        return await task;
+    } finally {
+        if (state._livePollPromise === task) state._livePollPromise = null;
+    }
+}
+
+async function pollLiveSessionOnce() {
     let live;
     try {
         const res = await fetch("/api/live/session");
@@ -3057,6 +3213,7 @@ async function pollLiveSession() {
     const hadHero = !!document.querySelector(".account-card-hero");
     state.live = live;
     state.activeAccountId = live.available ? live.account_id : null;
+    updateEffectsPausedState();
 
     if (live.available && live.account_id && !state.accounts.some(a => a.id === live.account_id)) {
         await fetchAccounts(false);
@@ -3095,6 +3252,8 @@ async function pollLiveSession() {
     if (previousId !== state.activeAccountId || (live.available && !hadHero) || wasBanned !== nowBanned) {
         renderAccounts();
     }
+
+    return live;
 }
 
 function sessionStateInfo(live) {
@@ -3166,7 +3325,7 @@ async function playAccount(id) {
         if (data.success) {
             openDashboard();
             if (!data.switched) {
-                setTimeout(pollLiveSession, 1200);
+                scheduleLivePoll(1200);
             }
         } else if (!data.success && !isActive) {
             stopLaunchPolling();
@@ -3226,7 +3385,7 @@ async function checkAccount(id) {
         if (data.moved_to_banned) fetchBannedAccounts();
         if (data.verified && !data.moved_to_banned) {
             highlightAccount(id);
-            pollLiveSession();
+            scheduleLivePoll(0);
         }
     } catch (err) {
         stopLaunchPolling();
@@ -3283,11 +3442,11 @@ async function openDashboard() {
     if (!state.agents.length) await loadLiveAgents();
     renderModeGrid();
     renderAgentGrid();
-    refreshInstalockStatus();
+    refreshInstalockStatus(true);
     moveTabGlide();
 
     if (state.live) renderDashboard(state.live);
-    pollLiveSession();
+    scheduleLivePoll(0);
     startQueueClock();
 
     // The roster collapses out from under the page, so anchor back to the
@@ -3359,6 +3518,26 @@ function moveTabGlide() {
 
 // -- dashboard rendering --------------------------------------------------
 
+function dashboardSectionChanged(key, value) {
+    if (!state._dashboardRenderSignatures) {
+        state._dashboardRenderSignatures = Object.create(null);
+    }
+
+    let signature;
+    try {
+        signature = JSON.stringify(value);
+        if (signature === undefined) signature = String(value);
+    } catch (err) {
+        // Live payloads are plain JSON today. If that ever changes, rendering
+        // is safer than leaving a section stale.
+        signature = `${Date.now()}-${Math.random()}`;
+    }
+
+    if (state._dashboardRenderSignatures[key] === signature) return false;
+    state._dashboardRenderSignatures[key] = signature;
+    return true;
+}
+
 function renderDashboard(live) {
     if (!DOM.dashView) return;
 
@@ -3415,10 +3594,16 @@ function renderDashboard(live) {
         const sideCls = startSide === "Defender" ? "side-defender" : "side-attacker";
         const sideText = startSide === "Defender" ? "Starting Defense" : "Starting Attack";
 
-        DOM.dashPregameText.innerHTML = `
-            <span>Agent select &middot; <strong>${escapeHtml(match.map.name || "Unknown map")}</strong> &middot; ${escapeHtml(match.mode || live.queue_label || "")}</span>
-            <span class="dash-side-pill ${sideCls}"><i class="fa-solid ${sideIcon}"></i> ${sideText}</span>
-        `;
+        if (dashboardSectionChanged("pregame-banner", {
+            map: match.map && match.map.name,
+            mode: match.mode || live.queue_label || "",
+            startSide
+        })) {
+            DOM.dashPregameText.innerHTML = `
+                <span>Agent select &middot; <strong>${escapeHtml(match.map.name || "Unknown map")}</strong> &middot; ${escapeHtml(match.mode || live.queue_label || "")}</span>
+                <span class="dash-side-pill ${sideCls}"><i class="fa-solid ${sideIcon}"></i> ${sideText}</span>
+            `;
+        }
     }
 
     // Sync independent smooth timers
@@ -3435,8 +3620,8 @@ function renderDashboard(live) {
         const enemySide = allySide === "Defender" ? "Attacker" : "Defender";
         renderTeamTitle(".dash-team-ally", "fa-user-group", "Your Team", allySide, match.team);
         renderTeamTitle(".dash-team-enemy", "fa-crosshairs", "Enemy Team", enemySide, match.enemy);
-    } else if (DOM.dashDuoBanner) {
-        DOM.dashDuoBanner.style.display = "none";
+    } else {
+        renderDuoBanner(null);
     }
 
     if (inQueue && DOM.dashQueueBannerSub) {
@@ -3540,6 +3725,19 @@ function sideMeta(side) {
 
 /** Rounds won/lost, the round-by-round ledger, and where the match stands. */
 function renderMatchHero(match, live) {
+    if (!dashboardSectionChanged("match-hero", {
+        matchId: match.match_id,
+        map: match.map,
+        mode: match.mode,
+        progress: match.progress,
+        score: match.score,
+        round: match.round,
+        currentSide: match.current_side,
+        side: match.side,
+        startingSide: match.starting_side,
+        queueLabel: live.queue_label
+    })) return;
+
     const p = match.progress || {};
     const won = p.rounds_won != null ? p.rounds_won : match.score.ally;
     const lost = p.rounds_lost != null ? p.rounds_lost : match.score.enemy;
@@ -3597,6 +3795,7 @@ function renderMatchHero(match, live) {
 function renderDuoBanner(match) {
     if (!DOM.dashDuoBanner) return;
     if (!match) {
+        if (!dashboardSectionChanged("duo-banner", null)) return;
         DOM.dashDuoBanner.style.display = "none";
         return;
     }
@@ -3605,6 +3804,13 @@ function renderDuoBanner(match) {
     const allyStacks = stacks.ally || [];
     const enemyStacks = stacks.enemy || [];
     const hasEnemy = (match.enemy && match.enemy.length > 0);
+
+    if (!dashboardSectionChanged("duo-banner", {
+        matchId: match.match_id,
+        allyStacks,
+        enemyStacks,
+        hasEnemy
+    })) return;
 
     const allyHtml = allyStacks.length > 0
         ? allyStacks.map(s => `
@@ -3657,6 +3863,11 @@ function renderDuoBanner(match) {
  */
 function renderMeCard(match) {
     const me = match && match.me;
+    if (!dashboardSectionChanged("me-card", {
+        phase: match && match.phase,
+        me: me || null
+    })) return;
+
     if (!me) {
         DOM.dashMe.style.display = "none";
         return;
@@ -3817,6 +4028,8 @@ function renderMeCard(match) {
 function renderRecap(live, hasMatch) {
     const last = live.last_match;
     const session = live.session || {};
+    if (!dashboardSectionChanged("recap", { last, session, hasMatch })) return;
+
     if (hasMatch || (!last && !(session.matches > 0))) {
         DOM.dashRecap.style.display = "none";
         return;
@@ -3870,6 +4083,10 @@ function renderTeamTitle(selector, icon, text, side, players) {
     if (!el) return;
     const meta = sideMeta(side);
     const groups = new Set((players || []).map(p => p.party_group).filter(Boolean));
+    if (!dashboardSectionChanged(`team-title:${selector}`, {
+        icon, text, side, groups: Array.from(groups).sort()
+    })) return;
+
     el.innerHTML = `
         <i class="fa-solid ${icon}"></i> ${text}
         <span class="dash-side-pill ${meta.cls}"><i class="fa-solid ${meta.icon}"></i> ${side}</span>
@@ -3880,6 +4097,8 @@ function renderTeamTitle(selector, icon, text, side, players) {
 
 function renderRoster(el, players) {
     if (!el) return;
+
+    if (!dashboardSectionChanged(`roster:${el.id || "unknown"}`, players || [])) return;
 
     if (!players || !players.length) {
         el.innerHTML = '<p class="dash-roster-empty">No players yet.</p>';
@@ -4049,7 +4268,7 @@ async function forceLaunchValorant() {
 
     // The backend confirms the process itself; this just gets the first
     // update on screen quickly.
-    setTimeout(pollLiveSession, 1500);
+    scheduleLivePoll(1500);
 }
 
 // -- queue & mode control ------------------------------------------------
@@ -4152,7 +4371,7 @@ async function changeMode(queueId) {
             state.pendingQueueId = null;
             showToast(data.message || "Couldn't change mode", "error");
         }
-        pollLiveSession();
+        scheduleLivePoll(0);
     } catch (err) {
         state.pendingQueueId = null;
         showToast("Couldn't reach the game client", "error");
@@ -4174,7 +4393,7 @@ async function startQueue(queueId) {
             state.queueStartedAt = Date.now();
             startQueueClock();
         }
-        pollLiveSession();
+        scheduleLivePoll(0);
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
     }
@@ -4186,7 +4405,7 @@ async function stopQueue() {
         const data = await res.json();
         showToast(data.message || "Left the queue", data.success ? "info" : "error");
         if (data.success) state.queueStartedAt = 0;
-        pollLiveSession();
+        scheduleLivePoll(0);
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
     }
@@ -4289,18 +4508,46 @@ function updateInstalockControls() {
     if (DOM.btnLockNow) DOM.btnLockNow.disabled = !inPregame || !state.selectedAgentId;
 }
 
-async function refreshInstalockStatus() {
-    try {
-        const res = await fetch("/api/live/instalock");
-        state.instalock = await res.json();
-        if (state.instalock.enabled && state.instalock.agent_id && !state.selectedAgentId) {
-            state.selectedAgentId = state.instalock.agent_id;
-            renderAgentGrid();
-        }
-    } catch (err) {
-        state.instalock = {};
+const INSTALOCK_REFRESH_PREGAME = 1500;
+const INSTALOCK_REFRESH_NORMAL = 5000;
+
+async function refreshInstalockStatus(force = false) {
+    const now = Date.now();
+    const phase = state.live && state.live.match && state.live.match.phase;
+    const minAge = phase === "agent_select"
+        ? INSTALOCK_REFRESH_PREGAME
+        : INSTALOCK_REFRESH_NORMAL;
+
+    if (!force && state._instalockCheckedAt && now - state._instalockCheckedAt < minAge) {
+        return state.instalock;
     }
-    updateInstalockControls();
+    if (state._instalockPromise) return state._instalockPromise;
+
+    // Count attempts as well as successes so a temporarily unavailable local
+    // endpoint cannot turn the live loop into an error-request storm.
+    state._instalockCheckedAt = now;
+    const task = (async () => {
+        try {
+            const res = await fetch("/api/live/instalock");
+            state.instalock = await res.json();
+            state._instalockCheckedAt = Date.now();
+            if (state.instalock.enabled && state.instalock.agent_id && !state.selectedAgentId) {
+                state.selectedAgentId = state.instalock.agent_id;
+                renderAgentGrid();
+            }
+        } catch (err) {
+            state.instalock = {};
+        }
+        updateInstalockControls();
+        return state.instalock;
+    })();
+
+    state._instalockPromise = task;
+    try {
+        return await task;
+    } finally {
+        if (state._instalockPromise === task) state._instalockPromise = null;
+    }
 }
 
 async function toggleInstalock() {
@@ -4339,7 +4586,7 @@ async function lockAgentNow() {
         });
         const data = await res.json();
         showToast(data.message || "Lock attempted", data.success ? "success" : "error");
-        pollLiveSession();
+        scheduleLivePoll(0);
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
     }

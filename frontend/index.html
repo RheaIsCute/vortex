@@ -687,6 +687,34 @@
                 </div>
 
                 <div class="form-group">
+                    <label><i class="fa-solid fa-window-restore"></i> Quick Panel Overlay</label>
+                    <p class="field-help">
+                        A small always-on-top window for switching accounts without opening the full app -
+                        its own separate window, not something drawn over the game itself.
+                    </p>
+
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-overlay-enabled">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Enable the Quick Panel</strong>
+                            <span>Arms the shortcut below. Takes effect the next time Vortex starts.</span>
+                        </div>
+                    </div>
+
+                    <div class="overlay-hotkey-row">
+                        <label for="settings-overlay-hotkey" class="overlay-hotkey-label">Shortcut</label>
+                        <input type="text" id="settings-overlay-hotkey" class="form-control overlay-hotkey-input"
+                               placeholder="CTRL+SHIFT+F8" autocomplete="off" spellcheck="false">
+                    </div>
+                    <p class="field-help" id="overlay-hotkey-help">
+                        One or more of CTRL / ALT / SHIFT / WIN, plus a letter, digit, or F1-F24. Applies on next launch.
+                    </p>
+                </div>
+
+                <div class="form-group">
                     <label><i class="fa-solid fa-right-to-bracket"></i> Login Behaviour</label>
 
                     <div class="switch-row">

@@ -172,6 +172,7 @@ def parse_player_mmr(mmr_data: Dict[str, Any]) -> Dict[str, Any]:
 _STATIC_CACHE: Dict[str, Any] = {"agents": None, "maps": None, "version": None}
 _STATIC_LOCK = threading.Lock()
 _MATCH_DETAILS_CACHE: Dict[str, Any] = {}
+_MATCH_DETAILS_LOCK = threading.Lock()
 
 
 def _fetch_json(url: str, timeout: float = 6.0) -> Optional[Any]:
@@ -287,20 +288,46 @@ def get_client_version() -> str:
 
 # Region/shard only change when the game is restarted into another region, so
 # the lookup is cached briefly rather than repeated on every poll.
-_REGION_CACHE: Dict[str, Any] = {"region": None, "shard": None, "at": 0.0}
+_REGION_CACHE: Dict[str, Any] = {
+    "region": None,
+    "shard": None,
+    "at": 0.0,
+    # A Riot Client restart rotates its lockfile credentials, and an account
+    # swap changes the PUUID.  Both must invalidate routing: otherwise an EU
+    # account opened after an NA account can spend the cache TTL talking to
+    # the wrong shard.
+    "session_key": None,
+}
 _REGION_TTL = 180.0
 
 
-def _region_from_cache() -> Optional[Tuple[str, str]]:
+def _region_session_key(puuid: str = "", port: Optional[int] = None,
+                        local_password: str = "") -> Tuple[str, int, str]:
+    return ((puuid or "").strip(), int(port or 0), local_password or "")
+
+
+def _region_from_cache(puuid: str = "", port: Optional[int] = None,
+                       local_password: str = "") -> Optional[Tuple[str, str]]:
+    session_key = _region_session_key(puuid, port, local_password)
     with _STATIC_LOCK:
-        if _REGION_CACHE["region"] and (time.time() - _REGION_CACHE["at"]) < _REGION_TTL:
+        if (
+            _REGION_CACHE["region"]
+            and _REGION_CACHE.get("session_key") == session_key
+            and (time.time() - _REGION_CACHE["at"]) < _REGION_TTL
+        ):
             return _REGION_CACHE["region"], _REGION_CACHE["shard"]
     return None
 
 
-def _store_region_cache(region: str, shard: str) -> None:
+def _store_region_cache(region: str, shard: str, puuid: str = "",
+                        port: Optional[int] = None, local_password: str = "") -> None:
     with _STATIC_LOCK:
-        _REGION_CACHE.update({"region": region, "shard": shard, "at": time.time()})
+        _REGION_CACHE.update({
+            "region": region,
+            "shard": shard,
+            "at": time.time(),
+            "session_key": _region_session_key(puuid, port, local_password),
+        })
 
 
 class LiveClientError(Exception):
@@ -380,7 +407,7 @@ class ValorantLiveClient:
         first match is this session's - and the file grows to megabytes while
         you play, which this is polled far too often to read in full.
         """
-        cached = _region_from_cache()
+        cached = _region_from_cache(self.puuid or "", self.port, self.local_password or "")
         if cached:
             self.region, self.shard = cached
             return
@@ -395,7 +422,10 @@ class ValorantLiveClient:
                 found = re.search(r"https://glz-([a-z0-9-]+)-1\.([a-z0-9]+)\.a\.pvp\.net", head)
                 if found:
                     self.region, self.shard = found.group(1), found.group(2)
-                    _store_region_cache(self.region, self.shard)
+                    _store_region_cache(
+                        self.region, self.shard,
+                        self.puuid or "", self.port, self.local_password or "",
+                    )
                     return
         except Exception:
             pass
@@ -409,6 +439,10 @@ class ValorantLiveClient:
                 reg = (res.json().get("region") or "na").lower()
                 self.region = reg
                 self.shard = SHARD_BY_REGION.get(reg, "na")
+                _store_region_cache(
+                    self.region, self.shard,
+                    self.puuid or "", self.port, self.local_password or "",
+                )
                 return
         except Exception:
             pass
@@ -686,19 +720,31 @@ class ValorantLiveClient:
             return []
         return res.json().get("History", []) or []
 
-    def match_details(self, match_id: str) -> Dict[str, Any]:
+    def match_details(self, match_id: str, use_cache: bool = True) -> Dict[str, Any]:
+        """
+        Full details for one match.
+
+        Finished matches are immutable and safe to memoise.  Active modes can
+        expose a partial payload that changes as the match runs, so their
+        callers pass ``use_cache=False`` to bypass both reads and writes of the
+        raw-details cache.
+        """
         global _MATCH_DETAILS_CACHE
-        if match_id in _MATCH_DETAILS_CACHE:
-            return _MATCH_DETAILS_CACHE[match_id]
+        if use_cache:
+            with _MATCH_DETAILS_LOCK:
+                cached = _MATCH_DETAILS_CACHE.get(match_id)
+            if cached is not None:
+                return cached
         res = self._remote("GET", f"{self.pd}/match-details/v1/matches/{match_id}", timeout=6.0)
         if res.status_code != 200:
             return {}
         try:
             data = res.json()
-            if data:
-                if len(_MATCH_DETAILS_CACHE) > 30:
-                    _MATCH_DETAILS_CACHE.clear()
-                _MATCH_DETAILS_CACHE[match_id] = data
+            if data and use_cache:
+                with _MATCH_DETAILS_LOCK:
+                    if len(_MATCH_DETAILS_CACHE) > 30:
+                        _MATCH_DETAILS_CACHE.clear()
+                    _MATCH_DETAILS_CACHE[match_id] = data
             return data
         except Exception:
             return {}
@@ -1573,7 +1619,17 @@ MATCH_DETAIL_SAMPLE = 8       # how many recent matches get fully parsed
 _MATCH_CACHE: Dict[str, Dict[str, Any]] = {}
 _MATCH_CACHE_MAX = 60
 
-_STATS_CACHE: Dict[str, Any] = {"data": None, "built_at": 0.0, "puuid": "", "building": False}
+_STATS_CACHE: Dict[str, Any] = {
+    "data": None,
+    "built_at": 0.0,
+    "puuid": "",
+    "building": False,
+    "building_puuid": "",
+    # Every replacement build gets a token.  A worker from the account that
+    # was signed in previously may finish later, but its old token prevents it
+    # from overwriting the new account's profile.
+    "generation": 0,
+}
 _STATS_LOCK = threading.Lock()
 STATS_TTL = 240.0
 
@@ -1808,7 +1864,7 @@ def _cached_match(client: "ValorantLiveClient", match_id: str,
     if use_cache and match_id in _MATCH_CACHE:
         return _MATCH_CACHE[match_id]
 
-    details = client.match_details(match_id)
+    details = client.match_details(match_id, use_cache=use_cache)
     if not details:
         return None
 
@@ -2124,23 +2180,69 @@ def build_player_stats(client: "ValorantLiveClient") -> Dict[str, Any]:
     return stats
 
 
-def _stats_worker(force_puuid: str) -> None:
+def _active_session_puuid() -> str:
+    """PUUID in the current lockfile-authenticated Riot session, if any."""
+    lock = ValorantLiveClient.read_lockfile()
+    if not lock:
+        return ""
+    port, password = lock
+    try:
+        res = requests.get(
+            f"https://127.0.0.1:{port}/entitlements/v1/token",
+            auth=("riot", password), verify=False, timeout=1.5,
+        )
+        if res.status_code == 200:
+            return (res.json().get("subject") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _finish_stats_build(generation: int) -> None:
+    """Release the build flag only if this is still the newest worker."""
+    with _STATS_LOCK:
+        if _STATS_CACHE.get("generation") == generation:
+            _STATS_CACHE.update({"building": False, "building_puuid": ""})
+
+
+def _stats_worker(expected_puuid: str, generation: int) -> None:
     try:
         client = ValorantLiveClient()
         if not client.connect():
-            with _STATS_LOCK:
-                _STATS_CACHE["building"] = False
+            _finish_stats_build(generation)
+            return
+
+        actual_puuid = (client.puuid or "").strip()
+        if expected_puuid and actual_puuid != expected_puuid:
+            # The account changed between scheduling this thread and reading
+            # the lockfile.  Its result belongs to neither requested build.
+            _finish_stats_build(generation)
             return
 
         data = build_player_stats(client)
+
+        # A profile build performs several remote requests and can outlive an
+        # account swap.  Re-check before publishing it.  If this probe happens
+        # to fail transiently the result is still safe to retain: it remains
+        # tagged with actual_puuid and get_player_stats will not serve it to an
+        # unknown or different session.
+        current_puuid = _active_session_puuid()
+        if current_puuid and current_puuid != actual_puuid:
+            _finish_stats_build(generation)
+            return
+
         with _STATS_LOCK:
+            if _STATS_CACHE.get("generation") != generation:
+                return
             _STATS_CACHE.update({
-                "data": data, "built_at": time.time(),
-                "puuid": client.puuid, "building": False,
+                "data": data,
+                "built_at": time.time(),
+                "puuid": actual_puuid,
+                "building": False,
+                "building_puuid": "",
             })
     except Exception:
-        with _STATS_LOCK:
-            _STATS_CACHE["building"] = False
+        _finish_stats_build(generation)
 
 
 def get_player_stats(force: bool = False) -> Dict[str, Any]:
@@ -2149,26 +2251,58 @@ def get_player_stats(force: bool = False) -> Dict[str, Any]:
     whatever is already known plus a loading flag, so the dashboard can paint
     the panel on the first frame.
     """
-    with _STATS_LOCK:
-        data = _STATS_CACHE["data"]
-        built_at = _STATS_CACHE["built_at"]
-        building = _STATS_CACHE["building"]
+    session_puuid = _active_session_puuid()
+    worker_args: Optional[Tuple[str, int]] = None
 
-    stale = (time.time() - built_at) > STATS_TTL
-    if (force or stale or data is None) and not building:
-        with _STATS_LOCK:
-            _STATS_CACHE["building"] = True
-        threading.Thread(target=_stats_worker, args=("",), daemon=True).start()
-        building = True
+    # Selection, invalidation and the build reservation are one transaction.
+    # Without that, two simultaneous HTTP requests can both observe
+    # building=False and start duplicate profile crawls.
+    with _STATS_LOCK:
+        cached_puuid = (_STATS_CACHE.get("puuid") or "").strip()
+        cache_matches = bool(session_puuid and cached_puuid == session_puuid)
+        data = _STATS_CACHE.get("data") if cache_matches else None
+        built_at = float(_STATS_CACHE.get("built_at") or 0.0) if cache_matches else 0.0
+        stale = (time.time() - built_at) > STATS_TTL
+
+        building = bool(_STATS_CACHE.get("building"))
+        building_puuid = (_STATS_CACHE.get("building_puuid") or "").strip()
+        same_build = building and (
+            not session_puuid or building_puuid == session_puuid
+        )
+
+        if (force or stale or data is None) and not same_build:
+            generation = int(_STATS_CACHE.get("generation") or 0) + 1
+            _STATS_CACHE.update({
+                "generation": generation,
+                "building": True,
+                "building_puuid": session_puuid,
+            })
+            worker_args = (session_puuid, generation)
+            building = True
+            building_puuid = session_puuid
+
+        loading = building and (
+            not session_puuid or building_puuid == session_puuid
+        )
+
+    if worker_args is not None:
+        threading.Thread(target=_stats_worker, args=worker_args, daemon=True).start()
 
     if data is None:
         return {"available": False, "loading": True, "message": "Reading your profile..."}
 
     out = dict(data)
-    out["loading"] = building
+    out["loading"] = loading
     return out
 
 
 def invalidate_player_stats() -> None:
     with _STATS_LOCK:
-        _STATS_CACHE.update({"data": None, "built_at": 0.0})
+        _STATS_CACHE.update({
+            "data": None,
+            "built_at": 0.0,
+            "puuid": "",
+            "building": False,
+            "building_puuid": "",
+            "generation": int(_STATS_CACHE.get("generation") or 0) + 1,
+        })

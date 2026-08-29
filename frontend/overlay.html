@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>Vortex Quick Panel</title>
+    <link rel="stylesheet" href="overlay.css">
+    <script src="overlay.js" defer></script>
+</head>
+<body>
+    <main class="overlay-shell" id="overlay-shell">
+        <header class="titlebar drag-region">
+            <div class="brand-lockup" aria-label="Vortex Quick Panel">
+                <span class="brand-mark" aria-hidden="true">
+                    <span></span>
+                </span>
+                <span class="brand-copy">
+                    <strong>VORTEX</strong>
+                    <small>QUICK PANEL</small>
+                </span>
+            </div>
+
+            <div class="titlebar-actions no-drag">
+                <button class="icon-button icon-button-wide" id="btn-open-main" type="button" title="Open the full Vortex app">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 5.75A1.75 1.75 0 0 1 5.75 4h12.5A1.75 1.75 0 0 1 20 5.75v8.5A1.75 1.75 0 0 1 18.25 16H13v2h2.25a.75.75 0 0 1 0 1.5h-6.5a.75.75 0 0 1 0-1.5H11v-2H5.75A1.75 1.75 0 0 1 4 14.25v-8.5Zm1.5 0v8.5c0 .14.11.25.25.25h12.5c.14 0 .25-.11.25-.25v-8.5a.25.25 0 0 0-.25-.25H5.75a.25.25 0 0 0-.25.25Z"/>
+                    </svg>
+                    <span>Full app</span>
+                </button>
+                <button class="icon-button" id="btn-close" type="button" title="Close quick panel (Esc)" aria-label="Close quick panel">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6.97 5.91a.75.75 0 0 0-1.06 1.06L10.94 12l-5.03 5.03a.75.75 0 1 0 1.06 1.06L12 13.06l5.03 5.03a.75.75 0 0 0 1.06-1.06L13.06 12l5.03-5.03a.75.75 0 0 0-1.06-1.06L12 10.94 6.97 5.91Z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <section class="session-card" aria-live="polite">
+            <div class="session-status-icon" id="session-status-icon" aria-hidden="true">
+                <span class="status-pulse"></span>
+            </div>
+            <div class="session-copy">
+                <div class="session-heading-row">
+                    <strong id="session-name">Checking Riot session…</strong>
+                    <span class="state-chip" id="session-chip">CONNECTING</span>
+                </div>
+                <p id="session-detail">Loading your current account and game state.</p>
+            </div>
+            <button class="refresh-button no-drag" id="btn-refresh" type="button" aria-label="Refresh status" title="Refresh status">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19.4 7.34A8 8 0 1 0 20 15a.75.75 0 0 0-1.42-.47 6.5 6.5 0 1 1-.34-5.76h-2.49a.75.75 0 0 0 0 1.5H20a.75.75 0 0 0 .75-.75V5.27a.75.75 0 0 0-1.5 0v2.07h.15Z"/>
+                </svg>
+            </button>
+        </section>
+
+        <nav class="tab-list" role="tablist" aria-label="Quick panel sections">
+            <button class="tab-button is-active" id="tab-accounts" type="button" role="tab" aria-selected="true" aria-controls="panel-accounts" data-tab="accounts">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0-1.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5ZM4.5 19.25c0-3.23 3.3-5.75 7.5-5.75s7.5 2.52 7.5 5.75a.75.75 0 0 1-1.5 0C18 17.02 15.4 15 12 15s-6 2.02-6 4.25a.75.75 0 0 1-1.5 0Z"/>
+                </svg>
+                Accounts
+                <span class="tab-count" id="account-count">0</span>
+            </button>
+            <button class="tab-button" id="tab-crosshairs" type="button" role="tab" aria-selected="false" aria-controls="panel-crosshairs" data-tab="crosshairs" tabindex="-1">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 2.75a.75.75 0 0 1 .75.75v2.04a6.51 6.51 0 0 1 5.71 5.71h2.04a.75.75 0 0 1 0 1.5h-2.04a6.51 6.51 0 0 1-5.71 5.71v2.04a.75.75 0 0 1-1.5 0v-2.04a6.51 6.51 0 0 1-5.71-5.71H3.5a.75.75 0 0 1 0-1.5h2.04a6.51 6.51 0 0 1 5.71-5.71V3.5a.75.75 0 0 1 .75-.75Zm0 4.25a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 2.25a.75.75 0 0 1 .75.75v1.25H14a.75.75 0 0 1 0 1.5h-1.25V14a.75.75 0 0 1-1.5 0v-1.25H10a.75.75 0 0 1 0-1.5h1.25V10a.75.75 0 0 1 .75-.75Z"/>
+                </svg>
+                Crosshairs
+                <span class="tab-count" id="crosshair-count">0</span>
+            </button>
+        </nav>
+
+        <div class="panel-stack">
+            <section class="tab-panel is-active" id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts">
+                <div class="panel-toolbar">
+                    <label class="search-field" for="account-search">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M10.5 4a6.5 6.5 0 1 0 3.98 11.64l3.94 3.94a.82.82 0 0 0 1.16-1.16l-3.94-3.94A6.5 6.5 0 0 0 10.5 4Zm-4.9 6.5a4.9 4.9 0 1 1 9.8 0 4.9 4.9 0 0 1-9.8 0Z"/>
+                        </svg>
+                        <input id="account-search" type="search" autocomplete="off" spellcheck="false" placeholder="Find an account">
+                        <span class="key-hint">/</span>
+                    </label>
+                </div>
+
+                <div class="game-warning" id="game-warning" role="alert" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M10.55 4.1a1.67 1.67 0 0 1 2.9 0l7.1 12.42A1.66 1.66 0 0 1 19.1 19H4.9a1.66 1.66 0 0 1-1.45-2.48L10.55 4.1Zm1.45.75a.17.17 0 0 0-.14.08l-7.1 12.33a.16.16 0 0 0 .14.24h14.2a.16.16 0 0 0 .14-.24l-7.1-12.33a.17.17 0 0 0-.14-.08Zm0 3.4a.75.75 0 0 1 .75.75v4a.75.75 0 0 1-1.5 0V9a.75.75 0 0 1 .75-.75Zm0 6.75a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/>
+                    </svg>
+                    <span id="game-warning-text">Switching accounts closes VALORANT.</span>
+                </div>
+
+                <div class="account-list" id="account-list" aria-live="polite">
+                    <div class="skeleton-row"><span></span><span></span><span></span></div>
+                    <div class="skeleton-row"><span></span><span></span><span></span></div>
+                    <div class="skeleton-row"><span></span><span></span><span></span></div>
+                </div>
+
+                <div class="empty-state" id="accounts-empty" hidden>
+                    <span class="empty-glyph" aria-hidden="true">◎</span>
+                    <strong>No accounts found</strong>
+                    <p id="accounts-empty-detail">Add accounts from the full Vortex app.</p>
+                    <button class="text-button" id="btn-empty-open-main" type="button">Open full app</button>
+                </div>
+            </section>
+
+            <section class="tab-panel" id="panel-crosshairs" role="tabpanel" aria-labelledby="tab-crosshairs" hidden>
+                <div class="crosshair-intro">
+                    <div>
+                        <strong>Ready-to-import profiles</strong>
+                        <p>Copy a code, then paste it into VALORANT Settings → Crosshair → Import Profile Code.</p>
+                    </div>
+                    <span class="safe-chip">NO GAME INPUT</span>
+                </div>
+
+                <div class="crosshair-grid" id="crosshair-list" aria-live="polite"></div>
+
+                <p class="preview-note">Previews are approximate. VALORANT shows the exact result before you save a profile.</p>
+            </section>
+        </div>
+
+        <footer class="quick-settings">
+            <label class="setting-row" for="toggle-launch-game">
+                <span class="setting-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M8.65 5.4a1.5 1.5 0 0 1 2.25-1.3l8.35 4.82a1.5 1.5 0 0 1 0 2.6l-8.35 4.82a1.5 1.5 0 0 1-2.25-1.3V5.4Zm1.5 0v9.64l8.35-4.82-8.35-4.82Z"/></svg>
+                </span>
+                <span class="setting-copy">
+                    <strong>Launch game after switch</strong>
+                    <small>Turn off for Riot Client login only</small>
+                </span>
+                <span class="switch-control">
+                    <input id="toggle-launch-game" type="checkbox" checked>
+                    <span class="switch-track"><span></span></span>
+                </span>
+            </label>
+
+            <span class="setting-divider" aria-hidden="true"></span>
+
+            <label class="setting-row" for="toggle-fps">
+                <span class="setting-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M5.75 5h12.5A1.75 1.75 0 0 1 20 6.75v10.5A1.75 1.75 0 0 1 18.25 19H5.75A1.75 1.75 0 0 1 4 17.25V6.75A1.75 1.75 0 0 1 5.75 5Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .14.11.25.25.25h12.5c.14 0 .25-.11.25-.25V6.75a.25.25 0 0 0-.25-.25H5.75Zm1.5 2.25A.75.75 0 0 1 8 8h3a.75.75 0 0 1 0 1.5H8.75v1.75H10a.75.75 0 0 1 0 1.5H8.75V15a.75.75 0 0 1-1.5 0V8.75Zm5.75 0a.75.75 0 0 1 .75-.75H16a2.75 2.75 0 0 1 0 5.5h-1.5V15a.75.75 0 0 1-1.5 0V8.75Zm1.5.75V12H16a1.25 1.25 0 0 0 0-2.5h-1.5Z"/></svg>
+                </span>
+                <span class="setting-copy">
+                    <strong>FPS counter</strong>
+                    <small>Show the draggable performance widget</small>
+                </span>
+                <span class="switch-control">
+                    <input id="toggle-fps" type="checkbox">
+                    <span class="switch-track"><span></span></span>
+                </span>
+            </label>
+        </footer>
+
+        <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="true"></div>
+    </main>
+</body>
+</html>

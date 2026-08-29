@@ -14,6 +14,7 @@ import time
 import logging
 import logging.handlers
 import subprocess
+import threading
 import winreg
 import ctypes
 import pyautogui
@@ -137,6 +138,11 @@ LOGIN_PROGRESS: Dict[str, Any] = {
     "attempt": 0,
     "can_retry": False,
 }
+
+# Starting a login tears down both VALORANT and the Riot Client.  Two clicks
+# arriving together must never run that sequence concurrently, otherwise each
+# worker can close the window the other worker is trying to fill.
+_LOGIN_START_LOCK = threading.Lock()
 
 
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
@@ -380,6 +386,125 @@ class ClientLauncher:
         except Exception:
             pass
         return None
+
+    @classmethod
+    def get_active_riot_session(cls, expected_username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Return only the inexpensive, local identity for the signed-in user.
+
+        Live-match polling used to call :meth:`get_active_riot_account`, which
+        also performs remote account-XP and MMR requests.  Doing that every
+        second added latency and network load unrelated to the live score.
+        This lightweight variant reads the local Riot Client only; callers
+        that are explicitly syncing rank data should keep using the full
+        method below.
+        """
+        auth_info = cls.get_lockfile_auth()
+        if not auth_info:
+            return None
+
+        port, password = auth_info
+        auth = ("riot", password)
+        result: Dict[str, Any] = {
+            "found": False,
+            "username": "",
+            "display_name": "",
+            # No default guess here on purpose. This runs on every ~1s live
+            # poll including the moment right after a Riot Client restart,
+            # when userinfo/chat can still be empty - a wrong "NA" written
+            # from a bare fallback sticks forever, because a stored region
+            # always wins over a later, better live read. Blank is honest
+            # about "not known yet" and is what account_needs_check() looks
+            # for to get it corrected on the next real sync.
+            "region": "",
+            "status": "PLAYABLE",
+            "puuid": "",
+        }
+
+        try:
+            res = requests.get(
+                f"https://127.0.0.1:{port}/rso-auth/v1/authorization/userinfo",
+                auth=auth, verify=False, timeout=1.25,
+            )
+            if res.status_code == 200:
+                raw = res.json().get("userInfo", "{}")
+                info = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                result["username"] = info.get("username") or info.get("preferred_username", "")
+                result["puuid"] = (info.get("sub") or info.get("puuid") or "").strip()
+
+                acct = info.get("acct") or {}
+                game_name = (acct.get("game_name") or "").strip()
+                tag_line = (acct.get("tag_line") or "").strip()
+                if game_name and tag_line:
+                    result["display_name"] = f"{game_name}#{tag_line}"
+
+                state = (acct.get("state") or "").upper()
+                restrictions = ((info.get("ban") or {}).get("restrictions") or [])
+                restriction_types = {(r.get("type") or "").upper() for r in restrictions}
+                if state in ("BANNED", "PERMA_BANNED") or restriction_types & {"PERMANENT_BAN", "BANNED"}:
+                    result["status"] = "BANNED"
+                elif state in ("SUSPENDED", "TEMP_BANNED") or restriction_types & {"TEMPORARY_BAN", "SUSPENDED"}:
+                    result["status"] = "SUSPENDED"
+
+                region_id = str((info.get("region") or {}).get("id") or info.get("original_platform_id", "")).upper()
+                if any(x in region_id for x in ("LA", "LAN", "LAS", "LATAM")):
+                    result["region"] = "LATAM"
+                elif "BR" in region_id:
+                    result["region"] = "BR"
+                elif any(x in region_id for x in ("EU", "TR", "RU")):
+                    result["region"] = "EU"
+                elif "KR" in region_id:
+                    result["region"] = "KR"
+                elif any(x in region_id for x in ("AP", "OC", "JP")):
+                    result["region"] = "AP"
+        except Exception:
+            pass
+
+        # Chat remains available during phases where userinfo is temporarily
+        # sparse, and gives us the Riot ID needed to match the stored account.
+        if not result["display_name"]:
+            try:
+                res = requests.get(
+                    f"https://127.0.0.1:{port}/chat/v1/session",
+                    auth=auth, verify=False, timeout=1.25,
+                )
+                if res.status_code == 200:
+                    chat = res.json() or {}
+                    game_name = (chat.get("game_name") or "").strip()
+                    tag_line = (chat.get("game_tag") or "").strip()
+                    if game_name and tag_line:
+                        result["display_name"] = f"{game_name}#{tag_line}"
+                    result["puuid"] = result["puuid"] or (chat.get("puuid") or "").strip()
+                    pid = (chat.get("pid") or "").lower()
+                    if any(x in pid for x in ("la1", "la2", "las")):
+                        result["region"] = "LATAM"
+                    elif "br" in pid:
+                        result["region"] = "BR"
+                    elif any(x in pid for x in ("eu", "tr")):
+                        result["region"] = "EU"
+                    elif "kr" in pid:
+                        result["region"] = "KR"
+                    elif any(x in pid for x in ("ap", "jp")):
+                        result["region"] = "AP"
+            except Exception:
+                pass
+
+        if not result["puuid"]:
+            try:
+                res = requests.get(
+                    f"https://127.0.0.1:{port}/entitlements/v1/token",
+                    auth=auth, verify=False, timeout=1.25,
+                )
+                if res.status_code == 200:
+                    result["puuid"] = (res.json().get("subject") or "").strip()
+            except Exception:
+                pass
+
+        if expected_username and result["username"]:
+            if result["username"].strip().lower() != expected_username.strip().lower():
+                return None
+
+        result["found"] = bool(result["username"] or result["display_name"] or result["puuid"])
+        return result if result["found"] else None
 
     @classmethod
     def get_active_riot_account(cls, expected_username: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1211,9 +1336,22 @@ class ClientLauncher:
         the step that failed instead of surfacing as credentials going
         somewhere unexpected.
         """
-        LOGIN_PROGRESS["started_at"] = time.time()
-        LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
-        LOGIN_PROGRESS["stay_signed_in"] = None
+        with _LOGIN_START_LOCK:
+            age = time.time() - float(LOGIN_PROGRESS.get("started_at") or 0.0)
+            if LOGIN_PROGRESS.get("active") and age < 150.0:
+                active_user = LOGIN_PROGRESS.get("username") or "another account"
+                return {
+                    "success": False,
+                    "busy": True,
+                    "message": f"A login for {active_user} is already in progress.",
+                }
+
+            # Claim the login before doing any process work.  _set_login_stage
+            # keeps the claim until the verifier marks the attempt done/error.
+            LOGIN_PROGRESS["started_at"] = time.time()
+            LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
+            LOGIN_PROGRESS["stay_signed_in"] = None
+            LOGIN_PROGRESS["active"] = True
         _set_login_stage("opening", "Closing VALORANT and the Riot Client...", username)
 
         target_path = client_path or cls.detect_riot_client_path()
@@ -1320,4 +1458,3 @@ class ClientLauncher:
             )
         except Exception:
             pass
-

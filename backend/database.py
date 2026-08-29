@@ -185,7 +185,15 @@ class Database:
                 ("stay_signed_in", "1"),
                 # Start VALORANT by itself once a plain Login lands. Off by
                 # default - Login and Play stay distinct actions unless asked.
-                ("auto_launch_after_login", "0")
+                ("auto_launch_after_login", "0"),
+                # Native quick panel + lightweight FPS HUD.  The panel is
+                # summoned globally; the HUD starts in the top-right and can
+                # be repositioned while the panel is open.
+                ("overlay_enabled", "1"),
+                ("overlay_hotkey", "CTRL+SHIFT+F8"),
+                ("fps_enabled", "1"),
+                ("fps_x", ""),
+                ("fps_y", "")
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
