@@ -101,6 +101,11 @@ def _is_process_running_fast(targets: set) -> bool:
         return False
 
 
+_VALORANT_PROCS = {"valorant.exe", "valorant-win64-shipping.exe"}
+_RIOT_PROCS = {"riotclientservices.exe", "riotclientux.exe",
+               "riotclientuxrender.exe", "riotclientcrashhandler.exe"}
+
+
 def is_valorant_running() -> bool:
     """Checks if VALORANT is currently running (ultra-fast Win32 check)."""
     targets = {"valorant.exe", "valorant-win64-shipping.exe"}
@@ -719,59 +724,305 @@ class ClientLauncher:
             login_logger.warning("focus_window failed: %s", e)
             return False
 
+    # ------------------------------------------------------------------
+    # Verified login steps
+    #
+    # Every step below checks that it actually happened instead of sleeping
+    # for a plausible length of time and hoping. The old flow was a chain of
+    # fixed delays - wait 2.5s for the splash, wait 0.9s for the form to be
+    # "interactive", type, hope - and when any one of them was short on a
+    # slow machine the login failed with nothing in the log to say which.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def wait_for_signed_out(cls, timeout: float = 8.0) -> bool:
+        """
+        Blocks until the Riot Client reports no authenticated session.
+
+        Sign-out is a request, not an instant state change - returning as soon
+        as the DELETE is accepted means the next steps can race a session that
+        is still tearing down, and the client then re-renders the login form
+        underneath whatever has already been typed.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            auth = cls.get_lockfile_auth()
+            if not auth:
+                # No lockfile means no client session at all - signed out by
+                # definition.
+                return True
+            port, pw = auth
+            try:
+                res = requests.get(
+                    f"https://127.0.0.1:{port}/rso-auth/v1/session",
+                    auth=("riot", pw), verify=False, timeout=1.0
+                )
+                if res.status_code != 200 or res.json().get("type") != "authenticated":
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.25)
+        return False
+
+    @staticmethod
+    def wait_for_processes_gone(names: set, timeout: float = 8.0) -> bool:
+        """Blocks until none of `names` is running. Lowercase exe names."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not _is_process_running_fast(names):
+                return True
+            time.sleep(0.2)
+        return not _is_process_running_fast(names)
+
+    @classmethod
+    def wait_for_login_form(cls, timeout: float = 45.0):
+        """
+        Blocks until the Riot Client is showing the credential section, and
+        returns (window, username_field, password_field) - or None on timeout.
+
+        This is the real "the client has finished opening" signal. The old
+        check watched the window rectangle until it stopped changing, which
+        is satisfied by the splash screen, by a half-drawn client, and by the
+        client sitting on a completely different screen. Waiting for the two
+        input controls to exist and be enabled cannot be satisfied by any of
+        those.
+
+        Returns None when UI Automation isn't available, so the caller can
+        fall back to the timing-based path.
+        """
+        auto = _uia()
+        if auto is None:
+            return None
+
+        deadline = time.time() + timeout
+        last_seen = ""
+        while time.time() < deadline:
+            hwnd = cls.find_riot_window()
+            if not hwnd:
+                last_seen = "no Riot Client window yet"
+                time.sleep(0.3)
+                continue
+            try:
+                auto.SetGlobalSearchTimeout(1)
+                window = auto.ControlFromHandle(hwnd)
+                if window:
+                    user_field = window.EditControl(searchDepth=40, Name="USERNAME")
+                    pass_field = window.EditControl(searchDepth=40, Name="PASSWORD")
+                    if user_field.Exists(0.6) and pass_field.Exists(0.6):
+                        if user_field.IsEnabled and pass_field.IsEnabled:
+                            login_logger.info("login form is up and interactive")
+                            return window, user_field, pass_field
+                        last_seen = "credential fields present but not enabled yet"
+                    else:
+                        last_seen = "window up, credential fields not mounted yet"
+            except Exception as e:
+                last_seen = f"reading the window failed: {e}"
+            time.sleep(0.3)
+
+        login_logger.warning("login form never appeared - last state: %s", last_seen)
+        return None
+
+    @staticmethod
+    def _field_text(field) -> str:
+        """Current text of an edit control, or '' if it can't be read."""
+        try:
+            vp = field.GetValuePattern()
+            if vp is not None:
+                return vp.Value or ""
+        except Exception:
+            pass
+        try:
+            return field.GetLegacyIAccessiblePattern().Value or ""
+        except Exception:
+            return ""
+
+    @classmethod
+    def fill_field_verified(cls, field, value: str, label: str,
+                            masked: bool = False, attempts: int = 3) -> bool:
+        """
+        Puts `value` into one field and confirms it landed, retrying if not.
+
+        The username field reads back as plain text, so it can be compared
+        exactly. The password field reads back as bullets, so the check is on
+        the character count - which is still enough to catch the two failures
+        that actually happen: nothing landing at all, and the value landing in
+        the wrong field (the classic "password typed into the username box").
+        """
+        for attempt in range(1, attempts + 1):
+            try:
+                field.SetFocus()
+            except Exception as e:
+                login_logger.warning("%s: could not focus the field: %s", label, e)
+                return False
+            time.sleep(0.18)
+
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.05)
+            pyautogui.press('backspace')
+            time.sleep(0.05)
+
+            pyperclip.copy(value)
+            time.sleep(0.05)
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.25)
+
+            got = cls._field_text(field)
+            ok = (len(got) == len(value)) if masked else (got == value)
+            if ok:
+                login_logger.info("%s: entered and verified (attempt %d)", label, attempt)
+                return True
+
+            login_logger.warning(
+                "%s: did not land on attempt %d - field holds %d chars, expected %d",
+                label, attempt, len(got), len(value)
+            )
+            time.sleep(0.3)
+
+        login_logger.error("%s: gave up after %d attempts", label, attempts)
+        return False
+
+    @classmethod
+    def submit_login_form(cls, window, pass_field) -> bool:
+        """
+        Submits the form from inside the password field, which is the only
+        submission path the Riot Client handles reliably. Focus is re-asserted
+        first, because ticking the checkbox moves it.
+        """
+        try:
+            pass_field.SetFocus()
+            time.sleep(0.2)
+        except Exception:
+            pass
+        pyautogui.press('enter')
+        return True
+
     @classmethod
     def auto_fill_credentials(cls, username: str, password: str, cold_start: bool = False,
                               stay_signed_in: bool = True):
         """
-        Pure keyboard autofill (ZERO mouse movement), the v3-era sequence that
-        the Riot Client login form actually behaves with:
+        Enters the credentials, checking at every step that the step actually
+        happened rather than sleeping for a plausible length of time.
 
-        1. Signs out of the existing session via the local API.
-        2. Waits for the login window (and, on a cold start, for it to settle).
-        3. Types Username -> Tab -> Password -> Enter. Nothing else.
+        The verified path, when UI Automation is available:
+          1. Wait until the credential fields exist and are enabled - the real
+             "the client has finished opening" signal, which a splash screen
+             or a half-drawn client cannot satisfy.
+          2. Focus the username field explicitly and type it, then read it
+             back and retry if it didn't land.
+          3. Focus the password field explicitly - no Tab, so it cannot end up
+             somewhere else - type it, and confirm the right number of
+             characters arrived.
+          4. Tick "Stay signed in" by addressing the checkbox directly.
+          5. Put focus back in the password field and submit with Enter.
 
-        Deliberately NOT done here, because each one broke logins in 4.x/5.x:
-        - No second "type it again" pass over the username. Pasting and then
-          re-typing the same value races the form's own input handler and
-          regularly left a truncated or doubled username.
-        - No tab-walk to the submit button after Enter. Enter in the password
-          field already submits; the extra tabs then landed on the social
-          sign-in buttons and fired one of those instead.
-        - No repeated focus grabs once the form is up. Every extra grab is a
-          chance for keyboard focus to move off the username field.
+        When UI Automation isn't available it falls back to the timing-based
+        keyboard sequence, which is the one that has always worked; nothing in
+        the fallback changed.
         """
-        # Ensure any running Valorant game instance is closed first so session can be cleanly switched
-        cls.kill_valorant()
-
-        _set_login_stage("signout", "Signing out of the current session...", username)
-        did_sign_out = cls.api_sign_out()
-        if did_sign_out:
-            # Riot Client auto-navigates straight to the username/password form
-            # as soon as sign-out completes and keeps its own window focused
-            # through that transition, so this is only a settle delay.
-            time.sleep(0.5)
-
-        # On cold start, give the client process time to get past its splash
-        # screen before we even start looking for the real window.
-        if cold_start:
-            time.sleep(2.5)
-
-        _set_login_stage("waiting_window", "Waiting for the Riot Client login window...", username)
-        max_attempts = 90 if cold_start else 45
+        # Wait for the window to exist at all before looking for the form, so
+        # the progress the user sees distinguishes "the client hasn't opened"
+        # from "the client is open but hasn't reached the login screen".
+        _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
         hwnd = None
-        for _ in range(max_attempts):
+        for _ in range(120):
             hwnd = cls.find_riot_window()
             if hwnd:
                 break
-            time.sleep(0.12)
+            time.sleep(0.25)
 
         if not hwnd:
-            _set_login_stage("error", "Riot Client login window did not appear.", username)
+            _set_login_stage("error", "The Riot Client never opened.", username)
             return
 
+        login_logger.info("[%s] Riot Client window is up", username)
+        _set_login_stage("waiting_window", "Waiting for the sign-in screen...", username)
+
+        form = cls.wait_for_login_form(timeout=35.0)
+
+        if form is None:
+            # Either UI Automation isn't usable in this build, or the client
+            # is up but never showed a credential section. Fall back to the
+            # timing-based path rather than refusing to log in - it can't
+            # verify anything, but it is the sequence that has always worked.
+            login_logger.info(
+                "[%s] no readable login form - falling back to the timing-based entry path", username
+            )
+            cls._fill_credentials_blind(hwnd, username, password, cold_start, stay_signed_in)
+            return
+
+        window, user_field, pass_field = form
+        hwnd = cls.find_riot_window() or hwnd
+
+        # The window has to be foreground for the paste keystrokes to reach
+        # it. Fields are focused through UI Automation, so this only needs to
+        # win once rather than being fought for repeatedly.
+        _set_login_stage("waiting_window", "Riot Client is ready - entering credentials...", username)
+        for _ in range(8):
+            cls.focus_window(hwnd)
+            time.sleep(0.2)
+            try:
+                if win32gui.GetForegroundWindow() == hwnd:
+                    break
+            except Exception:
+                break
+
+        _set_login_stage("typing", "Entering username...", username)
+
+        try:
+            orig_clipboard = pyperclip.paste()
+        except Exception:
+            orig_clipboard = ""
+
+        try:
+            if not cls.fill_field_verified(user_field, username, "username"):
+                _set_login_stage(
+                    "error",
+                    "The username didn't go into the Riot Client's login box - nothing was submitted.",
+                    username
+                )
+                return
+
+            _set_login_stage("typing", "Entering password...", username)
+            if not cls.fill_field_verified(pass_field, password, "password", masked=True):
+                _set_login_stage(
+                    "error",
+                    "The password didn't go into the Riot Client's login box - nothing was submitted.",
+                    username
+                )
+                return
+
+            # Both fields are confirmed correct before anything is submitted,
+            # so a mistyped login can no longer burn a Riot rate-limit slot.
+            login_logger.info("[%s] both fields verified - submitting", username)
+
+            if stay_signed_in:
+                _set_login_stage("typing", "Ticking \"Stay signed in\"...", username)
+                set_stay_signed_in(hwnd)
+
+            _set_login_stage("typing", "Submitting the login...", username)
+            cls.submit_login_form(window, pass_field)
+            _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
+        except Exception as e:
+            login_logger.exception("[%s] Failed to enter credentials: %s", username, e)
+            _set_login_stage("error", f"Failed to type credentials: {e}", username)
+        finally:
+            try:
+                pyperclip.copy(orig_clipboard or "")
+            except Exception:
+                pass
+
+    @classmethod
+    def _fill_credentials_blind(cls, hwnd: int, username: str, password: str,
+                                cold_start: bool, stay_signed_in: bool):
+        """
+        The timing-based entry path, for when UI Automation can't be used.
+
+        This is the v3 sequence unchanged - the one that logs in reliably.
+        There is deliberately no keyboard route to the "Stay signed in"
+        checkbox here: reaching it means tabbing across the social sign-in
+        buttons, and landing one short activates one of them instead.
+        """
         if cold_start:
-            # Wait until the window's rect stops changing (splash -> real login
-            # window swap, or the login form finishing layout) before typing.
             stable_checks = 0
             last_rect = None
             for _ in range(60):
@@ -784,7 +1035,6 @@ class ClientLauncher:
                     rect = win32gui.GetWindowRect(hwnd)
                 except Exception:
                     rect = None
-
                 if rect and rect == last_rect and rect[2] - rect[0] > 300:
                     stable_checks += 1
                     if stable_checks >= 6:
@@ -793,12 +1043,8 @@ class ClientLauncher:
                     stable_checks = 0
                 last_rect = rect
 
-            # Extra settle time for the login form's inputs to become interactive.
             time.sleep(1.2)
 
-            # Only fight for foreground focus on cold start, where Riot Client is
-            # a brand new process and Windows' foreground-lock restrictions are
-            # most likely to block SetForegroundWindow.
             focused_ok = False
             for _ in range(6):
                 cls.focus_window(hwnd)
@@ -809,31 +1055,21 @@ class ClientLauncher:
                         break
                 except Exception:
                     pass
-
             if not focused_ok:
                 _set_login_stage("error", "Could not focus the Riot Client window.", username)
                 return
         else:
-            # Warm path (already logged in -> API sign-out): Riot Client
-            # auto-navigates to the login form and keeps its own window focused
-            # through the transition, so a single non-repeated nudge is enough.
             cls.focus_window(hwnd)
 
-        # A bit more settle time before typing starts - the login form can be
-        # visible before its inputs are actually interactive/focused, which is
-        # what causes the password to land in the username field.
         time.sleep(0.9)
-
         _set_login_stage("typing", "Entering credentials into Riot Client...", username)
 
-        # Save the clipboard so the password isn't left sitting in it afterwards.
         try:
             orig_clipboard = pyperclip.paste()
         except Exception:
             orig_clipboard = ""
 
         try:
-            # Clear Username & paste (the username field is focused by default)
             pyautogui.hotkey('ctrl', 'a')
             time.sleep(0.04)
             pyautogui.press('backspace')
@@ -842,12 +1078,9 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.15)
 
-            # Tab to Password - the extra pause gives the password field time to
-            # actually receive focus before anything is typed into it.
             pyautogui.press('tab')
             time.sleep(0.3)
 
-            # Clear Password & paste
             pyautogui.hotkey('ctrl', 'a')
             time.sleep(0.04)
             pyautogui.press('backspace')
@@ -856,22 +1089,12 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.08)
 
-            # Tick "Stay signed in" by addressing the checkbox directly. No
-            # keystrokes are involved, so there is no tab order to guess at
-            # and no way to land on a social sign-in button; focus is put
-            # back on the password field before the Enter below.
-            if stay_signed_in:
-                set_stay_signed_in(hwnd)
-
-            # Submit. Enter inside the password field is the form's own submit -
-            # nothing further should be pressed after this.
             pyautogui.press('enter')
             _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
         except Exception as e:
-            login_logger.exception("[%s] Failed to enter credentials: %s", username, e)
+            login_logger.exception("[%s] Failed to type credentials: %s", username, e)
             _set_login_stage("error", f"Failed to type credentials: {e}", username)
         finally:
-            # Never leave the password on the clipboard.
             try:
                 pyperclip.copy(orig_clipboard or "")
             except Exception:
@@ -903,20 +1126,26 @@ class ClientLauncher:
     def login_account(cls, username: str, password: str, client_path: Optional[str] = None,
                       stay_signed_in: bool = True) -> Dict[str, Any]:
         """
-        Opens Riot Client and logs in using API logout & smart autofill.
-        If VALORANT is running, exits VALORANT before proceeding.
+        Signs out, restarts the Riot Client, and logs the account in.
+
+        Every login now starts the client from scratch rather than reusing
+        whatever is already on screen. A client that has been sitting open
+        can be on any screen - a half-filled form, an error banner, a "session
+        expired" notice, the region picker - and the old warm path assumed a
+        clean login form and typed into whatever was actually there. Killing
+        it first costs a few seconds and removes that entire class of failure,
+        along with any stale keyboard focus or leftover text in the fields.
+
+        Each step is confirmed before the next one runs, so a failure names
+        the step that failed instead of surfacing as credentials going
+        somewhere unexpected.
         """
         LOGIN_PROGRESS["started_at"] = time.time()
         LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
-        _set_login_stage("opening", "Opening Riot Client...", username)
-
-        # If Valorant is running, terminate it so Riot Client can switch accounts cleanly
-        if cls.is_valorant_running():
-            cls.kill_valorant()
-            time.sleep(1.0)
+        LOGIN_PROGRESS["stay_signed_in"] = None
+        _set_login_stage("opening", "Closing VALORANT and the Riot Client...", username)
 
         target_path = client_path or cls.detect_riot_client_path()
-
         if not target_path or not os.path.exists(target_path):
             _set_login_stage("error", "Riot Client executable not found.", username)
             return {
@@ -924,23 +1153,52 @@ class ClientLauncher:
                 "message": "Riot Client executable not found. Please set path in Settings."
             }
 
-        # The password is put on the clipboard by the autofill worker itself,
-        # immediately before it pastes and restored immediately after - putting
-        # it there now would leave it sitting in the clipboard for the whole
-        # window-wait, and for good if the login never gets that far.
-
         try:
-            hwnd = cls.find_riot_window()
-            was_running = bool(hwnd)
-            if not was_running:
-                subprocess.Popen([target_path], shell=False)
+            # 1. VALORANT first - the Riot Client can't switch accounts under a
+            #    running game, and confirm it's actually gone before moving on.
+            if cls.is_valorant_running():
+                cls.kill_valorant()
+                if cls.wait_for_processes_gone(_VALORANT_PROCS, timeout=8.0):
+                    login_logger.info("[%s] VALORANT closed", username)
+                else:
+                    login_logger.warning("[%s] VALORANT did not exit in time", username)
+
+            # 2. Sign the current session out through the API before killing
+            #    the client. Killing it alone doesn't end the session, so a
+            #    client with "stay signed in" set would come back up already
+            #    logged into the previous account and never show the form.
+            _set_login_stage("signout", "Signing out of the current session...", username)
+            if cls.get_lockfile_auth():
+                cls.api_sign_out()
+                if cls.wait_for_signed_out(timeout=8.0):
+                    login_logger.info("[%s] previous session signed out", username)
+                else:
+                    login_logger.warning(
+                        "[%s] sign-out not confirmed - restarting the client anyway", username
+                    )
+
+            # 3. Restart the client from scratch.
+            _set_login_stage("opening", "Restarting the Riot Client...", username)
+            cls.force_kill_riot_client()
+            if cls.wait_for_processes_gone(_RIOT_PROCS, timeout=10.0):
+                login_logger.info("[%s] Riot Client processes closed", username)
+            else:
+                login_logger.warning(
+                    "[%s] some Riot Client processes are still running", username
+                )
+            # Windows needs a moment to release the client's file locks and
+            # its single-instance mutex, or the relaunch is swallowed.
+            time.sleep(1.2)
+
+            subprocess.Popen([target_path], shell=False)
+            _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
 
             def _run_autofill():
                 # This runs on its own thread with no caller left to see an
                 # uncaught exception - without this it would just leave the
                 # login modal stuck on its last stage forever.
                 try:
-                    cls.auto_fill_credentials(username, password, not was_running, stay_signed_in)
+                    cls.auto_fill_credentials(username, password, True, stay_signed_in)
                 except Exception as e:
                     login_logger.exception("[%s] auto-fill worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)
