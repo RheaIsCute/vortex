@@ -7,7 +7,6 @@ rank icons, peak rank, account statuses (PLAYABLE, BANNED, SUSPENDED), and recen
 import sqlite3
 import json
 import os
-import re
 import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional

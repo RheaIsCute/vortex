@@ -10,7 +10,6 @@ import time
 import asyncio
 import threading
 import subprocess
-import json
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -280,7 +279,6 @@ async def run_batch_account_check():
     extracts Level, Region, Riot ID, Ranks, and Ban/Suspension Status,
     and force closes Riot Client after verification.
     """
-    global CHECK_PROGRESS
     accounts = db.get_all_accounts()
 
     # Skip accounts that have already been verified
@@ -582,7 +580,6 @@ async def add_account(account: AccountCreate, background_tasks: BackgroundTasks)
 @app.post("/api/accounts/check-all")
 async def check_all_accounts(background_tasks: BackgroundTasks):
     """Starts the sequential account verification process, skipping already checked accounts."""
-    global CHECK_PROGRESS
     if CHECK_PROGRESS["running"]:
         return {"success": False, "message": "Account check is already in progress"}
 
@@ -618,7 +615,6 @@ async def check_accounts_status():
 @app.post("/api/accounts/cancel-check")
 async def cancel_check_accounts():
     """Cancels the running batch account check and force-closes Riot Client."""
-    global CHECK_PROGRESS
     CHECK_PROGRESS["running"] = False
     CHECK_PROGRESS["message"] = "Verification cancelled. Riot Client closed."
     await asyncio.to_thread(launcher.force_kill_riot_client)
@@ -642,8 +638,6 @@ async def run_full_refresh() -> int:
 
     Shared by the manual "Sync All" button and the periodic auto-refresh.
     """
-    global LAST_FULL_REFRESH_AT
-
     # Repair ghost rows first (NULL/blank status -> PLAYABLE) so they're
     # included in the sync below.
     db.repair_ghost_accounts()
@@ -677,7 +671,6 @@ async def run_full_refresh() -> int:
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    LAST_FULL_REFRESH_AT = time.time()
     return len(tasks)
 
 
@@ -689,7 +682,6 @@ async def refresh_all_accounts():
 
 # How often the background auto-refresh sweeps the whole roster.
 AUTO_REFRESH_INTERVAL_SECONDS = 30 * 60
-LAST_FULL_REFRESH_AT = 0.0
 _auto_refresh_task = None
 
 
@@ -898,7 +890,6 @@ async def sync_active_account():
 
     accounts = db.get_all_accounts()
     act_user = (info.get("username") or "").lower()
-    act_display = (info.get("display_name") or "").lower()
 
     matched_acc = None
     for acc in accounts:
@@ -1805,11 +1796,10 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
 
     # The local game log updates as events happen, filling the gap before
     # Riot makes an exact match-details response available. It only reports
-    # what it can observe: kills/deaths and headshot *kills*.
+    # what it can observe: kills/deaths and the headshot-kill percentage.
     if log_live.get("available"):
         kills = int(log_live.get("kills", 0) or 0)
         deaths = int(log_live.get("deaths", 0) or 0)
-        headshot_kills = int(log_live.get("headshot_kills", 0) or 0)
         current.update({
             "available": True,
             "source": "game_log",

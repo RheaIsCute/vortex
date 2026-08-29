@@ -8,7 +8,6 @@ Uses HenrikDev API with user API key to fetch:
 """
 
 import aiohttp
-import asyncio
 import urllib.parse
 from typing import Dict, Any, Optional, List
 

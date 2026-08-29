@@ -25,7 +25,7 @@ import win32gui
 import win32con
 import win32process
 import win32api
-from typing import Optional, Dict, Any, Tuple, List, Callable
+from typing import Optional, Dict, Any, Tuple
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pyautogui.PAUSE = 0.04

@@ -756,7 +756,6 @@ class ValorantLiveClient:
         callers pass ``use_cache=False`` to bypass both reads and writes of the
         raw-details cache.
         """
-        global _MATCH_DETAILS_CACHE
         if use_cache:
             with _MATCH_DETAILS_LOCK:
                 cached = _MATCH_DETAILS_CACHE.get(match_id)
