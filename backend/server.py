@@ -1156,8 +1156,13 @@ _LIVE_SNAPSHOT_LOCK = threading.Lock()
 _LIVE_OWNER_PUUID = ""
 _LIVE_COMBAT = LiveCombatTracker()
 
-# Roster names don't change inside a match, so they're resolved once per match.
-_NAME_CACHE: Dict[str, Dict[str, str]] = {}
+# Roster names don't change inside a match, but Riot's name service dribbles
+# them out - blank for players it won't reveal yet - so each match id keeps a
+# growing map plus a retry budget rather than freezing the first reply.
+#   match_id -> {"names": {puuid: "Name#TAG"}, "tries": int, "next_at": float}
+_NAME_CACHE: Dict[str, Dict[str, Any]] = {}
+_NAME_MAX_TRIES = 15
+_NAME_RETRY_GAP = 2.0
 
 
 class ModeRequest(BaseModel):
@@ -1388,9 +1393,13 @@ def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_pu
     tier_label = stats.get("tier_label") or valorant_client.tier_label(tier)
     tier_icon = stats.get("tier_icon") or valorant_client.tier_icon(tier)
 
+    incognito = bool(identity.get("Incognito"))
     return {
         "puuid": subject,
-        "name": names.get(subject, "") or ("Hidden" if identity.get("Incognito") else ""),
+        # Streamer mode wins even if the name service still hands us the real
+        # name; otherwise it's blank until a later poll resolves it.
+        "name": "Hidden" if incognito else names.get(subject, ""),
+        "incognito": incognito,
         "agent": agent.get("name", ""),
         "agent_icon": agent.get("icon", ""),
         "team": player.get("TeamID", ""),
@@ -1444,16 +1453,26 @@ def _my_party_members(client) -> List[str]:
 
 
 def _cached_names(client, match_id: str, puuids: List[str]) -> Dict[str, str]:
-    cached = _NAME_CACHE.get(match_id)
-    if cached is not None:
-        return cached
-
-    names = client.resolve_names(puuids)
-    if names:
-        # One entry per match is plenty - drop the oldest once it grows.
-        if len(_NAME_CACHE) > 8:
+    entry = _NAME_CACHE.get(match_id)
+    if entry is None:
+        entry = {"names": {}, "tries": 0, "next_at": 0.0}
+        if len(_NAME_CACHE) > 8:  # one entry per match is plenty
             _NAME_CACHE.clear()
-        _NAME_CACHE[match_id] = names
+        _NAME_CACHE[match_id] = entry
+
+    names: Dict[str, str] = entry["names"]
+    wanted = [p for p in puuids if p]
+    everyone_named = bool(wanted) and all(names.get(p) for p in wanted)
+
+    # Keep asking until every player is named or the retry budget runs out
+    # (streamer-mode players never resolve, so this has to give up).
+    if not everyone_named and entry["tries"] < _NAME_MAX_TRIES and time.monotonic() >= entry["next_at"]:
+        fresh = client.resolve_names(wanted or puuids)
+        entry["tries"] += 1
+        entry["next_at"] = time.monotonic() + _NAME_RETRY_GAP
+        if fresh:
+            names.update(fresh)  # never drop a name that already resolved
+
     return names
 
 

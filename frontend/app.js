@@ -4267,7 +4267,7 @@ function renderRoster(el, players) {
 
                 <div class="dash-player-info">
                     <div class="dash-player-name-row">
-                        <span class="dash-player-name">${escapeHtml(p.name || (p.is_self ? "You" : "Hidden"))}</span>
+                        <span class="dash-player-name">${escapeHtml(p.name || (p.is_self ? "You" : (p.incognito ? "Hidden" : "Resolving…")))}</span>
                         ${p.is_self ? `<span class="dash-self-tag">YOU</span>` : ""}
                         ${partyChip}
                     </div>

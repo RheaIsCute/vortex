@@ -23,6 +23,7 @@ import base64
 import time
 import threading
 import subprocess
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 
 import requests
@@ -119,6 +120,7 @@ def parse_player_mmr(mmr_data: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     seasons = skills.get("SeasonalInfoBySeasonID", {}) or {}
+    act_id = current_act_id()
     peak_t = 0
     current_tier = 0
     current_rr = 0
@@ -139,12 +141,25 @@ def parse_player_mmr(mmr_data: Dict[str, Any]) -> Dict[str, Any]:
         total_wins += wins
         total_games += games
 
-        if c_tier > 0 or games > 0:
+        if act_id:
+            # Riot's seasonal dict isn't ordered, so only the entry for the
+            # act that's live right now decides the current rank. No entry (or
+            # a zeroed one) means Unranked this act, even with prior-act ranks.
+            if s_id == act_id:
+                current_tier = c_tier
+                current_rr = int(s_info.get("RankedRating") or 0)
+        elif c_tier > 0 or games > 0:
+            # Feed unavailable: fall back to "last season with activity wins".
             current_tier = c_tier
             current_rr = int(s_info.get("RankedRating") or 0)
 
     latest = mmr_data.get("LatestCompetitiveUpdate", {}) or {}
-    if latest.get("TierAfterUpdate"):
+    latest_season = latest.get("SeasonID", "") or ""
+    if act_id:
+        if latest_season == act_id and latest.get("TierAfterUpdate") is not None:
+            current_tier = int(latest.get("TierAfterUpdate") or 0)
+            current_rr = int(latest.get("RankedRatingAfterUpdate") or current_rr)
+    elif latest.get("TierAfterUpdate"):
         current_tier = int(latest.get("TierAfterUpdate") or current_tier)
         current_rr = int(latest.get("RankedRatingAfterUpdate") or current_rr)
 
@@ -522,16 +537,28 @@ class ValorantLiveClient:
     # -- names -----------------------------------------------------------
 
     def resolve_names(self, puuids: List[str]) -> Dict[str, str]:
+        """
+        PUUID -> "Name#TAG" for everyone the name service will actually name.
+        Riot returns an entry for every PUUID asked, but with GameName/TagLine
+        blank for players it won't reveal yet (early agent select) or won't
+        reveal at all (streamer mode). Those are skipped rather than turned
+        into a bare "#" - the caller retries and fills them in later.
+        """
         if not puuids:
             return {}
         try:
             res = self._remote("PUT", f"{self.pd}/name-service/v2/players", puuids, timeout=6.0)
             if res.status_code != 200:
                 return {}
-            return {
-                e.get("Subject", ""): f"{e.get('GameName', '')}#{e.get('TagLine', '')}"
-                for e in res.json()
-            }
+            out: Dict[str, str] = {}
+            for e in res.json():
+                subject = e.get("Subject", "")
+                game_name = (e.get("GameName") or "").strip()
+                tag_line = (e.get("TagLine") or "").strip()
+                if not subject or not game_name:
+                    continue
+                out[subject] = f"{game_name}#{tag_line}" if tag_line else game_name
+            return out
         except Exception:
             return {}
 
@@ -1749,6 +1776,40 @@ def get_seasons() -> Dict[str, str]:
         with _STATIC_LOCK:
             _STATIC_CACHE["seasons"] = labels
     return labels
+
+
+def current_act_id() -> str:
+    """
+    UUID of the act (competitive season) that's live right now, picked by
+    comparing the seasons feed's start/end windows against the wall clock.
+    Cached for the process. Returns "" if the feed can't be reached, in which
+    case callers fall back to their old best-guess behaviour.
+    """
+    with _STATIC_LOCK:
+        cached = _STATIC_CACHE.get("current_act")
+    if cached is not None:
+        return cached
+
+    data = _fetch_json("https://valorant-api.com/v1/seasons", timeout=8.0)
+    entries = (data or {}).get("data", []) or []
+    now = datetime.now(timezone.utc)
+    found = ""
+    for s in entries:
+        if not s.get("parentUuid"):  # episodes have no parent; acts do
+            continue
+        try:
+            start = datetime.fromisoformat((s.get("startTime") or "").replace("Z", "+00:00"))
+            end = datetime.fromisoformat((s.get("endTime") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if start <= now < end:
+            found = s.get("uuid", "") or ""
+            break
+
+    if entries:  # only cache once we actually got the feed
+        with _STATIC_LOCK:
+            _STATIC_CACHE["current_act"] = found
+    return found
 
 
 def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]]:
