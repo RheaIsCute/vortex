@@ -150,25 +150,40 @@
 
                         <!-- Tab: live match -->
                         <div class="dash-tab-panel is-active" data-panel="match">
-                            <!-- Scoreboard banner -->
-                            <div class="dash-scoreboard" id="dash-scoreboard" style="display:none;">
-                                <div class="dash-map-art" id="dash-map-art"></div>
-                                <div class="dash-score-inner">
-                                    <div class="dash-score-side dash-score-ally">
-                                        <span class="dash-score-label">Your Team</span>
-                                        <span class="dash-score-value" id="dash-score-ally">0</span>
+                            <!-- Match hero: rounds won/lost, round ledger, map -->
+                            <div class="dash-hero" id="dash-hero" style="display:none;">
+                                <div class="dash-hero-art" id="dash-map-art"></div>
+                                <div class="dash-hero-scrim"></div>
+                                <div class="dash-hero-body">
+                                    <div class="dash-hero-top">
+                                        <div class="dash-hero-map">
+                                            <span class="dash-map-name" id="dash-map-name">---</span>
+                                            <span class="dash-mode-name" id="dash-mode-name">---</span>
+                                        </div>
+                                        <div class="dash-hero-chips" id="dash-hero-chips"></div>
                                     </div>
-                                    <div class="dash-score-center">
-                                        <span class="dash-round-chip" id="dash-round-chip">Round 1</span>
-                                        <span class="dash-map-name" id="dash-map-name">---</span>
-                                        <span class="dash-mode-name" id="dash-mode-name">---</span>
+
+                                    <div class="dash-hero-score">
+                                        <div class="dash-score-side dash-score-ally">
+                                            <span class="dash-score-label">Rounds Won</span>
+                                            <span class="dash-score-value" id="dash-score-ally">0</span>
+                                        </div>
+                                        <div class="dash-score-mid">
+                                            <span class="dash-score-diff" id="dash-score-diff"></span>
+                                            <span class="dash-score-target" id="dash-score-target"></span>
+                                        </div>
+                                        <div class="dash-score-side dash-score-enemy">
+                                            <span class="dash-score-label">Rounds Lost</span>
+                                            <span class="dash-score-value" id="dash-score-enemy">0</span>
+                                        </div>
                                     </div>
-                                    <div class="dash-score-side dash-score-enemy">
-                                        <span class="dash-score-label">Enemy</span>
-                                        <span class="dash-score-value" id="dash-score-enemy">0</span>
-                                    </div>
+
+                                    <div class="dash-round-strip" id="dash-round-strip"></div>
                                 </div>
                             </div>
+
+                            <!-- Your own line for the match that's running -->
+                            <div class="dash-me" id="dash-me" style="display:none;"></div>
 
                             <!-- Agent select countdown -->
                             <div class="dash-pregame-banner" id="dash-pregame-banner" style="display:none;">
@@ -193,6 +208,9 @@
                                 <h3 id="dash-idle-title">No live match</h3>
                                 <p id="dash-idle-text">Start a match below and this panel tracks it round by round.</p>
                             </div>
+
+                            <!-- Last match + this session, shown between games -->
+                            <div class="dash-recap" id="dash-recap" style="display:none;"></div>
 
                             <!-- Team rosters -->
                             <div class="dash-teams" id="dash-teams" style="display:none;">
@@ -663,6 +681,60 @@
                         </button>
                     </div>
                     <p class="field-help">Every login/check attempt is recorded here - useful if one fails and you need to see why.</p>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="fa-solid fa-display"></i> Launch Display Mode</label>
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-force-borderless">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Always launch in windowed borderless</strong>
+                            <span>Forces Display Mode before every launch, per account. Riot has to have seen an account on this PC once before this can apply to it.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label><i class="fa-solid fa-clone"></i> Settings Profile</label>
+                    <p class="field-help">
+                        Crosshair, sensitivity, keybinds and video settings live on this PC per-account -
+                        Riot doesn't sync them. Pick one account as the template and copy its settings onto others,
+                        automatically on every launch or on demand.
+                    </p>
+
+                    <div class="custom-select-wrapper">
+                        <i class="fa-solid fa-user select-icon"></i>
+                        <select id="settings-profile-account">
+                            <option value="">No profile account selected</option>
+                        </select>
+                    </div>
+
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-profile-autoapply">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Auto-apply on every launch</strong>
+                            <span>Copies the profile account's settings onto whichever account is about to play, right before VALORANT starts.</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-profile-copy-now">
+                        <div class="custom-select-wrapper">
+                            <i class="fa-solid fa-arrow-right-to-bracket select-icon"></i>
+                            <select id="settings-copy-target">
+                                <option value="">Copy to: whoever's signed in now</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-settings-now">
+                            <i class="fa-solid fa-copy"></i> Copy Now
+                        </button>
+                    </div>
+                    <p class="field-help" id="settings-profile-status"></p>
                 </div>
 
                 <div class="modal-footer">

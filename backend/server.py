@@ -12,6 +12,7 @@ import threading
 import subprocess
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +24,7 @@ from backend.scraper import StatScraper
 from backend.client_launcher import ClientLauncher
 from backend import client_launcher
 from backend import valorant_client
+from backend import game_config
 from backend.version import APP_VERSION
 from backend import updater
 
@@ -932,19 +934,26 @@ async def download_and_install_update():
     if not installer_path:
         return {"success": False, "message": "Failed to download the update. Check your connection and try again."}
 
-    launched = await asyncio.to_thread(updater.apply_and_relaunch, installer_path)
+    # The background updater has to confirm it is armed before Vortex will
+    # close. If it can't, the app stays open and the user gets the installer
+    # in Explorer - far better than an app that exits into nothing and has to
+    # be reinstalled by hand.
+    launched = await asyncio.to_thread(updater.apply_and_relaunch, installer_path, update_info["version"])
     if not launched:
-        # Fallback to reveal if silent spawn fails
         await asyncio.to_thread(updater.reveal_installer, installer_path)
         return {
             "success": True,
             "relaunching": False,
-            "message": f"Version {update_info['version']} downloaded. Run the installer to finish updating."
+            "message": f"Version {update_info['version']} downloaded, but the automatic "
+                       f"restart couldn't start. Vortex is staying open - run the installer "
+                       f"that just opened to finish updating."
         }
 
     # Schedule clean app exit after 1.2s so response reaches client
     def _exit_app():
         time.sleep(1.2)
+        # Releases the updater. It does nothing until this lands.
+        updater.commit_update()
         os._exit(0)
 
     threading.Thread(target=_exit_app, daemon=True).start()
@@ -1031,6 +1040,23 @@ class LockNowRequest(BaseModel):
     agent_id: str
 
 
+class GameConfigSettingsRequest(BaseModel):
+    force_borderless: Optional[bool] = None
+    autoapply: Optional[bool] = None
+    profile_account_id: Optional[int] = None  # 0 clears it
+
+
+class GameConfigCopyRequest(BaseModel):
+    source_account_id: int
+    target_account_id: Optional[int] = None  # omitted = whoever's signed in now
+    gameplay: bool = True
+    video: bool = True
+
+
+class GameConfigBorderlessRequest(BaseModel):
+    account_id: Optional[int] = None  # omitted = whoever's signed in now
+
+
 # Matchmaking start time. The party payload carries one, but it's only
 # trustworthy while the party is actually queueing - the fallback is the
 # moment this process first saw the party flip into MATCHMAKING.
@@ -1109,18 +1135,33 @@ def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, A
         stats = valorant_client.parse_player_mmr({})
 
     try:
-        combat = client.player_combat_summary(puuid, max_matches=2)
-        stats["kd"] = combat.get("kd", 0.0)
-        stats["hs_pct"] = combat.get("hs_pct", 0)
-        stats["kills"] = combat.get("kills", 0)
-        stats["deaths"] = combat.get("deaths", 0)
-        stats["assists"] = combat.get("assists", 0)
+        combat = client.player_combat_summary(puuid, max_matches=5)
     except Exception:
-        stats["kd"] = 0.0
-        stats["hs_pct"] = 0
-        stats["kills"] = 0
-        stats["deaths"] = 0
-        stats["assists"] = 0
+        combat = {}
+
+    # Store combat & form metrics from the last 5 matches
+    stats["kd_last5"] = combat.get("kd", 0.0)
+    stats["kda_last5"] = combat.get("kda", 0.0)
+    stats["hs_pct_last5"] = combat.get("hs_pct", 0)
+    stats["adr_last5"] = combat.get("adr", 0)
+    stats["acs_last5"] = combat.get("acs", 0)
+    stats["wins_last5"] = combat.get("wins", 0)
+    stats["losses_last5"] = combat.get("losses", 0)
+    stats["draws_last5"] = combat.get("draws", 0)
+    stats["winrate_last5"] = combat.get("winrate", 0)
+    stats["form_last5"] = combat.get("form", [])
+    stats["matches_analyzed"] = combat.get("matches_analyzed", 0)
+
+    # Use 5-match combat metrics for recent performance indicators
+    stats["kd"] = stats["kd_last5"]
+    stats["kda"] = stats["kda_last5"]
+    stats["hs_pct"] = stats["hs_pct_last5"]
+    stats["adr"] = stats["adr_last5"]
+    stats["acs"] = stats["acs_last5"]
+
+    # Party data across all analyzed matches
+    stats["parties"] = combat.get("parties") or {}
+    stats["match_parties"] = combat.get("match_parties") or {}
 
     if stats["tier"] == 0 and fallback_tier > 0:
         stats["tier"] = fallback_tier
@@ -1166,12 +1207,45 @@ def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_pu
         "peak_tier_icon": stats.get("peak_tier_icon", valorant_client.tier_icon(0)),
         "wins": stats.get("wins", 0),
         "games": stats.get("games", 0),
-        "winrate": stats.get("winrate", 0),
+        "winrate_lifetime": stats.get("winrate", 0),
+        "winrate": stats.get("winrate_last5", 0),
+        "winrate_last5": stats.get("winrate_last5", 0),
+        "wins_last5": stats.get("wins_last5", 0),
+        "losses_last5": stats.get("losses_last5", 0),
+        "draws_last5": stats.get("draws_last5", 0),
+        "form_last5": stats.get("form_last5", []),
+        "matches_analyzed": stats.get("matches_analyzed", 0),
         "kd": stats.get("kd", 0.0),
+        "kda": stats.get("kda", 0.0),
         "hs_pct": stats.get("hs_pct", 0),
+        "adr": stats.get("adr", 0),
+        "acs": stats.get("acs", 0),
         "is_self": subject == self_puuid,
         "locked": (player.get("CharacterSelectionState", "") == "locked"),
     }
+
+
+_MY_PARTY: Dict[str, Any] = {"at": 0.0, "members": []}
+
+
+def _my_party_members(client) -> List[str]:
+    """
+    PUUIDs in your current party. This is the one grouping Riot will state
+    outright, so it anchors the premade detection. Cached briefly - party
+    membership can't change mid-match and the snapshot already calls it.
+    """
+    if time.time() - _MY_PARTY["at"] < 8.0:
+        return _MY_PARTY["members"]
+    try:
+        members = [
+            (m.get("Subject") or "")
+            for m in (client.party().get("Members") or [])
+            if m.get("Subject")
+        ]
+    except Exception:
+        members = []
+    _MY_PARTY.update({"at": time.time(), "members": members})
+    return members
 
 
 def _cached_names(client, match_id: str, puuids: List[str]) -> Dict[str, str]:
@@ -1186,6 +1260,449 @@ def _cached_names(client, match_id: str, puuids: List[str]) -> Dict[str, str]:
             _NAME_CACHE.clear()
         _NAME_CACHE[match_id] = names
     return names
+
+
+# --------------------------------------------------------------------------
+# LIVE MATCH PROGRESS
+#
+# Riot publishes the running score through presence but never a round-by-round
+# history, and match-details stays empty until a match is actually over. So
+# the round ledger below is built by watching the score change while the
+# dashboard polls, and the personal scoreline is filled in the moment Riot
+# will answer for that match id.
+# --------------------------------------------------------------------------
+
+# How many rounds win the match, per queue. Modes without a round race (the
+# deathmatches, escalation, snowball) map to 0 and just don't show a target.
+ROUNDS_TO_WIN = {
+    "competitive": 13,
+    "unrated": 13,
+    "premier": 13,
+    "newmap": 13,
+    "onefa": 13,
+    "swiftplay": 5,
+    "spikerush": 4,
+}
+
+_MATCH_PROGRESS: Dict[str, Any] = {
+    "match_id": "",
+    "ally": 0,
+    "enemy": 0,
+    "rounds": [],
+    "started_at": 0.0,
+}
+
+# Best-effort probe for the live match's own stats. Ranked and unrated only
+# answer once the match ends, so this is retried slowly rather than per poll.
+_LIVE_PROBE: Dict[str, Any] = {"match_id": "", "next_at": 0.0, "data": None}
+_LIVE_PROBE_INTERVAL = 20.0
+
+# The match that just finished, resolved after the fact. Details take a few
+# seconds to appear, so the lookup is retried on a backoff before giving up.
+_LAST_MATCH: Dict[str, Any] = {
+    "watch_id": "", "match_id": "", "data": None, "next_at": 0.0, "tries": 0,
+}
+_LAST_MATCH_MAX_TRIES = 12
+
+# Everything played while this app has been running, for the session strip.
+_SESSION: Dict[str, Any] = {"puuid": "", "ids": [], "matches": [], "started_at": 0.0}
+
+
+def _side_for_round(starting_side: str, rounds_played: int) -> str:
+    """Which side you are on for the round after `rounds_played` completed ones."""
+    other = "Attacker" if starting_side == "Defender" else "Defender"
+    if rounds_played < 12:
+        return starting_side
+    if rounds_played < 24:
+        return other
+    # Overtime runs in pairs, alternating from the second half's side.
+    return other if ((rounds_played - 24) // 2) % 2 == 0 else starting_side
+
+
+def _track_rounds(match_id: str, ally: int, enemy: int, starting_side: str) -> List[Dict[str, Any]]:
+    """
+    Appends whatever rounds have completed since the last poll and returns the
+    full ledger. A match the dashboard joined late is seeded from the score
+    with the entries flagged `known: false`, because the order in which those
+    rounds fell simply isn't recoverable.
+    """
+    p = _MATCH_PROGRESS
+    total = ally + enemy
+
+    if p["match_id"] != match_id or ally < p["ally"] or enemy < p["enemy"]:
+        seeded = (
+            [{"n": 0, "won": True, "known": False, "side": ""} for _ in range(ally)] +
+            [{"n": 0, "won": False, "known": False, "side": ""} for _ in range(enemy)]
+        )
+        for idx, entry in enumerate(seeded):
+            entry["n"] = idx + 1
+        p.update({
+            "match_id": match_id, "ally": ally, "enemy": enemy,
+            "rounds": seeded, "started_at": time.time(),
+        })
+        return p["rounds"]
+
+    played = len(p["rounds"])
+    for _ in range(ally - p["ally"]):
+        played += 1
+        p["rounds"].append({
+            "n": played, "won": True, "known": True,
+            "side": _side_for_round(starting_side, played - 1),
+        })
+    for _ in range(enemy - p["enemy"]):
+        played += 1
+        p["rounds"].append({
+            "n": played, "won": False, "known": True,
+            "side": _side_for_round(starting_side, played - 1),
+        })
+
+    p["ally"], p["enemy"] = ally, enemy
+
+    # A ledger that drifted out of step with the score (a poll missed while
+    # the app was asleep) is trimmed back rather than left lying.
+    if len(p["rounds"]) > total:
+        p["rounds"] = p["rounds"][:total]
+    return p["rounds"]
+
+
+def _round_streak(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Length and kind of the run of rounds ending the ledger."""
+    if not rounds:
+        return {"count": 0, "won": False}
+    won = rounds[-1]["won"]
+    count = 0
+    for entry in reversed(rounds):
+        if entry["won"] != won:
+            break
+        count += 1
+    return {"count": count, "won": won}
+
+
+def _build_progress(match_id: str, ally: int, enemy: int, starting_side: str,
+                    current_side: str, queue_id: str) -> Dict[str, Any]:
+    """The rounds-won/lost header block for a match that's running."""
+    rounds = _track_rounds(match_id, ally, enemy, starting_side)
+    played = ally + enemy
+    target = ROUNDS_TO_WIN.get((queue_id or "").lower(), 0)
+
+    if played < 12:
+        half = "1st Half"
+    elif played < 24:
+        half = "2nd Half"
+    else:
+        half = f"Overtime {((played - 24) // 2) + 1}"
+    if target and target < 13:
+        half = ""
+
+    return {
+        "rounds_won": ally,
+        "rounds_lost": enemy,
+        "rounds_played": played,
+        "round_number": played + 1,
+        "rounds_to_win": target,
+        "match_point": bool(target and ally == target - 1 and ally > enemy),
+        "elim_point": bool(target and enemy == target - 1 and enemy > ally),
+        "diff": ally - enemy,
+        "half": half,
+        "streak": _round_streak(rounds),
+        "history": rounds[-30:],
+        "watched_for": int(time.time() - (_MATCH_PROGRESS["started_at"] or time.time())),
+        "current_side": current_side,
+        "starting_side": starting_side,
+    }
+
+
+def _live_probe(client, match_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Your own scoreline for the match in progress, when Riot will give it up.
+    Custom games answer live; ranked and unrated only once the match ends, so
+    a miss is normal and simply retried on a slow cadence.
+    """
+    p = _LIVE_PROBE
+    if p["match_id"] != match_id:
+        p.update({"match_id": match_id, "next_at": 0.0, "data": None})
+    if p["data"]:
+        return p["data"]
+    if time.time() < p["next_at"]:
+        return None
+
+    p["next_at"] = time.time() + _LIVE_PROBE_INTERVAL
+    p["data"] = valorant_client.personal_match_summary(client, match_id)
+    return p["data"]
+
+
+def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
+                queue_id: str) -> Optional[Dict[str, Any]]:
+    """
+    The "you, right now" card: agent and rank straight from the match, plus
+    your combat line. `source` says where the numbers came from - "live" when
+    they belong to this match, "recent" when they're your rolling average and
+    this match hasn't been published yet.
+    """
+    if not me:
+        return None
+
+    live = _live_probe(client, match_id) if match_id else None
+    block = {
+        "name": me.get("name", ""),
+        "agent": me.get("agent", ""),
+        "agent_icon": me.get("agent_icon", ""),
+        "level": me.get("level", 0),
+        "tier": me.get("tier", 0),
+        "tier_label": me.get("tier_label", "Unranked"),
+        "tier_icon": me.get("tier_icon", ""),
+        "rr": me.get("rr", 0),
+        "peak_tier_label": me.get("peak_tier_label", ""),
+        "peak_tier_icon": me.get("peak_tier_icon", ""),
+        "winrate_lifetime": me.get("winrate_lifetime", 0),
+        "winrate": me.get("winrate_last5", me.get("winrate", 0)),
+        "winrate_last5": me.get("winrate_last5", 0),
+        "wins_last5": me.get("wins_last5", 0),
+        "losses_last5": me.get("losses_last5", 0),
+        "form_last5": me.get("form_last5", []),
+        "matches_analyzed": me.get("matches_analyzed", 0),
+        "wins": me.get("wins", 0),
+        "games": me.get("games", 0),
+        "queue_id": queue_id,
+        "is_live": bool(live),
+    }
+
+    if live:
+        block.update({
+            "source": "live",
+            "kills": live.get("kills", 0),
+            "deaths": live.get("deaths", 0),
+            "assists": live.get("assists", 0),
+            "kd": live.get("kd", 0.0),
+            "kda": round((live.get("kills", 0) + live.get("assists", 0)) /
+                         max(1, live.get("deaths", 0)), 2),
+            "hs_pct": live.get("hs_pct", 0),
+            "adr": live.get("adr", 0),
+            "acs": live.get("acs", 0),
+            "headshots": live.get("headshots", 0),
+            "bodyshots": live.get("bodyshots", 0),
+            "legshots": live.get("legshots", 0),
+            "damage": live.get("total_damage", 0),
+            "rounds": live.get("rounds", 0),
+            "current_match_kd": live.get("kd", 0.0),
+            "current_match_hs_pct": live.get("hs_pct", 0),
+        })
+    else:
+        block.update({
+            "source": "recent",
+            "kills": me.get("kills", 0),
+            "deaths": me.get("deaths", 0),
+            "assists": me.get("assists", 0),
+            "kd": me.get("kd", 0.0),
+            "kda": me.get("kda", 0.0),
+            "hs_pct": me.get("hs_pct", 0),
+            "adr": me.get("adr", 0),
+            "acs": me.get("acs", 0),
+            "headshots": 0,
+            "bodyshots": 0,
+            "legshots": 0,
+            "damage": 0,
+            "rounds": 0,
+            "current_match_kd": me.get("kd", 0.0),
+            "current_match_hs_pct": me.get("hs_pct", 0),
+        })
+    return block
+
+
+def _record_session_match(puuid: str, summary: Dict[str, Any]) -> None:
+    """Adds a finished match to this app-session's running tally, once."""
+    if not summary:
+        return
+    if _SESSION["puuid"] != puuid:
+        _SESSION.update({"puuid": puuid, "ids": [], "matches": [], "started_at": time.time()})
+    mid = summary.get("match_id") or ""
+    if mid and mid in _SESSION["ids"]:
+        return
+    _SESSION["ids"].append(mid)
+    _SESSION["matches"].append(summary)
+    if len(_SESSION["matches"]) > 25:
+        _SESSION["ids"] = _SESSION["ids"][-25:]
+        _SESSION["matches"] = _SESSION["matches"][-25:]
+
+
+def _session_block() -> Dict[str, Any]:
+    """Aggregate of every match finished since the app started."""
+    matches = _SESSION["matches"]
+    if not matches:
+        return {"matches": 0}
+
+    kills = sum(m.get("kills", 0) for m in matches)
+    deaths = sum(m.get("deaths", 0) for m in matches)
+    assists = sum(m.get("assists", 0) for m in matches)
+    rounds = sum(m.get("rounds", 0) for m in matches) or 1
+    damage = sum(m.get("total_damage", 0) for m in matches)
+    shots = sum(m.get("shots", 0) for m in matches)
+    heads = sum(m.get("headshots", 0) for m in matches)
+
+    return {
+        "matches": len(matches),
+        "wins": sum(1 for m in matches if m.get("result") == "Win"),
+        "losses": sum(1 for m in matches if m.get("result") == "Loss"),
+        "draws": sum(1 for m in matches if m.get("result") == "Draw"),
+        "kills": kills,
+        "deaths": deaths,
+        "assists": assists,
+        "kd": round(kills / max(1, deaths), 2),
+        "kda": round((kills + assists) / max(1, deaths), 2),
+        "hs_pct": round(heads / shots * 100, 1) if shots else 0.0,
+        "adr": round(damage / rounds),
+        "acs": round(sum(m.get("acs", 0) for m in matches) / len(matches)),
+        "form": [m.get("result", "") for m in matches[-6:]],
+    }
+
+
+def _resolve_finished_match(client, in_match: bool, active_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Turns the match that just ended into a full scoreline. Details are only
+    published a few seconds after the last round, so the id is remembered and
+    retried on a backoff until it lands or the tries run out.
+    """
+    lm = _LAST_MATCH
+
+    if in_match and active_id:
+        if lm["watch_id"] != active_id:
+            lm.update({"watch_id": active_id, "next_at": 0.0, "tries": 0})
+        return lm["data"]
+
+    watch = lm["watch_id"]
+    if watch and watch != lm["match_id"]:
+        if time.time() >= lm["next_at"] and lm["tries"] < _LAST_MATCH_MAX_TRIES:
+            lm["tries"] += 1
+            lm["next_at"] = time.time() + min(4.0 * lm["tries"], 20.0)
+            summary = valorant_client.personal_match_summary(client, watch)
+            if summary:
+                lm.update({"match_id": watch, "data": summary, "watch_id": ""})
+                _record_session_match(client.puuid, summary)
+        elif lm["tries"] >= _LAST_MATCH_MAX_TRIES:
+            lm["watch_id"] = ""
+
+    return lm["data"]
+
+
+def _warm_player_stats(client, players: List[Dict[str, Any]]) -> None:
+    """
+    Rank + combat lookups are the slow half of a snapshot: ten players in
+    sequence is twenty-odd Riot round trips. They're independent, so the ones
+    that aren't cached yet are fetched together instead.
+    """
+    todo = []
+    for p in players:
+        subject = p.get("Subject", "")
+        if subject and subject not in _PLAYER_MMR_CACHE:
+            tier = (p.get("SeasonalBadgeInfo") or {}).get("Rank") or p.get("CompetitiveTier") or 0
+            todo.append((subject, tier))
+
+    if len(todo) < 2:
+        return
+    try:
+        with ThreadPoolExecutor(max_workers=min(10, len(todo))) as pool:
+            list(pool.map(lambda t: _get_player_stats(client, t[0], t[1]), todo))
+    except Exception:
+        pass
+
+
+def _apply_parties(roster: List[Dict[str, Any]], my_party: List[str]) -> None:
+    """
+    Marks who queued together, in place.
+
+    Your own party is exact - it comes straight from the party endpoint.
+    Everyone else is inferred from shared party ids in recent matches across
+    both teams (teammates and enemies).
+    """
+    parent: Dict[str, str] = {p["puuid"]: p["puuid"] for p in roster if p.get("puuid")}
+    if not parent:
+        return
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # 1. Your own party - known for certain.
+    confirmed = {m for m in my_party if m in parent}
+    known = sorted(confirmed)
+    for other in known[1:]:
+        union(known[0], other)
+
+    # 2. Everyone else, inferred from shared party ids in recent matches.
+    by_team: Dict[str, List[str]] = {}
+    for p in roster:
+        if p.get("puuid"):
+            by_team.setdefault(p.get("team", ""), []).append(p["puuid"])
+
+    # Aggregate all match party maps across the cached players
+    all_match_party_maps: List[Dict[str, str]] = []
+    for p in roster:
+        puuid = p.get("puuid", "")
+        if puuid and puuid in _PLAYER_MMR_CACHE:
+            mp = _PLAYER_MMR_CACHE[puuid].get("match_parties") or {}
+            for m_id, p_map in mp.items():
+                if isinstance(p_map, dict) and p_map not in all_match_party_maps:
+                    all_match_party_maps.append(p_map)
+
+    for team_puuids in by_team.values():
+        for i, a in enumerate(team_puuids):
+            pa = (_PLAYER_MMR_CACHE.get(a) or {}).get("parties") or {}
+            for b in team_puuids[i + 1:]:
+                pb = (_PLAYER_MMR_CACHE.get(b) or {}).get("parties") or {}
+                # Direct match party ID match
+                if any(pid and pb.get(mid) == pid for mid, pid in pa.items()):
+                    union(a, b)
+                    continue
+                # Lobby-wide match details party map match
+                for p_map in all_match_party_maps:
+                    if a in p_map and b in p_map and p_map[a] and p_map[a] == p_map[b]:
+                        union(a, b)
+                        break
+
+    groups: Dict[str, List[str]] = {}
+    for puuid in parent:
+        groups.setdefault(find(puuid), []).append(puuid)
+
+    numbered: Dict[str, int] = {}
+    next_id = 0
+    for root, members in groups.items():
+        if len(members) < 2:
+            continue
+        next_id += 1
+        for m in members:
+            numbered[m] = next_id
+
+    self_puuid = next((p.get("puuid") for p in roster if p.get("is_self")), "")
+    self_team = next((p.get("team") for p in roster if p.get("is_self")), "")
+
+    for p in roster:
+        puuid = p.get("puuid", "")
+        gid = numbered.get(puuid, 0)
+        group_members = groups.get(find(puuid), []) if gid else []
+        g_size = len(group_members)
+        is_self_party = puuid in confirmed and len(confirmed) > 1
+
+        p_type = "Duo" if g_size == 2 else ("Trio" if g_size == 3 else f"{g_size}-Stack") if gid else ""
+        if is_self_party:
+            badge = f"YOUR {p_type.upper()}"
+        elif gid:
+            is_ally = (p.get("team") == self_team) if self_team else (p.get("team", "").lower() in ("blue", "team_1"))
+            badge = f"{'TEAM' if is_ally else 'ENEMY'} {p_type.upper()}"
+        else:
+            badge = ""
+
+        p["party_group"] = gid
+        p["party_size"] = g_size if gid else 1
+        p["party_type"] = p_type
+        p["party_badge"] = badge
+        p["party_confirmed"] = is_self_party
 
 
 def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1211,6 +1728,13 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
     map_info = valorant_client.resolve_map(data.get("MapID", ""))
 
     remaining_ns = data.get("PhaseTimeRemainingNS", 0) or 0
+    queue_id = (presence.get("queueId", "") or "").lower()
+
+    _warm_player_stats(client, ally + enemy)
+    team = [_roster_entry(client, p, names, client.puuid) for p in ally]
+    enemy_roster = [_roster_entry(client, p, names, client.puuid) for p in enemy]
+    _apply_parties(team + enemy_roster, _my_party_members(client))
+    me = next((r for r in team if r.get("is_self")), None)
 
     return {
         "phase": "agent_select",
@@ -1218,8 +1742,10 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
         "map": map_info,
         "mode": valorant_client.resolve_mode(data.get("Mode", ""), presence.get("queueId", "")),
         "time_remaining": round(remaining_ns / 1_000_000_000, 1),
-        "team": [_roster_entry(client, p, names, client.puuid) for p in ally],
-        "enemy": [_roster_entry(client, p, names, client.puuid) for p in enemy],
+        "team": team,
+        "enemy": enemy_roster,
+        "me": _self_block(client, "", me, queue_id),
+        "progress": None,
         "score": {"ally": 0, "enemy": 0},
         "round": 0,
         "starting_side": starting_side,
@@ -1249,6 +1775,7 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
     if not self_team:
         self_team = "Blue"
 
+    _warm_player_stats(client, players)
     roster = [_roster_entry(client, p, names, client.puuid) for p in players]
     ally = [r for r in roster if r["team"] == self_team]
     enemy = [r for r in roster if r["team"] != self_team]
@@ -1278,6 +1805,10 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
             switches = ot_round // 2
             current_side = ("Attacker" if starting_side == "Defender" else "Defender") if (switches % 2 == 1) else starting_side
 
+    queue_id = (presence.get("queueId", "") or "").lower()
+    _apply_parties(ally + enemy, _my_party_members(client))
+    me = next((r for r in ally if r.get("is_self")), None)
+
     return {
         "phase": "in_match",
         "match_id": match_id,
@@ -1286,6 +1817,10 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "time_remaining": 0,
         "team": ally,
         "enemy": enemy,
+        "me": _self_block(client, match_id, me, queue_id),
+        "progress": _build_progress(
+            match_id, ally_score, enemy_score, starting_side, current_side, queue_id
+        ),
         "score": {"ally": ally_score, "enemy": enemy_score},
         "round": total_rounds + 1,
         "starting_side": starting_side,
@@ -1316,6 +1851,8 @@ def build_live_snapshot() -> Dict[str, Any]:
         "queue_label": "",
         "party": {},
         "match": None,
+        "last_match": None,
+        "session": {"matches": 0},
         "queue_elapsed": 0,
         "launch": valorant_client.launch_state(),
         "message": "No Riot Client session detected.",
@@ -1448,6 +1985,17 @@ def build_live_snapshot() -> Dict[str, Any]:
     except valorant_client.LiveClientError as e:
         snapshot["message"] = str(e)
 
+    # The scoreline for whatever finished most recently plus this session's
+    # running tally. Both outlive the match itself so the panel has something
+    # real to show between games.
+    try:
+        snapshot["last_match"] = _resolve_finished_match(
+            client, loop_state == "INGAME", core_match_id or ""
+        )
+    except Exception:
+        snapshot["last_match"] = None
+    snapshot["session"] = _session_block()
+
     if snapshot["match"]:
         snapshot["message"] = ""
     elif snapshot["party"].get("in_queue"):
@@ -1482,6 +2030,165 @@ def _connected_client():
             "VALORANT isn't running. Press Play first, then try again."
         )
     return client
+
+
+def _current_puuid() -> str:
+    """Best-effort puuid of whoever's signed into the Riot Client right now.
+    Only needs the Riot Client's lockfile, not the game itself running."""
+    try:
+        client = valorant_client.ValorantLiveClient()
+        if client.connect():
+            return client.puuid or ""
+    except Exception:
+        pass
+    return ""
+
+
+async def _apply_launch_prefs(puuid: str) -> None:
+    """
+    Applies this app's local-launch preferences - forced borderless display,
+    and (if armed) copying a chosen "profile" account's settings onto this
+    one - before the game reads its config on startup.
+
+    Runs synchronously when the account's local config folder already exists
+    (a returning account - this is a couple of small file writes, well under
+    a launch's normal latency). When it doesn't - a first-ever login for this
+    account on this PC, where Riot hasn't created the folder yet - the launch
+    is never blocked on it; a background watcher applies the preference the
+    moment the folder shows up instead.
+    """
+    if not puuid:
+        return
+
+    settings = db.get_settings()
+    force_border = settings.get("force_borderless", "1") != "0"
+    autoapply = settings.get("settings_autoapply", "0") == "1"
+    profile_id = settings.get("settings_profile_account_id", "") or ""
+
+    profile_puuid = ""
+    if autoapply and profile_id.isdigit():
+        prof = db.get_account_by_id(int(profile_id))
+        profile_puuid = (prof or {}).get("puuid", "") or ""
+
+    if not (force_border or profile_puuid):
+        return
+
+    def apply_now() -> None:
+        if profile_puuid and profile_puuid != puuid:
+            game_config.copy_settings(profile_puuid, puuid)
+        if force_border:
+            game_config.force_borderless(puuid)
+
+    if game_config.account_dir(puuid):
+        await asyncio.to_thread(apply_now)
+        return
+
+    def watch():
+        if game_config.wait_for_account(puuid, timeout=90.0):
+            apply_now()
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+# --------------------------------------------------------------------------
+# LOCAL GAME CONFIG - forced borderless + copying settings between accounts
+#
+# Riot doesn't expose crosshair/sensitivity/keybinds/video through any API,
+# so these act directly on the per-account config files under
+# %LOCALAPPDATA%\VALORANT\Saved\Config - see backend/game_config.py.
+# --------------------------------------------------------------------------
+
+@app.get("/api/game-config/settings")
+async def get_game_config_settings():
+    """
+    Current borderless/profile preferences, plus which stored accounts have
+    actually signed into VALORANT on this PC - the only ones that can serve
+    as a settings source or receive a copy right now.
+    """
+    settings = db.get_settings()
+    accounts = db.get_all_accounts()
+
+    def has_config(puuid: str) -> bool:
+        try:
+            return bool(puuid) and game_config.has_config(puuid)
+        except Exception:
+            return False
+
+    def build_status() -> List[Dict[str, Any]]:
+        return [{
+            "id": acc["id"],
+            "display_name": acc.get("display_name") or acc.get("username", ""),
+            "has_config": has_config(acc.get("puuid", "") or ""),
+        } for acc in accounts]
+
+    account_status = await asyncio.to_thread(build_status)
+    profile_id = settings.get("settings_profile_account_id", "") or ""
+
+    return {
+        "force_borderless": settings.get("force_borderless", "1") != "0",
+        "autoapply": settings.get("settings_autoapply", "0") == "1",
+        "profile_account_id": int(profile_id) if profile_id.isdigit() else None,
+        "accounts": account_status,
+    }
+
+
+@app.post("/api/game-config/settings")
+async def update_game_config_settings(req: GameConfigSettingsRequest):
+    updates: Dict[str, str] = {}
+    if req.force_borderless is not None:
+        updates["force_borderless"] = "1" if req.force_borderless else "0"
+    if req.autoapply is not None:
+        updates["settings_autoapply"] = "1" if req.autoapply else "0"
+    if req.profile_account_id is not None:
+        updates["settings_profile_account_id"] = str(req.profile_account_id) if req.profile_account_id else ""
+    if updates:
+        db.update_settings(updates)
+    return await get_game_config_settings()
+
+
+@app.post("/api/game-config/copy")
+async def copy_game_config(req: GameConfigCopyRequest):
+    """Copies crosshair/sensitivity/keybinds and/or video settings between two
+    stored accounts' local config, right now."""
+    src = db.get_account_by_id(req.source_account_id)
+    if not src or not src.get("puuid"):
+        return {"success": False, "message": "Source account not found or has no known PUUID yet - check it in once first."}
+
+    if req.target_account_id:
+        dst = db.get_account_by_id(req.target_account_id)
+        if not dst or not dst.get("puuid"):
+            return {"success": False, "message": "Target account not found or has no known PUUID yet - check it in once first."}
+        dst_puuid = dst["puuid"]
+    else:
+        dst_puuid = await asyncio.to_thread(_current_puuid)
+        if not dst_puuid:
+            return {"success": False, "message": "No account is signed into the Riot Client right now."}
+
+    result = await asyncio.to_thread(
+        game_config.copy_settings, src["puuid"], dst_puuid, req.gameplay, req.video
+    )
+    return result
+
+
+@app.post("/api/game-config/force-borderless")
+async def force_borderless_now(req: GameConfigBorderlessRequest):
+    """Applies windowed-borderless immediately, without waiting for the next launch."""
+    if req.account_id:
+        acc = db.get_account_by_id(req.account_id)
+        if not acc or not acc.get("puuid"):
+            return {"success": False, "message": "Account not found or has no known PUUID yet - check it in once first."}
+        puuid = acc["puuid"]
+    else:
+        puuid = await asyncio.to_thread(_current_puuid)
+        if not puuid:
+            return {"success": False, "message": "No account is signed into the Riot Client right now."}
+
+    result = await asyncio.to_thread(game_config.force_borderless, puuid)
+    if result is None:
+        return {"success": False, "message": "This account hasn't signed into VALORANT on this PC yet - log in and reach the main menu once first."}
+    if result is False:
+        return {"success": False, "message": "Couldn't write the settings file - is VALORANT currently running for this account?"}
+    return {"success": True, "message": "Set to windowed borderless."}
 
 
 @app.get("/api/live/session")
@@ -1588,21 +2295,20 @@ async def live_lock_now(req: LockNowRequest):
     """Locks an agent immediately - only works while agent select is open."""
     def _run():
         client = _connected_client()
-        match_id = client.pregame_match_id()
-        if not match_id:
-            raise valorant_client.LiveClientError("You're not in agent select right now.")
-        client.select_agent(req.agent_id, match_id)
-        return client.lock_agent(req.agent_id, match_id)
+        agent = valorant_client.agent_by_id(req.agent_id)
+        # Same verified select -> settle -> lock path the watcher uses, minus
+        # the wait for the phase to open: this is only pressed once it is.
+        return valorant_client.lock_agent_flow(
+            client, req.agent_id, agent.get("name", ""), wait_for_open=False
+        )
 
     try:
-        locked = await asyncio.to_thread(_run)
+        locked, message = await asyncio.to_thread(_run)
     except valorant_client.LiveClientError as e:
         return {"success": False, "message": str(e)}
 
-    agent = valorant_client.agent_by_id(req.agent_id)
-    if not locked:
-        return {"success": False, "message": f"Couldn't lock {agent.get('name') or 'that agent'} - it may be taken."}
-    return {"success": True, "message": f"Locked {agent['name']}."}
+    invalidate_live_snapshot()
+    return {"success": locked, "message": message}
 
 
 @app.get("/api/live/stats")
@@ -1630,6 +2336,7 @@ async def live_launch():
     settings = db.get_settings()
     client_path = settings.get("riot_client_path", "") or ""
 
+    await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
     result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
     invalidate_live_snapshot()
     return {**result, "launch": valorant_client.launch_state()}
@@ -1661,6 +2368,7 @@ async def background_login_then_play(account_id: int):
             if apply_account_update(account_id, update_payload):
                 return  # banned/suspended - don't launch
             await asyncio.sleep(1.5)
+            await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
             await asyncio.to_thread(valorant_client.launch_valorant, client_path)
             return
 
@@ -1690,6 +2398,7 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
             return {"success": True, "already_running": True, "switched": False,
                     "message": "VALORANT is already running for this account."}
 
+        await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
         result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
         if not result.get("success"):
             return {"success": False, "message": result.get("message") or

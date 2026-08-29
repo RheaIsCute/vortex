@@ -29,6 +29,35 @@ VERSION_CHECK_URLS = [
 ]
 REQUEST_TIMEOUT = 6.0
 
+# Environment variables the PyInstaller onefile bootloader uses to talk to the
+# child process it spawns. They MUST NOT leak into anything we launch during an
+# update: the bootloader treats a process that inherits _PYI_PARENT_PROCESS_LEVEL
+# as its own re-executed child and then verifies that its parent process runs the
+# same executable. When the new Vortex.exe is started by setup.exe/powershell.exe
+# that check fails and the app dies with
+#   "Security validation failure: parent process has different executable!"
+# The names below cover PyInstaller 5.x (_MEIPASS*) and 6.x (_PYI_*).
+# Handshake files. The background updater arms itself and writes READY_FLAG,
+# and then refuses to touch a single thing until the app writes GO_FLAG on its
+# way out. That ordering is what stops an update from killing an app that is
+# still running, or from exiting an app into an update that never started.
+_TMP = tempfile.gettempdir()
+READY_FLAG = os.path.join(_TMP, "vortex_update_ready.flag")
+GO_FLAG = os.path.join(_TMP, "vortex_update_go.flag")
+LOG_FILE = os.path.join(_TMP, "vortex_updater.log")
+INNO_LOG = os.path.join(_TMP, "vortex_inno_install.log")
+HANDOFF_TIMEOUT = 12.0
+
+PYI_ENV_VARS = (
+    "_MEIPASS",
+    "_MEIPASS2",
+    "_PYI_ARCHIVE_FILE",
+    "_PYI_APPLICATION_HOME_DIR",
+    "_PYI_PARENT_PROCESS_LEVEL",
+    "_PYI_SPLASH_IPC",
+    "_PYI_LINUX_PROCESS_NAME",
+)
+
 
 def check_for_update() -> Optional[Dict[str, Any]]:
     """
@@ -114,7 +143,26 @@ def download_installer(download_url: str, version: str = "", progress_cb=None) -
         suffix = f"-{version}" if version else ""
         installer_path = os.path.join(tmp_dir, f"VortexUpdateSetup{suffix}.exe")
 
-        with requests.get(download_url, stream=True, timeout=30) as res:
+        # Always pull a fresh copy from the site. A leftover file from an
+        # interrupted attempt would otherwise be re-used (or block the write)
+        # and the silent install would fail for no visible reason.
+        try:
+            if os.path.exists(installer_path):
+                os.remove(installer_path)
+        except OSError:
+            installer_path = os.path.join(
+                tmp_dir, f"VortexUpdateSetup{suffix}-{int(time.time())}.exe"
+            )
+
+        cache_bust = "&" if "?" in download_url else "?"
+        download_url = f"{download_url}{cache_bust}_t={int(time.time())}"
+
+        with requests.get(
+            download_url,
+            stream=True,
+            timeout=30,
+            headers={"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"},
+        ) as res:
             if res.status_code != 200:
                 return None
 
@@ -133,8 +181,18 @@ def download_installer(download_url: str, version: str = "", progress_cb=None) -
                         except Exception:
                             pass
 
-        if not os.path.exists(installer_path) or os.path.getsize(installer_path) == 0:
+        if not os.path.exists(installer_path) or os.path.getsize(installer_path) < 1024 * 100:
             return None
+
+        # Guard against a redirect/error page being saved as "the installer":
+        # a real Windows executable always starts with the "MZ" DOS signature.
+        with open(installer_path, "rb") as f:
+            if f.read(2) != b"MZ":
+                try:
+                    os.remove(installer_path)
+                except OSError:
+                    pass
+                return None
 
         return installer_path
     except Exception:
@@ -157,19 +215,68 @@ def reveal_installer(installer_path: str) -> bool:
             return False
 
 
-def apply_and_relaunch(installer_path: str) -> bool:
+def install_dir() -> str:
     """
-    Spawns a detached background updater that waits for the running
-    Vortex process to exit, runs the installer silently (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-),
-    relaunches the updated Vortex.exe, and cleans up temporary files.
+    Where this copy of Vortex actually lives. Handed to the installer as /DIR
+    so an update lands on top of the existing installation instead of laying
+    a second copy down somewhere else - which is how people ended up with
+    several Vortex installs and had to keep reinstalling by hand.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.normpath(os.path.dirname(sys.executable))
+    return ""
+
+
+def commit_update() -> None:
+    """
+    Green-lights the waiting background updater. It refuses to touch anything
+    until this file exists, so an app that decided *not* to exit (the handoff
+    never confirmed, the user cancelled) is never killed out from under itself.
+    Call this immediately before exiting, and nowhere else.
+    """
+    try:
+        with open(GO_FLAG, "w", encoding="utf-8") as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
+def apply_and_relaunch(installer_path: str, target_version: str = "") -> bool:
+    """
+    Spawns a detached background updater that waits for this process to exit,
+    installs the new build over the current one, and brings Vortex back up.
+
+    Returns True only once that script has confirmed it is running and armed.
+    A False here means nothing has been started and the app must stay open -
+    exiting on a spawn that never took hold is what left people with no Vortex
+    and a manual reinstall to do.
+
+    The script does nothing at all until commit_update() writes the go flag,
+    so a False return can never strand a still-running app.
+
+    target_version, when given, is checked against the version marker the
+    installer writes on a real completed install (see vortex_setup.iss). A
+    /VERYSILENT run can report exit code 0 while genuinely changing nothing -
+    an AV quarantining or blocking the freshly-downloaded, unsigned installer
+    mid-run is the usual cause - so the exit code alone was never proof the
+    files actually changed. A version mismatch is treated exactly like a
+    failed silent install and falls through to a visible retry.
     """
     try:
         tmp_dir = tempfile.gettempdir()
         updater_ps1 = os.path.join(tmp_dir, "vortex_updater.ps1")
         updater_vbs = os.path.join(tmp_dir, "vortex_updater.vbs")
 
+        for stale in (READY_FLAG, GO_FLAG):
+            try:
+                if os.path.exists(stale):
+                    os.remove(stale)
+            except OSError:
+                pass
+
         current_pid = os.getpid()
         exe_path = os.path.normpath(sys.executable) if getattr(sys, "frozen", False) else ""
+        current_dir = install_dir()
         local_app_data = os.environ.get("LOCALAPPDATA", "")
         program_files = os.environ.get("ProgramFiles", "")
         program_files_x86 = os.environ.get("ProgramFiles(x86)", "")
@@ -180,9 +287,13 @@ def apply_and_relaunch(installer_path: str) -> bool:
         x86_target = os.path.normpath(os.path.join(program_files_x86, "Vortex", "Vortex.exe"))
 
         norm_installer = os.path.normpath(installer_path)
+        ps_var_list = ", ".join(f"'{v}'" for v in PYI_ENV_VARS)
+        dir_arg = f' /DIR=\"{current_dir}\"' if current_dir else ""
 
         ps1_content = f"""# Vortex Automated Background Updater
-$logFile = "$env:TEMP\\vortex_updater.log"
+$logFile = "{LOG_FILE}"
+$readyFlag = "{READY_FLAG}"
+$goFlag = "{GO_FLAG}"
 $ErrorActionPreference = "SilentlyContinue"
 
 function Write-Log($msg) {{
@@ -191,103 +302,177 @@ function Write-Log($msg) {{
 }}
 
 "=== Vortex Automated Background Updater Started ===" | Out-File -FilePath $logFile -Encoding utf8
-Write-Log "Installer: '{norm_installer}'"
-Write-Log "Parent PID: {current_pid}"
+Write-Log "Installer:      '{norm_installer}'"
+Write-Log "Install dir:    '{current_dir}'"
+Write-Log "Target version: '{target_version}'"
+Write-Log "Parent PID:     {current_pid}"
 
-# Step 1: Wait up to 10 seconds for parent PID {current_pid} to exit
-$parentExited = $false
-for ($i = 0; $i -lt 20; $i++) {{
-    $p = Get-Process -Id {current_pid} -ErrorAction SilentlyContinue
-    if (-not $p) {{
-        $parentExited = $true
-        break
-    }}
+# Step 0: Scrub PyInstaller bootloader variables from this process. Everything
+# launched from here inherits this environment, and a stray
+# _PYI_PARENT_PROCESS_LEVEL makes a freshly started Vortex.exe believe it is a
+# bootloader child, check its parent, and abort with
+# "Security validation failure: parent process has different executable!".
+foreach ($v in @({ps_var_list})) {{
+    if (Test-Path "env:$v") {{ Remove-Item "env:$v" -Force -ErrorAction SilentlyContinue }}
+    [System.Environment]::SetEnvironmentVariable($v, $null, 'Process')
+}}
+
+# Step 1: Tell Vortex we are armed, then wait for its explicit go-ahead.
+# Without the go flag nothing below runs, so an app that changed its mind
+# about updating is never killed and never left uninstalled.
+New-Item -Path $readyFlag -ItemType File -Force | Out-Null
+Write-Log "Armed - waiting for the go flag."
+
+$go = $false
+for ($i = 0; $i -lt 120; $i++) {{
+    if (Test-Path $goFlag) {{ $go = $true; break }}
     Start-Sleep -Milliseconds 500
 }}
-
-if ($parentExited) {{
-    Write-Log "Parent process exited cleanly."
-}} else {{
-    Write-Log "Parent process did not exit in time, forcing process cleanup..."
+if (-not $go) {{
+    Write-Log "No go flag after 60s - Vortex is still running. Aborting without changes."
+    Remove-Item -Path $readyFlag -Force -ErrorAction SilentlyContinue
+    exit 0
 }}
+Write-Log "Go flag received."
 
-# Step 2: Forcefully terminate any remaining Vortex instances to release file locks
+# Step 2: Wait for the parent to actually exit, then clear any stragglers so
+# the installer isn't fighting a locked Vortex.exe.
+for ($i = 0; $i -lt 40; $i++) {{
+    if (-not (Get-Process -Id {current_pid} -ErrorAction SilentlyContinue)) {{ break }}
+    Start-Sleep -Milliseconds 500
+}}
 Get-Process -Name "Vortex" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds 700
 
-# Step 3: Run Inno Setup installer silently
-Write-Log "Executing installer silently..."
-$installProc = Start-Process -FilePath '{norm_installer}' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait -PassThru -ErrorAction SilentlyContinue
+# Step 3: Install over the existing copy. /DIR pins it to where Vortex already
+# lives so the update replaces the install instead of adding another one.
+Write-Log "Running the installer silently..."
+# Built as one string rather than an array: PowerShell 5.1 re-quotes array
+# elements that contain spaces, which mangles a quoted /DIR under Program Files.
+$installArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOCANCEL /LOG="{INNO_LOG}"{dir_arg}'
+$installProc = Start-Process -FilePath '{norm_installer}' -ArgumentList $installArgs -Wait -PassThru -ErrorAction SilentlyContinue
 $exitCode = if ($installProc) {{ $installProc.ExitCode }} else {{ -1 }}
-Write-Log "Installer exited with code: $exitCode"
-
+Write-Log "Installer exit code: $exitCode"
 Start-Sleep -Seconds 1
 
-# Step 4: Find installed Vortex.exe and prepare clean environment
-# Clear any inherited PyInstaller onefile variables to prevent "Security validation failure" on relaunch
-$env:_MEIPASS2 = $null
-$env:_MEIPASS = $null
-[System.Environment]::SetEnvironmentVariable('_MEIPASS2', $null, 'Process')
-[System.Environment]::SetEnvironmentVariable('_MEIPASS', $null, 'Process')
-Remove-Item env:\_MEIPASS2 -ErrorAction SilentlyContinue
-Remove-Item env:\_MEIPASS -ErrorAction SilentlyContinue
-
+# Step 4: Work out what to start. The copy we were launched from is the first
+# guess - the whole point of /DIR is that it is still the right path.
 $candidates = @(
+    '{exe_path}',
     '{default_target}',
     "$env:LOCALAPPDATA\\Programs\\Vortex\\Vortex.exe",
     '{local_target}',
-    '{exe_path}',
     '{alt_target}',
     '{x86_target}'
 )
 
-# Check Windows Registry for custom or exact install path
-$reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -eq "Vortex" }}
-if ($reg -and $reg.InstallLocation) {{
-    $regExe = Join-Path $reg.InstallLocation "Vortex.exe"
-    $candidates = @($regExe) + $candidates
+# Inno records DisplayName as "<AppName> version <AppVersion>", so an exact
+# match on "Vortex" never hits - hence the wildcard.
+$reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue |
+       Where-Object {{ $_.DisplayName -like "Vortex*" -and $_.InstallLocation }}
+foreach ($r in $reg) {{
+    $candidates = @((Join-Path $r.InstallLocation "Vortex.exe")) + $candidates
 }}
 
-$targetExe = ""
-foreach ($c in $candidates) {{
-    if ($c -and (Test-Path $c)) {{
-        $targetExe = $c
-        break
+function Find-Vortex {{
+    foreach ($c in $candidates) {{
+        if ($c -and (Test-Path $c)) {{ return $c }}
     }}
+    return ""
 }}
 
-if ($targetExe) {{
-    Write-Log "Launching updated Vortex from: $targetExe"
-    # Launch in fresh environment with no inherited PyInstaller bootloader tokens
-    Start-Process -FilePath "$targetExe"
-}} else {{
-    Write-Log "ERROR: Could not locate installed Vortex.exe to relaunch!"
+$targetExe = Find-Vortex
+
+# Step 4.5: A clean exit code is not proof the install actually did anything -
+# Defender or another AV silently blocking/quarantining the unsigned installer
+# mid-run is the usual way a /VERYSILENT run reports success while changing
+# nothing. The version marker Inno writes on a real completed install is the
+# actual check.
+$verified = $true
+$expectedVersion = '{target_version}'
+if ($exitCode -eq 0 -and $targetExe -and $expectedVersion) {{
+    $verified = $false
+    $marker = Join-Path (Split-Path -Parent $targetExe) "installed_version.txt"
+    $installedVersion = ""
+    for ($i = 0; $i -lt 6; $i++) {{
+        if (Test-Path $marker) {{
+            $installedVersion = (Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim()
+            if ($installedVersion -eq $expectedVersion) {{ $verified = $true; break }}
+        }}
+        Start-Sleep -Milliseconds 500
+    }}
+    Write-Log "Post-install version check: expected '$expectedVersion', found '$installedVersion', verified=$verified"
 }}
 
-# Step 5: Clean up temporary installer and scripts
+# Step 5: A failed or unverified silent install gets one visible run so the
+# user can see and answer whatever actually went wrong (elevation, antivirus,
+# a locked file) instead of the update silently no-op-ing.
+if ($exitCode -ne 0 -or -not $verified) {{
+    Write-Log "Silent install failed or unverified - showing the installer."
+    Start-Process -FilePath '{norm_installer}' -ArgumentList '/SP-' -Wait -ErrorAction SilentlyContinue
+    $targetExe = Find-Vortex
+}}
+
+# Step 6: Bring Vortex back, and confirm it actually came back. This is the
+# step that used to fail silently and leave nothing running at all.
+function Start-Vortex($path) {{
+    if (-not $path) {{ return $false }}
+    Write-Log "Launching: $path"
+    Start-Process -FilePath "$path" -WorkingDirectory (Split-Path -Parent "$path")
+    for ($i = 0; $i -lt 30; $i++) {{
+        Start-Sleep -Milliseconds 500
+        if (Get-Process -Name "Vortex" -ErrorAction SilentlyContinue) {{ return $true }}
+    }}
+    return $false
+}}
+
+$running = Start-Vortex $targetExe
+if (-not $running) {{
+    Write-Log "First launch attempt produced no process - retrying."
+    $running = Start-Vortex (Find-Vortex)
+}}
+
+# Step 7: Last resort. Whatever happened to the install, the user gets their
+# app back rather than an empty desktop and a manual reinstall.
+if (-not $running -and (Test-Path '{exe_path}')) {{
+    Write-Log "Falling back to the copy that was already installed."
+    $running = Start-Vortex '{exe_path}'
+}}
+if (-not $running) {{
+    Write-Log "ERROR: Vortex could not be started. Opening the installer for the user."
+    Start-Process -FilePath 'explorer.exe' -ArgumentList '/select,', '{norm_installer}'
+}}
+
+# Step 8: Clean up.
 Start-Sleep -Seconds 3
-Remove-Item -Path '{norm_installer}' -Force -ErrorAction SilentlyContinue
-Write-Log "Cleanup finished. Update cycle complete."
+Remove-Item -Path $readyFlag -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $goFlag -Force -ErrorAction SilentlyContinue
+if ($running) {{ Remove-Item -Path '{norm_installer}' -Force -ErrorAction SilentlyContinue }}
+Write-Log "Update cycle complete (relaunched: $running)."
 """
         with open(updater_ps1, "w", encoding="utf-8") as f:
             f.write(ps1_content)
 
-        vbs_content = f'CreateObject("Wscript.Shell").Run "powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass -File ""{updater_ps1}""", 0, False\n'
+        vbs_content = (
+            'CreateObject("Wscript.Shell").Run '
+            '"powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass '
+            f'-File ""{updater_ps1}""", 0, False\n'
+        )
         with open(updater_vbs, "w", encoding="utf-8") as f:
             f.write(vbs_content)
 
-        # Clean current process environment of PyInstaller internal bootloader variables
+        # Clean the environment handed to the updater of every PyInstaller
+        # bootloader variable, so the poisoned values never reach the installer
+        # or the relaunched Vortex.exe further down the process chain.
         clean_env = os.environ.copy()
-        clean_env.pop("_MEIPASS2", None)
-        clean_env.pop("_MEIPASS", None)
-        os.environ.pop("_MEIPASS2", None)
-        os.environ.pop("_MEIPASS", None)
+        for var in PYI_ENV_VARS:
+            clean_env.pop(var, None)
+            os.environ.pop(var, None)
 
         try:
             subprocess.Popen(["wscript.exe", updater_vbs], env=clean_env)
-            return True
         except Exception:
-            # Fallback to direct powershell spawn if wscript unavailable
+            # Fallback to a direct powershell spawn if wscript is unavailable.
             subprocess.Popen(
                 [
                     "powershell.exe",
@@ -302,6 +487,14 @@ Write-Log "Cleanup finished. Update cycle complete."
                 stderr=subprocess.DEVNULL,
                 env=clean_env
             )
-            return True
+
+        # Wait for the script to say it is alive. Everything after this point
+        # is safe; without it, the app would be exiting on faith.
+        deadline = time.time() + HANDOFF_TIMEOUT
+        while time.time() < deadline:
+            if os.path.exists(READY_FLAG):
+                return True
+            time.sleep(0.1)
+        return False
     except Exception:
         return False

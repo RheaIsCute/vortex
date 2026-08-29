@@ -593,23 +593,40 @@ class ValorantLiveClient:
             return {}
         return res.json()
 
-    def select_agent(self, agent_id: str, match_id: Optional[str] = None) -> bool:
+    def _pregame_post(self, verb: str, agent_id: str, match_id: str) -> Tuple[bool, Dict[str, Any]]:
+        """
+        select / lock share a shape: both answer with the freshly updated
+        pregame match. Handing that payload back means the caller can verify
+        the pick landed without paying for another round trip.
+        """
+        res = self._remote(
+            "POST", f"{self.glz}/pregame/v1/matches/{match_id}/{verb}/{agent_id}", timeout=4.0
+        )
+        try:
+            payload = res.json() or {}
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return res.status_code == 200, payload
+
+    def select_agent_ex(self, agent_id: str, match_id: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
         match_id = match_id or self.pregame_match_id()
         if not match_id:
-            return False
-        res = self._remote(
-            "POST", f"{self.glz}/pregame/v1/matches/{match_id}/select/{agent_id}", timeout=3.0
-        )
-        return res.status_code == 200
+            return False, {}
+        return self._pregame_post("select", agent_id, match_id)
+
+    def lock_agent_ex(self, agent_id: str, match_id: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
+        match_id = match_id or self.pregame_match_id()
+        if not match_id:
+            return False, {}
+        return self._pregame_post("lock", agent_id, match_id)
+
+    def select_agent(self, agent_id: str, match_id: Optional[str] = None) -> bool:
+        return self.select_agent_ex(agent_id, match_id)[0]
 
     def lock_agent(self, agent_id: str, match_id: Optional[str] = None) -> bool:
-        match_id = match_id or self.pregame_match_id()
-        if not match_id:
-            return False
-        res = self._remote(
-            "POST", f"{self.glz}/pregame/v1/matches/{match_id}/lock/{agent_id}", timeout=3.0
-        )
-        return res.status_code == 200
+        return self.lock_agent_ex(agent_id, match_id)[0]
 
     # -- core game (live match) ------------------------------------------
 
@@ -686,9 +703,14 @@ class ValorantLiveClient:
         except Exception:
             return {}
 
-    def player_combat_summary(self, puuid: str, max_matches: int = 2) -> Dict[str, Any]:
-        """Computes K/D, kills, deaths, assists, and Headshot % from recent matches."""
-        result = {"kd": 0.0, "hs_pct": 0, "kills": 0, "deaths": 0, "assists": 0, "matches_analyzed": 0}
+    def player_combat_summary(self, puuid: str, max_matches: int = 5) -> Dict[str, Any]:
+        """Computes K/D, KDA, ADR, ACS, Headshot %, and Winrate across recent matches (default 5)."""
+        result = {
+            "kd": 0.0, "kda": 0.0, "hs_pct": 0, "kills": 0, "deaths": 0, "assists": 0,
+            "adr": 0, "acs": 0, "rounds": 0, "matches_analyzed": 0,
+            "wins": 0, "losses": 0, "draws": 0, "winrate": 0,
+            "form": [], "parties": {}, "match_parties": {}
+        }
         if not puuid or not self.pd:
             return result
         try:
@@ -706,7 +728,14 @@ class ValorantLiveClient:
             total_hs = 0
             total_bs = 0
             total_ls = 0
+            total_damage = 0
+            total_score = 0
+            total_rounds = 0
             valid_matches = 0
+            wins = 0
+            losses = 0
+            draws = 0
+            form_list: List[str] = []
 
             for h in history[:max_matches]:
                 m_id = h.get("MatchID")
@@ -716,32 +745,91 @@ class ValorantLiveClient:
                 if not details:
                     continue
 
-                p_entry = next((p for p in details.get("players", []) if p.get("subject") == puuid), None)
+                all_players = details.get("players", []) or []
+                p_entry = next((p for p in all_players if (p.get("subject") or p.get("Subject")) == puuid), None)
                 if not p_entry:
                     continue
 
-                p_stats = p_entry.get("stats") or {}
+                # Extract party IDs for all participants in this match to power duo detection
+                party_map: Dict[str, str] = {}
+                for other_p in all_players:
+                    s_id = other_p.get("subject") or other_p.get("Subject") or ""
+                    party_id = other_p.get("partyId") or other_p.get("PartyId") or ""
+                    if s_id and party_id:
+                        party_map[s_id] = party_id
+                if party_map:
+                    result["match_parties"][m_id] = party_map
+
+                my_party_id = p_entry.get("partyId") or p_entry.get("PartyId") or ""
+                if my_party_id:
+                    result["parties"][m_id] = my_party_id
+
+                # Match outcome calculation (Win / Loss / Draw)
+                p_team_id = p_entry.get("teamId") or p_entry.get("TeamId") or ""
+                teams = details.get("teams", []) or []
+                own_team = next((t for t in teams if (t.get("teamId") or t.get("TeamId") or "") == p_team_id), None)
+                other_teams = [t for t in teams if t is not own_team]
+
+                if len(teams) == 2 and own_team is not None:
+                    other_team = other_teams[0] if other_teams else {}
+                    pts_own = int(own_team.get("numPoints") if own_team.get("numPoints") is not None else (own_team.get("roundsWon") or 0))
+                    pts_other = int(other_team.get("numPoints") if other_team.get("numPoints") is not None else (other_team.get("roundsWon") or 0))
+                    if pts_own == pts_other:
+                        m_res = "Draw"
+                        draws += 1
+                    elif bool(own_team.get("won")) or pts_own > pts_other:
+                        m_res = "Win"
+                        wins += 1
+                    else:
+                        m_res = "Loss"
+                        losses += 1
+                else:
+                    score = int((p_entry.get("stats") or {}).get("score", 0) or 0)
+                    scores = sorted((int(((p.get("stats") or {}).get("score", 0)) or 0) for p in all_players), reverse=True)
+                    placement = scores.index(score) + 1 if score in scores else 0
+                    if placement == 1:
+                        m_res = "Win"
+                        wins += 1
+                    else:
+                        m_res = "Loss"
+                        losses += 1
+                form_list.append(m_res)
+
+                p_stats = p_entry.get("stats") or p_entry.get("Stats") or {}
                 total_kills += int(p_stats.get("kills") or 0)
                 total_deaths += int(p_stats.get("deaths") or 0)
                 total_assists += int(p_stats.get("assists") or 0)
+                total_score += int(p_stats.get("score") or 0)
 
-                for r in details.get("roundResults", []) or []:
+                rounds = details.get("roundResults", []) or []
+                total_rounds += len(rounds) or int(p_stats.get("roundsPlayed") or 0)
+                for r in rounds:
                     for ps in r.get("playerStats", []) or []:
-                        if ps.get("subject") == puuid:
+                        if (ps.get("subject") or ps.get("Subject")) == puuid:
                             for d in ps.get("damage", []) or []:
                                 total_hs += int(d.get("headshots") or 0)
                                 total_bs += int(d.get("bodyshots") or 0)
                                 total_ls += int(d.get("legshots") or 0)
+                                total_damage += int(d.get("damage") or 0)
                 valid_matches += 1
 
             if valid_matches > 0:
                 total_hits = total_hs + total_bs + total_ls
                 result["kd"] = round(total_kills / max(1, total_deaths), 2)
+                result["kda"] = round((total_kills + total_assists) / max(1, total_deaths), 2)
                 result["hs_pct"] = round((total_hs / max(1, total_hits)) * 100) if total_hits > 0 else 0
                 result["kills"] = total_kills
                 result["deaths"] = total_deaths
                 result["assists"] = total_assists
+                result["rounds"] = total_rounds
+                result["adr"] = round(total_damage / max(1, total_rounds)) if total_rounds else 0
+                result["acs"] = round(total_score / max(1, total_rounds)) if total_rounds else 0
                 result["matches_analyzed"] = valid_matches
+                result["wins"] = wins
+                result["losses"] = losses
+                result["draws"] = draws
+                result["winrate"] = round(wins / valid_matches * 100)
+                result["form"] = form_list
             return result
         except Exception:
             return result
@@ -808,14 +896,24 @@ _instalock_thread: Optional[threading.Thread] = None
 _instalock_stop = threading.Event()
 
 # Agent select needs a moment to finish coming up on the client before it
-# accepts a pick. Firing the instant the match id appears is what leaves the
-# character half-selected and unchangeable, so the watcher waits for the
-# pregame phase to report itself active and then gives the client a further
-# grace period before touching anything.
-INSTALOCK_READY_TIMEOUT = 15.0   # max wait for character_select_active
-INSTALOCK_SETTLE = 1.6           # grace once the phase is actually open
-INSTALOCK_SELECT_HOLD = 0.9      # gap between selecting and locking
-INSTALOCK_ATTEMPTS = 6
+# accepts a pick, and the pick itself has to be acknowledged by the server
+# before the lock can go out. Firing both back to back is what leaves the
+# character half-selected and unchangeable, or locks it server-side while the
+# client's own picker keeps spinning - so every step below is confirmed
+# against the pregame payload before the next one is sent.
+INSTALOCK_READY_TIMEOUT = 25.0     # max wait for character_select_active
+INSTALOCK_SETTLE = 1.25            # grace once the phase is actually open
+INSTALOCK_SELECT_HOLD = 1.15       # gap between a confirmed select and the lock
+INSTALOCK_SELECT_ATTEMPTS = 5
+INSTALOCK_LOCK_ATTEMPTS = 6
+INSTALOCK_CONFIRM_TIMEOUT = 2.5    # how long a select/lock gets to show up
+
+# Worst case the retries above run for about 40s, which still fits inside a
+# 100s agent select. The happy path is ~3s from the phase opening: settle,
+# select, confirm, hold, lock.
+
+# Stand-in for callers that have nothing to cancel with. Never set.
+_NEVER_SET = threading.Event()
 
 
 def _pregame_self(match: Dict[str, Any], puuid: str) -> Dict[str, Any]:
@@ -826,31 +924,193 @@ def _pregame_self(match: Dict[str, Any], puuid: str) -> Dict[str, Any]:
     return {}
 
 
-def _wait_for_agent_select(client: "ValorantLiveClient", match_id: str) -> Dict[str, Any]:
-    """
-    Blocks until the client reports agent select is genuinely open (or the
-    wait times out). Returns the last pregame payload seen.
-    """
-    deadline = time.time() + INSTALOCK_READY_TIMEOUT
-    match: Dict[str, Any] = {}
+def _pick_state(match: Dict[str, Any], puuid: str) -> Tuple[str, str]:
+    """(character id, selection state) for us, both lowercased."""
+    me = _pregame_self(match, puuid)
+    return (
+        (me.get("CharacterID") or "").lower(),
+        (me.get("CharacterSelectionState") or "").lower(),
+    )
 
-    while time.time() < deadline and not _instalock_stop.is_set():
+
+def _wait_for_agent_select(
+    client: "ValorantLiveClient",
+    match_id: str,
+    stop_evt: threading.Event,
+    timeout: float = INSTALOCK_READY_TIMEOUT,
+) -> Dict[str, Any]:
+    """
+    Blocks until the client reports agent select is genuinely open, then
+    returns the pregame payload. Only "character_select_active" counts as
+    open: every other phase means the server is still handing the match out,
+    and picking during one of those is exactly what desyncs the picker.
+    """
+    deadline = time.time() + timeout
+    match: Dict[str, Any] = {}
+    ready = False
+
+    while time.time() < deadline and not stop_evt.is_set():
         try:
             match = client.pregame_match(match_id)
         except LiveClientError:
             match = {}
 
-        phase = (match.get("PregameState") or "").lower()
-        # "character_select_active" is the only state that accepts a pick -
-        # "provisioned" means the server is still handing the match out.
-        if phase == "character_select_active":
+        if (match.get("PregameState") or "").lower() == "character_select_active":
+            ready = True
             break
-        if phase and phase != "provisioned":
-            break
-        _instalock_stop.wait(0.3)
+        # Already past the picker - we (or the client) locked something.
+        if _pick_state(match, client.puuid)[1] == "locked":
+            return match
+        stop_evt.wait(0.25)
 
-    _instalock_stop.wait(INSTALOCK_SETTLE)
+    if ready:
+        # The phase flips a beat before the game has finished drawing agent
+        # select. A pick sent inside that window registers on the server and
+        # never on screen, which is the "it locked but the UI is stuck" bug.
+        stop_evt.wait(INSTALOCK_SETTLE)
+        try:
+            match = client.pregame_match(match_id) or match
+        except LiveClientError:
+            pass
     return match
+
+
+def _confirm_pick(
+    client: "ValorantLiveClient",
+    match_id: str,
+    agent_id: str,
+    want: str,
+    stop_evt: threading.Event,
+    seed: Optional[Dict[str, Any]] = None,
+    timeout: float = INSTALOCK_CONFIRM_TIMEOUT,
+) -> bool:
+    """
+    Polls pregame until our own entry actually reports the requested agent in
+    the requested state ("selected" - locked counts too - or "locked"). The
+    POST response body is itself a fresh pregame payload, so it is checked
+    first and polling only happens if that hasn't caught up yet.
+    """
+    target = (agent_id or "").lower()
+    match = seed if isinstance(seed, dict) else {}
+    deadline = time.time() + timeout
+
+    while True:
+        cid, sel = _pick_state(match, client.puuid)
+        if cid == target and sel:
+            if sel == "locked" or want == "selected":
+                return True
+        if stop_evt.is_set() or time.time() >= deadline:
+            return False
+        stop_evt.wait(0.3)
+        try:
+            match = client.pregame_match(match_id)
+        except LiveClientError:
+            match = {}
+
+
+def lock_agent_flow(
+    client: "ValorantLiveClient",
+    agent_id: str,
+    agent_name: str = "",
+    match_id: Optional[str] = None,
+    stop_evt: Optional[threading.Event] = None,
+    wait_for_open: bool = True,
+    on_status=None,
+) -> Tuple[bool, str]:
+    """
+    Picks and locks an agent the way the client itself does it: select, wait
+    for the server to acknowledge the select, then lock - each step verified
+    against pregame rather than trusted from a 200. Returns (locked, message).
+    """
+    stop_evt = stop_evt if stop_evt is not None else _NEVER_SET
+    agent_name = agent_name or agent_by_id(agent_id).get("name") or "that agent"
+    target = (agent_id or "").lower()
+
+    def say(status: str, message: str) -> None:
+        if on_status:
+            try:
+                on_status(status, message)
+            except Exception:
+                pass
+
+    try:
+        match_id = match_id or client.pregame_match_id()
+    except LiveClientError as e:
+        return False, str(e)
+    if not match_id:
+        return False, "You are not in agent select right now."
+
+    if wait_for_open:
+        say("waiting", "Agent select found - waiting for the client to be ready...")
+        match = _wait_for_agent_select(client, match_id, stop_evt)
+    else:
+        try:
+            match = client.pregame_match(match_id)
+        except LiveClientError:
+            match = {}
+
+    if stop_evt.is_set():
+        return False, "Cancelled."
+
+    cid, sel = _pick_state(match, client.puuid)
+    if sel == "locked":
+        if cid == target:
+            return True, f"{agent_name} is already locked."
+        return False, "An agent is already locked in for this match."
+
+    say("locking", f"Locking {agent_name}...")
+
+    # -- 1. select, and confirm the server took it ----------------------
+    selected = bool(cid == target and sel)
+    for attempt in range(INSTALOCK_SELECT_ATTEMPTS):
+        if selected or stop_evt.is_set():
+            break
+        try:
+            ok, payload = client.select_agent_ex(agent_id, match_id)
+        except LiveClientError:
+            ok, payload = False, {}
+
+        # A rejected select is usually the phase not being open yet - but it
+        # can also land and answer non-200, so the state is the real answer.
+        selected = _confirm_pick(
+            client, match_id, agent_id, "selected", stop_evt,
+            seed=payload if ok else None,
+            timeout=INSTALOCK_CONFIRM_TIMEOUT if ok else 1.0,
+        )
+        if not selected:
+            stop_evt.wait(0.35 + attempt * 0.15)
+
+    if stop_evt.is_set():
+        return False, "Cancelled."
+    if not selected:
+        return False, (f"Couldn't pick {agent_name} - the client never took the "
+                       f"selection. Check the agent is unlocked on this account.")
+
+    # -- 2. let the client catch up before locking ----------------------
+    # Sending the lock in the same breath as the select is what makes the
+    # picker freeze on a half-applied pick. The pause is the actual fix.
+    stop_evt.wait(INSTALOCK_SELECT_HOLD)
+
+    # -- 3. lock, and confirm it stuck ----------------------------------
+    for attempt in range(INSTALOCK_LOCK_ATTEMPTS):
+        if stop_evt.is_set():
+            break
+        try:
+            ok, payload = client.lock_agent_ex(agent_id, match_id)
+        except LiveClientError:
+            ok, payload = False, {}
+
+        if _confirm_pick(client, match_id, agent_id, "locked", stop_evt,
+                         seed=payload if ok else None):
+            return True, f"Locked {agent_name}."
+
+        # Deliberately never re-sends the select here: re-picking an agent
+        # that is already selected is what makes the picker stop responding.
+        stop_evt.wait(0.4 + attempt * 0.2)
+
+    if stop_evt.is_set():
+        return False, "Cancelled."
+    return False, f"{agent_name} is picked but the lock didn't go through - lock it manually."
 
 
 def _instalock_worker():
@@ -862,6 +1122,11 @@ def _instalock_worker():
     handled_matches = set()
     client: Optional[ValorantLiveClient] = None
     connected_at = 0.0
+
+    def _status(status: str, message: str) -> None:
+        with _INSTALOCK_LOCK:
+            INSTALOCK["status"] = status
+            INSTALOCK["message"] = message
 
     while not _instalock_stop.is_set():
         with _INSTALOCK_LOCK:
@@ -894,56 +1159,24 @@ def _instalock_worker():
             continue
 
         with _INSTALOCK_LOCK:
-            INSTALOCK["status"] = "waiting"
             INSTALOCK["last_match_id"] = match_id
-            INSTALOCK["message"] = "Agent select found - waiting for the client..."
 
-        _wait_for_agent_select(client, match_id)
+        locked, message = lock_agent_flow(
+            client, agent_id, agent_name, match_id,
+            stop_evt=_instalock_stop, on_status=_status,
+        )
         if _instalock_stop.is_set():
             break
 
-        with _INSTALOCK_LOCK:
-            INSTALOCK["status"] = "locking"
-            INSTALOCK["message"] = f"Locking {agent_name}..."
-
-        locked = False
-        selected = False
-        for attempt in range(INSTALOCK_ATTEMPTS):
-            if _instalock_stop.is_set():
-                break
-            try:
-                # Select and lock are two separate calls on purpose: sending
-                # them back to back is what the client chokes on, so the pick
-                # is allowed to register before the lock goes out.
-                if not selected:
-                    selected = client.select_agent(agent_id, match_id)
-                    _instalock_stop.wait(INSTALOCK_SELECT_HOLD)
-
-                if client.lock_agent(agent_id, match_id):
-                    locked = True
-                    break
-
-                # The lock call can come back OK-looking while the client is
-                # still catching up, so the pregame state is the real answer.
-                state = _pregame_self(client.pregame_match(match_id), client.puuid)
-                if (state.get("CharacterSelectionState") or "").lower() == "locked":
-                    locked = True
-                    break
-            except LiveClientError:
-                pass
-
-            selected = False
-            _instalock_stop.wait(0.45 + attempt * 0.2)
-
         handled_matches.add(match_id)
+        if len(handled_matches) > 20:
+            handled_matches = {match_id}
+
         with _INSTALOCK_LOCK:
+            INSTALOCK["status"] = "locked" if locked else "failed"
+            INSTALOCK["message"] = message
             if locked:
-                INSTALOCK["status"] = "locked"
-                INSTALOCK["message"] = f"Locked {agent_name}."
                 INSTALOCK["locked_at"] = time.time()
-            else:
-                INSTALOCK["status"] = "failed"
-                INSTALOCK["message"] = f"Couldn't lock {agent_name} - it may already be taken."
 
         # Hold the result briefly so the dashboard can show it, then go back
         # to watching for the next agent select.
@@ -1568,6 +1801,21 @@ def _cached_match(client: "ValorantLiveClient", match_id: str) -> Optional[Dict[
             _MATCH_CACHE.clear()
         _MATCH_CACHE[match_id] = parsed
     return parsed
+
+
+def personal_match_summary(client: "ValorantLiveClient", match_id: str) -> Optional[Dict[str, Any]]:
+    """
+    This player's line for one match id - K/D/A, HS%, ADR, ACS and the round
+    score. Returns None while Riot has nothing to give: match-details stays
+    empty until a match has actually finished (customs are the exception and
+    do answer mid-match), so a miss here is expected, not an error.
+    """
+    if not match_id:
+        return None
+    try:
+        return _cached_match(client, match_id)
+    except Exception:
+        return None
 
 
 def _rank_block(tier: int, rr: int = 0, leaderboard: int = 0) -> Dict[str, Any]:

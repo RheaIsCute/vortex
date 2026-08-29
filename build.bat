@@ -11,15 +11,31 @@ pip install -r requirements.txt -q
 pip install pyinstaller -q
 
 echo.
-echo Building Vortex.exe (this can take a minute)...
-python -m PyInstaller build_exe.spec --clean
+echo Building dist\Vortex\ (this can take a minute)...
 
-if not exist dist\Vortex.exe (
+REM Wipe the previous output first. Without this PyInstaller refuses to write
+REM into a non-empty dist\Vortex ("output directory is not empty") and stops at
+REM the COLLECT step - and because the PREVIOUS build's Vortex.exe was still
+REM sitting there, the old existence check below passed and Inno went on to
+REM package a stale build under a new version number. Deleting it up front also
+REM means that if Vortex.exe exists afterwards, it is necessarily fresh.
+if exist dist\Vortex rmdir /s /q dist\Vortex
+
+REM --noconfirm so a leftover directory can never turn into an interactive
+REM prompt (or the refusal above) on a machine where dist wasn't cleared.
+python -m PyInstaller build_exe.spec --clean --noconfirm
+if errorlevel 1 (
+    echo.
+    echo Build FAILED - PyInstaller exited with an error.
+    exit /b 1
+)
+
+if not exist dist\Vortex\Vortex.exe (
     echo.
     echo Build FAILED - check the output above.
     exit /b 1
 )
-echo Build succeeded: dist\Vortex.exe
+echo Build succeeded: dist\Vortex\Vortex.exe
 
 set ISCC="%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
 if not exist %ISCC% set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"

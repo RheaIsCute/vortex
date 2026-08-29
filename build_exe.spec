@@ -1,9 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec for Vortex | Valorant Account Manager.
-Builds a single-file, windowed .exe. Run via:
+Builds a windowed one-DIRECTORY bundle. Run via:
     pyinstaller build_exe.spec --clean
-Output: dist/Vortex.exe
+Output: dist/Vortex/  (Vortex.exe + _internal/)
+
+Deliberately NOT --onefile. The onefile bootloader re-executes itself as a
+child process and passes _PYI_ARCHIVE_FILE / _PYI_PARENT_PROCESS_LEVEL to it
+through the environment. Those variables are inherited by everything the app
+launches, so during an auto-update they travelled
+    Vortex.exe -> wscript -> powershell -> VortexSetup.exe -> new Vortex.exe
+and the freshly installed Vortex.exe - sitting at the exact path recorded in
+_PYI_ARCHIVE_FILE - concluded it was a bootloader child, checked its parent
+process, found powershell.exe instead of itself, and aborted with
+    "Security validation failure: parent process has different executable!"
+The onedir bootloader performs no such re-exec and no parent verification, so
+it starts correctly even from a process whose environment still carries those
+variables. That is what makes one-click updating work for copies of Vortex
+that are already installed and still carry the old updater.
 """
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -40,17 +54,13 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="Vortex",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -58,4 +68,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="frontend/assets/logo.ico",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="Vortex",
 )

@@ -40,7 +40,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+; The build is now a one-directory bundle (Vortex.exe + _internal\), not a
+; single .exe - see build_exe.spec for why. Ship the whole folder.
+Source: "..\dist\Vortex\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+Source: "..\dist\Vortex\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"
@@ -48,10 +51,18 @@ Name: "{group}\Uninstall Vortex"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch Vortex"; Flags: nowait postinstall
+; skipifsilent: during a silent auto-update the background updater script
+; relaunches Vortex itself. Without this flag both would launch it, which is
+; why the update showed its error dialog twice.
+Filename: "{app}\{#AppExeName}"; Description: "Launch Vortex"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName}"; Flags: runhidden; RunOnceId: "KillVortex"
+
+[InstallDelete]
+; Wipe the previous build's _internal before copying the new one, so files
+; dropped between versions cannot linger and get loaded.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -84,5 +95,12 @@ begin
   if CurStep = ssPostInstall then
   begin
     RefreshIconCache;
+    // A plain marker the updater can read back after a silent install to
+    // confirm the files it just ran actually landed. A silent /VERYSILENT
+    // run can report exit code 0 while genuinely changing nothing - most
+    // commonly Windows Defender or another AV quarantining/blocking the
+    // freshly-downloaded, unsigned installer mid-run without failing the
+    // process outright - so the exit code alone isn't proof of anything.
+    SaveStringToFile(ExpandConstant('{app}\installed_version.txt'), '{#AppVersion}', False);
   end;
 end;

@@ -4,4 +4,4 @@ Bump this on every release before building the installer - the update
 checker compares this against the version published at asarii.xyz.
 """
 
-APP_VERSION = "4.3.8"
+APP_VERSION = "4.4.3"

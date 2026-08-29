@@ -181,6 +181,12 @@ const DOM = {
     btnCheckUpdate: document.getElementById("btn-check-update"),
     settingsLogPath: document.getElementById("settings-log-path"),
     btnOpenLog: document.getElementById("btn-open-log"),
+    settingsForceBorderless: document.getElementById("settings-force-borderless"),
+    settingsProfileAccount: document.getElementById("settings-profile-account"),
+    settingsProfileAutoapply: document.getElementById("settings-profile-autoapply"),
+    settingsCopyTarget: document.getElementById("settings-copy-target"),
+    btnCopySettingsNow: document.getElementById("btn-copy-settings-now"),
+    settingsProfileStatus: document.getElementById("settings-profile-status"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -243,10 +249,15 @@ const DOM = {
     dashLevel: document.getElementById("dash-level"),
     dashStateChip: document.getElementById("dash-state-chip"),
     dashStateLabel: document.getElementById("dash-state-label"),
-    dashScoreboard: document.getElementById("dash-scoreboard"),
+    dashHero: document.getElementById("dash-hero"),
+    dashHeroChips: document.getElementById("dash-hero-chips"),
     dashScoreAlly: document.getElementById("dash-score-ally"),
     dashScoreEnemy: document.getElementById("dash-score-enemy"),
-    dashRoundChip: document.getElementById("dash-round-chip"),
+    dashScoreDiff: document.getElementById("dash-score-diff"),
+    dashScoreTarget: document.getElementById("dash-score-target"),
+    dashRoundStrip: document.getElementById("dash-round-strip"),
+    dashMe: document.getElementById("dash-me"),
+    dashRecap: document.getElementById("dash-recap"),
     dashMapName: document.getElementById("dash-map-name"),
     dashModeName: document.getElementById("dash-mode-name"),
     dashMapArt: document.getElementById("dash-map-art"),
@@ -412,7 +423,18 @@ async function installPendingUpdate() {
                 DOM.btnInstallUpdate.innerHTML = `<i class="fa-solid fa-arrows-rotate rotating"></i> Restarting...`;
             }
         } else {
-            showToast(data.message || "Update downloaded.", "info");
+            // The background updater couldn't arm itself, so Vortex stays open
+            // and the installer has been revealed in Explorer instead. Put the
+            // banner and button back into a state the user can act on.
+            showToast(data.message || "Update downloaded - run the installer to finish.", "warning");
+            if (DOM.updateBannerText) {
+                DOM.updateBannerText.innerHTML =
+                    `<i class="fa-solid fa-triangle-exclamation"></i> v${state.pendingUpdate.latest_version} downloaded - run the installer that just opened to finish updating.`;
+            }
+            if (DOM.btnInstallUpdate) {
+                DOM.btnInstallUpdate.disabled = false;
+                DOM.btnInstallUpdate.innerHTML = "Try Again";
+            }
         }
     } catch (err) {
         showToast("Applying update and restarting...", "success");
@@ -557,6 +579,7 @@ function initEventListeners() {
     DOM.btnAutoDetectClient.addEventListener("click", autoDetectClientPath);
     if (DOM.btnCheckUpdate) DOM.btnCheckUpdate.addEventListener("click", () => checkForUpdate(true));
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
+    if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -2178,7 +2201,87 @@ function openSettingsModal() {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
     loadLoginLogPath();
+    loadGameConfigSettings();
     openModal(DOM.modalSettings);
+}
+
+// -- launch display mode + settings profile -------------------------------
+
+async function loadGameConfigSettings() {
+    if (DOM.settingsProfileStatus) DOM.settingsProfileStatus.textContent = "";
+    try {
+        const res = await fetch("/api/game-config/settings");
+        const data = await res.json();
+        state.gameConfig = data;
+
+        if (DOM.settingsForceBorderless) DOM.settingsForceBorderless.checked = !!data.force_borderless;
+        if (DOM.settingsProfileAutoapply) DOM.settingsProfileAutoapply.checked = !!data.autoapply;
+
+        const accounts = data.accounts || [];
+        const known = accounts.filter(a => a.has_config);
+
+        fillAccountSelect(DOM.settingsProfileAccount, accounts, data.profile_account_id,
+            "No profile account selected");
+        fillAccountSelect(DOM.settingsCopyTarget, known, null,
+            "Copy to: whoever's signed in now");
+
+        if (!known.length) {
+            DOM.settingsProfileStatus.textContent =
+                "No accounts have signed into VALORANT on this PC yet - log one in and reach the menus once, then its settings can be used as a profile.";
+        } else if (known.length < accounts.length) {
+            DOM.settingsProfileStatus.textContent =
+                `${known.length} of ${accounts.length} accounts have local settings on this PC and can be used.`;
+        }
+    } catch (err) {
+        state.gameConfig = null;
+    }
+}
+
+/** Fills a <select> with accounts, greying out ones with no local config
+ *  found yet rather than hiding them - a copy target just needs to have
+ *  logged in once, which the option's disabled state makes obvious. */
+function fillAccountSelect(selectEl, accounts, selectedId, placeholder) {
+    if (!selectEl) return;
+    const opts = [`<option value="">${escapeHtml(placeholder)}</option>`];
+    for (const acc of accounts) {
+        const disabled = acc.has_config === false ? "disabled" : "";
+        const suffix = acc.has_config === false ? " (never played here)" : "";
+        opts.push(`<option value="${acc.id}" ${disabled}
+            ${selectedId === acc.id ? "selected" : ""}>${escapeHtml(acc.display_name)}${suffix}</option>`);
+    }
+    selectEl.innerHTML = opts.join("");
+}
+
+async function copySettingsNow() {
+    const profileId = parseInt(DOM.settingsProfileAccount?.value || "", 10);
+    if (!profileId) {
+        showToast("Pick a profile account to copy from first.", "info");
+        return;
+    }
+    const targetId = parseInt(DOM.settingsCopyTarget?.value || "", 10) || null;
+
+    if (DOM.btnCopySettingsNow) {
+        DOM.btnCopySettingsNow.disabled = true;
+        DOM.btnCopySettingsNow.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Copying...`;
+    }
+    try {
+        const res = await fetch("/api/game-config/copy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source_account_id: profileId, target_account_id: targetId })
+        });
+        const data = await res.json();
+        showToast(data.message || (data.success ? "Copied." : "Couldn't copy settings."),
+                  data.success ? "success" : "error");
+        if (DOM.settingsProfileStatus) DOM.settingsProfileStatus.textContent = data.message || "";
+    } catch (err) {
+        showToast("Failed to reach the app's backend.", "error");
+    } finally {
+        if (DOM.btnCopySettingsNow) {
+            DOM.btnCopySettingsNow.disabled = false;
+            DOM.btnCopySettingsNow.innerHTML = `<i class="fa-solid fa-copy"></i> Copy Now`;
+        }
+    }
 }
 
 async function loadLoginLogPath() {
@@ -2210,12 +2313,25 @@ async function saveSettings() {
         }
     };
 
+    const gameConfigPayload = {
+        force_borderless: !!DOM.settingsForceBorderless?.checked,
+        autoapply: !!DOM.settingsProfileAutoapply?.checked,
+        profile_account_id: parseInt(DOM.settingsProfileAccount?.value || "", 10) || 0
+    };
+
     try {
-        const res = await fetch("/api/settings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-        });
+        const [res] = await Promise.all([
+            fetch("/api/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }),
+            fetch("/api/game-config/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(gameConfigPayload)
+            })
+        ]);
         const data = await res.json();
         if (data.success) {
             state.settings = data.settings;
@@ -2918,7 +3034,7 @@ function renderDashboard(live) {
     const inMatch = !!match && match.phase === "in_match";
     const inQueue = !!(live.party && live.party.in_queue);
 
-    DOM.dashScoreboard.style.display = inMatch ? "block" : "none";
+    DOM.dashHero.style.display = inMatch ? "block" : "none";
     DOM.dashPregameBanner.style.display = inPregame ? "flex" : "none";
     DOM.dashQueueBanner.style.display = (inQueue && !match) ? "flex" : "none";
     DOM.dashTeams.style.display = match ? "grid" : "none";
@@ -2932,17 +3048,9 @@ function renderDashboard(live) {
             "Start a match from the panel on the right and this tracks it round by round.";
     }
 
-    if (inMatch) {
-        DOM.dashScoreAlly.textContent = match.score.ally;
-        DOM.dashScoreEnemy.textContent = match.score.enemy;
-        const curSide = match.current_side || match.side || "Defender";
-        const curSideCls = curSide === "Defender" ? "side-defender" : "side-attacker";
-        const curSideIcon = curSide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
-        DOM.dashRoundChip.innerHTML = `Round ${match.round} &middot; <span class="dash-side-chip ${curSideCls}"><i class="fa-solid ${curSideIcon}"></i> ${curSide}</span>`;
-        DOM.dashMapName.textContent = match.map.name || "Unknown map";
-        DOM.dashModeName.textContent = match.mode || live.queue_label || "";
-        DOM.dashMapArt.style.backgroundImage = match.map.splash ? `url("${match.map.splash}")` : "none";
-    }
+    if (inMatch) renderMatchHero(match, live);
+    renderMeCard(match);
+    renderRecap(live, !!match);
 
     if (inPregame) {
         const startSide = match.starting_side || "Defender";
@@ -2965,19 +3073,10 @@ function renderDashboard(live) {
         renderRoster(DOM.dashRosterEnemy, match.enemy);
         DOM.dashTeamEnemyWrap.style.display = (match.enemy && match.enemy.length) ? "block" : "none";
 
-        const allyTitleEl = document.querySelector(".dash-team-ally");
-        const enemyTitleEl = document.querySelector(".dash-team-enemy");
         const allySide = match.current_side || match.side || match.starting_side || "Defender";
         const enemySide = allySide === "Defender" ? "Attacker" : "Defender";
-
-        if (allyTitleEl) {
-            const allySideIcon = allySide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
-            allyTitleEl.innerHTML = `<i class="fa-solid fa-user-group"></i> Your Team <span class="dash-side-pill ${allySide === "Defender" ? "side-defender" : "side-attacker"}"><i class="fa-solid ${allySideIcon}"></i> ${allySide}</span>`;
-        }
-        if (enemyTitleEl) {
-            const enemySideIcon = enemySide === "Defender" ? "fa-shield-halved" : "fa-crosshairs";
-            enemyTitleEl.innerHTML = `<i class="fa-solid fa-crosshairs"></i> Enemy Team <span class="dash-side-pill ${enemySide === "Defender" ? "side-defender" : "side-attacker"}"><i class="fa-solid ${enemySideIcon}"></i> ${enemySide}</span>`;
-        }
+        renderTeamTitle(".dash-team-ally", "fa-user-group", "Your Team", allySide, match.team);
+        renderTeamTitle(".dash-team-enemy", "fa-crosshairs", "Enemy Team", enemySide, match.enemy);
     }
 
     if (inQueue && DOM.dashQueueBannerSub) {
@@ -3068,6 +3167,241 @@ function stopQueueClock() {
     }
 }
 
+// -- match hero, personal line, rosters -----------------------------------
+
+const DEFAULT_UNRANKED_ICON =
+    "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+
+function sideMeta(side) {
+    return side === "Defender"
+        ? { cls: "side-defender", icon: "fa-shield-halved", label: "Defense" }
+        : { cls: "side-attacker", icon: "fa-crosshairs", label: "Attack" };
+}
+
+/** Rounds won/lost, the round-by-round ledger, and where the match stands. */
+function renderMatchHero(match, live) {
+    const p = match.progress || {};
+    const won = p.rounds_won != null ? p.rounds_won : match.score.ally;
+    const lost = p.rounds_lost != null ? p.rounds_lost : match.score.enemy;
+    const side = sideMeta(p.current_side || match.current_side || match.side || "Defender");
+
+    DOM.dashScoreAlly.textContent = won;
+    DOM.dashScoreEnemy.textContent = lost;
+    DOM.dashMapName.textContent = match.map.name || "Unknown map";
+    DOM.dashModeName.textContent = match.mode || live.queue_label || "";
+    DOM.dashMapArt.style.backgroundImage = match.map.splash ? `url("${match.map.splash}")` : "none";
+
+    const diff = won - lost;
+    DOM.dashScoreDiff.textContent = diff === 0 ? "TIED" : (diff > 0 ? `+${diff}` : `${diff}`);
+    DOM.dashScoreDiff.className = `dash-score-diff ${diff > 0 ? "is-ahead" : diff < 0 ? "is-behind" : ""}`;
+
+    const target = p.rounds_to_win || 0;
+    if (target) {
+        const need = Math.max(0, target - won);
+        const survive = Math.max(0, target - lost);
+        DOM.dashScoreTarget.innerHTML = need === 0
+            ? "match won"
+            : `<strong>${need}</strong> to win &middot; <strong>${survive}</strong> to lose`;
+    } else {
+        DOM.dashScoreTarget.textContent = "";
+    }
+
+    // Chips: round number, half, side, and whatever the score is screaming.
+    const chips = [];
+    chips.push(`<span class="dash-chip is-round">Round ${p.round_number || match.round}</span>`);
+    if (p.half) chips.push(`<span class="dash-chip">${escapeHtml(p.half)}</span>`);
+    chips.push(`<span class="dash-chip ${side.cls}"><i class="fa-solid ${side.icon}"></i> ${side.label}</span>`);
+    if (p.match_point) chips.push(`<span class="dash-chip is-hot"><i class="fa-solid fa-fire"></i> Match Point</span>`);
+    else if (p.elim_point) chips.push(`<span class="dash-chip is-cold"><i class="fa-solid fa-triangle-exclamation"></i> Elim Point</span>`);
+    if (p.streak && p.streak.count >= 2) {
+        chips.push(`<span class="dash-chip ${p.streak.won ? "is-win" : "is-loss"}">
+            <i class="fa-solid ${p.streak.won ? "fa-arrow-trend-up" : "fa-arrow-trend-down"}"></i>
+            ${p.streak.count} ${p.streak.won ? "won" : "lost"} in a row</span>`);
+    }
+    DOM.dashHeroChips.innerHTML = chips.join("");
+
+    // Round ledger. Rounds that finished before the dashboard was watching
+    // can't be placed in order, so they render muted rather than pretending.
+    const history = p.history || [];
+    DOM.dashRoundStrip.innerHTML = history.length
+        ? history.map(r => {
+            const label = r.known
+                ? `Round ${r.n}: ${r.won ? "won" : "lost"}${r.side ? ` on ${r.side.toLowerCase()}` : ""}`
+                : "Played before tracking started";
+            return `<span class="dash-pip ${r.won ? "is-won" : "is-lost"}${r.known ? "" : " is-unknown"}" title="${escapeHtml(label)}"></span>`;
+          }).join("")
+        : `<span class="dash-strip-empty">Round 1 in progress</span>`;
+}
+
+/** The "you, right now" card: agent, rank, and your combat line. */
+function renderMeCard(match) {
+    const me = match && match.me;
+    if (!me) {
+        DOM.dashMe.style.display = "none";
+        return;
+    }
+    DOM.dashMe.style.display = "block";
+
+    const isLive = me.source === "live";
+    const shots = (me.headshots || 0) + (me.bodyshots || 0) + (me.legshots || 0);
+    const pct = n => shots ? Math.round((n / shots) * 100) : 0;
+
+    const tiles = isLive ? [
+        { k: "CURRENT K / D / A", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
+        { k: "CURRENT MATCH KD", v: (me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
+        { k: "CURRENT HS %", v: `${me.hs_pct || 0}%`, c: "is-hs" },
+        { k: "MATCH ADR", v: me.adr || 0, c: "is-adr" },
+        { k: "MATCH ACS", v: me.acs || 0, c: "is-acs" }
+    ] : [
+        { k: "LAST 5G K / D / A", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
+        { k: "LAST 5G KD", v: (me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
+        { k: "LAST 5G HS %", v: `${me.hs_pct || 0}%`, c: "is-hs" },
+        { k: "AVG ADR", v: me.adr || 0, c: "is-adr" },
+        { k: "AVG ACS", v: me.acs || 0, c: "is-acs" }
+    ];
+
+    const wr5 = me.winrate_last5 != null ? me.winrate_last5 : me.winrate;
+    const form5 = me.form_last5 || [];
+
+    DOM.dashMe.innerHTML = `
+        <div class="dash-me-head">
+            ${me.agent_icon
+                ? `<img src="${me.agent_icon}" class="dash-me-agent" alt="${escapeHtml(me.agent || "")}" onerror="this.style.visibility='hidden';">`
+                : `<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
+            <div class="dash-me-id">
+                <span class="dash-me-title">${escapeHtml(me.agent || "Your agent")}</span>
+                <div class="dash-me-sub">
+                    <span>${escapeHtml(me.tier_label || "Unranked")}${me.rr ? ` · ${me.rr} RR` : ""}</span>
+                    <span class="dash-badge-wr5" title="Winrate over last 5 matches: ${me.wins_last5 || 0}W ${me.losses_last5 || 0}L">
+                        <i class="fa-solid fa-chart-simple"></i> ${wr5}% WR (Last 5)
+                    </span>
+                    ${form5.length ? `
+                        <div class="dash-me-form-mini" title="Last 5 match results">
+                            ${form5.map(r => `<span class="dash-form-pip is-${(r || '').toLowerCase()}">${(r || '?')[0]}</span>`).join('')}
+                        </div>` : ''}
+                </div>
+            </div>
+            ${me.tier_icon ? `<img src="${me.tier_icon}" class="dash-me-rank" alt="" onerror="this.style.display='none';">` : ""}
+            <span class="dash-me-flag ${isLive ? "is-live" : "is-recent"}"
+                  title="${isLive
+                      ? "Live tracking from your active match"
+                      : "Riot publishes exact combat line once the match completes; showing your rolling performance across last 5 matches"}">
+                <i class="fa-solid ${isLive ? "fa-circle-dot" : "fa-clock-rotate-left"}"></i>
+                ${isLive ? "CURRENT MATCH" : "LAST 5 MATCHES"}
+            </span>
+        </div>
+
+        <div class="dash-me-tiles">
+            ${tiles.map(t => `
+                <div class="dash-me-tile ${t.c}">
+                    <span class="dash-me-tile-v">${escapeHtml(String(t.v))}</span>
+                    <span class="dash-me-tile-k">${t.k}</span>
+                </div>`).join("")}
+        </div>
+
+        ${shots ? `
+            <div class="dash-hs-bar" title="${me.headshots} head · ${me.bodyshots} body · ${me.legshots} leg">
+                <span class="dash-hs-seg is-head" style="width:${pct(me.headshots)}%"></span>
+                <span class="dash-hs-seg is-body" style="width:${pct(me.bodyshots)}%"></span>
+                <span class="dash-hs-seg is-leg" style="width:${pct(me.legshots)}%"></span>
+            </div>
+            <div class="dash-hs-legend">
+                <span><i class="dot is-head"></i> Head ${pct(me.headshots)}%</span>
+                <span><i class="dot is-body"></i> Body ${pct(me.bodyshots)}%</span>
+                <span><i class="dot is-leg"></i> Leg ${pct(me.legshots)}%</span>
+                ${me.damage ? `<span class="dash-hs-dmg">${me.damage.toLocaleString()} dmg over ${me.rounds} rounds</span>` : ""}
+            </div>` : ""}
+    `;
+}
+
+/** Between matches: how the last one went, and how the session is going. */
+function renderRecap(live, hasMatch) {
+    const last = live.last_match;
+    const session = live.session || {};
+    if (hasMatch || (!last && !(session.matches > 0))) {
+        DOM.dashRecap.style.display = "none";
+        return;
+    }
+    DOM.dashRecap.style.display = "grid";
+
+    const lastHtml = last ? `
+        <div class="dash-recap-card is-${(last.result || "").toLowerCase()}">
+            <div class="dash-recap-head">
+                <span class="dash-recap-label">Last Match</span>
+                <span class="dash-recap-result">${escapeHtml(last.result || "")}</span>
+            </div>
+            <div class="dash-recap-score">${last.rounds_won} <span>-</span> ${last.rounds_lost}</div>
+            <div class="dash-recap-sub">
+                ${last.agent_icon ? `<img src="${last.agent_icon}" alt="" onerror="this.style.display='none';">` : ""}
+                ${escapeHtml(last.map || "")} · ${escapeHtml(last.mode || "")}
+            </div>
+            <div class="dash-recap-stats">
+                <span><strong>${last.kda}</strong> KDA</span>
+                <span><strong>${last.hs_pct}%</strong> HS</span>
+                <span><strong>${last.adr}</strong> ADR</span>
+                <span><strong>${last.acs}</strong> ACS</span>
+            </div>
+        </div>` : "";
+
+    const sessionHtml = session.matches > 0 ? `
+        <div class="dash-recap-card is-session">
+            <div class="dash-recap-head">
+                <span class="dash-recap-label">This Session</span>
+                <span class="dash-recap-result">${session.wins}W ${session.losses}L</span>
+            </div>
+            <div class="dash-recap-form">
+                ${(session.form || []).map(r =>
+                    `<span class="dash-form-pip is-${(r || "").toLowerCase()}">${(r || "?")[0]}</span>`
+                ).join("")}
+            </div>
+            <div class="dash-recap-stats">
+                <span><strong>${session.kills}/${session.deaths}/${session.assists}</strong></span>
+                <span><strong>${session.kd}</strong> KD</span>
+                <span><strong>${session.hs_pct}%</strong> HS</span>
+                <span><strong>${session.adr}</strong> ADR</span>
+            </div>
+        </div>` : "";
+
+    DOM.dashRecap.innerHTML = lastHtml + sessionHtml;
+}
+
+/** Team heading with its side and a count of the premades/duos on it. */
+function renderTeamTitle(selector, icon, text, side, players) {
+    const el = document.querySelector(selector);
+    if (!el) return;
+    const meta = sideMeta(side);
+    
+    // Group analysis for duos / trios
+    const groupMap = new Map();
+    (players || []).forEach(p => {
+        if (p.party_group) {
+            if (!groupMap.has(p.party_group)) groupMap.set(p.party_group, []);
+            groupMap.get(p.party_group).push(p.name || p.agent || "Player");
+        }
+    });
+
+    let partyBadges = "";
+    if (groupMap.size > 0) {
+        const details = [];
+        groupMap.forEach((members, gid) => {
+            const label = members.length === 2 ? "Duo" : (members.length === 3 ? "Trio" : `${members.length}-Stack`);
+            details.push(`${label} (${members.join(" + ")})`);
+        });
+        const summaryText = Array.from(groupMap.values()).map(m => m.length === 2 ? "1 Duo" : (m.length === 3 ? "1 Trio" : `${m.length}P`)).join(", ");
+        partyBadges = `
+            <span class="dash-party-count" title="${escapeHtml(details.join(" | "))}">
+                <i class="fa-solid fa-link"></i> ${summaryText} detected
+            </span>
+        `;
+    }
+
+    el.innerHTML = `
+        <i class="fa-solid ${icon}"></i> ${text}
+        <span class="dash-side-pill ${meta.cls}"><i class="fa-solid ${meta.icon}"></i> ${side}</span>
+        ${partyBadges}
+    `;
+}
+
 function renderRoster(el, players) {
     if (!el) return;
 
@@ -3076,63 +3410,84 @@ function renderRoster(el, players) {
         return;
     }
 
-    const DEFAULT_UNRANKED_ICON = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+    // Map group members for tooltips
+    const groupMembersMap = new Map();
+    players.forEach(p => {
+        if (p.party_group) {
+            if (!groupMembersMap.has(p.party_group)) groupMembersMap.set(p.party_group, []);
+            groupMembersMap.get(p.party_group).push(p.is_self ? "You" : (p.name || p.agent || "Player"));
+        }
+    });
 
     el.innerHTML = players.map(p => {
         const tierIcon = p.tier_icon || DEFAULT_UNRANKED_ICON;
         const tierLabel = p.tier_label || "Unranked";
         const hasRank = (p.tier && p.tier > 0);
-        const rankText = hasRank
-            ? `${tierLabel}${p.rr ? ` · ${p.rr} RR` : ""}`
-            : "Unranked";
-
         const hasPeak = (p.peak_tier && p.peak_tier > 0 && p.peak_tier !== p.tier);
-        const peakIcon = p.peak_tier_icon || DEFAULT_UNRANKED_ICON;
-        const peakLabel = p.peak_tier_label || "Unranked";
 
-        const hasKd = (p.kd && p.kd > 0);
-        const hasHs = (p.hs_pct && p.hs_pct > 0);
-        const hasWinrate = (p.games && p.games > 0);
+        // Premade chip with clear Duo/Trio label & members tooltip
+        const group = p.party_group || 0;
+        let partyChip = "";
+        if (group) {
+            const members = groupMembersMap.get(group) || [];
+            const pType = p.party_type || (p.party_size === 2 ? "Duo" : `${p.party_size}P`);
+            const pBadge = p.party_badge || (p.party_confirmed ? "YOUR DUO" : `${pType.toUpperCase()}`);
+            const tip = p.party_confirmed
+                ? `In your party with: ${members.filter(m => m !== "You").join(", ")}`
+                : `Premade ${pType} with: ${members.join(" + ")} (shared recent games)`;
+            
+            partyChip = `
+                <span class="dash-party-chip pg-${((group - 1) % 5) + 1} ${p.party_confirmed ? "is-confirmed" : ""}" title="${escapeHtml(tip)}">
+                    <i class="fa-solid ${p.party_confirmed ? "fa-user-group" : "fa-link"}"></i>${pBadge}
+                </span>`;
+        }
+
+        const stat = (cls, icon, value, title) => `
+            <span class="dash-player-stat-pill ${cls}" title="${escapeHtml(title)}">
+                <i class="fa-solid ${icon}"></i> ${escapeHtml(String(value))}
+            </span>`;
+
+        const wr5 = (p.winrate_last5 != null ? p.winrate_last5 : p.winrate) || 0;
+        const form5 = p.form_last5 || [];
+        const wrTitle = `Winrate over last 5 matches: ${p.wins_last5 || 0}W ${p.losses_last5 || 0}L${p.games > 0 ? ` · Career: ${p.winrate_lifetime || p.winrate}% (${p.wins}/${p.games})` : ""}`;
 
         return `
-            <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""}">
-                ${hasPeak ? `
-                    <div class="dash-player-peak-corner" title="Peak Rank: ${escapeHtml(peakLabel)}">
-                        <img src="${peakIcon}" class="dash-peak-corner-icon" alt="Peak" onerror="this.style.display='none';">
-                        <span>Peak ${escapeHtml(peakLabel)}</span>
-                    </div>
-                ` : ""}
-                ${p.agent_icon
-                    ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
-                    : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
+            <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}">
+                <div class="dash-player-lead">
+                    ${p.agent_icon
+                        ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
+                        : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
+                    ${p.locked ? `<span class="dash-player-locked" title="Locked in"><i class="fa-solid fa-lock"></i></span>` : ""}
+                </div>
+
                 <div class="dash-player-info">
                     <div class="dash-player-name-row">
                         <span class="dash-player-name">${escapeHtml(p.name || (p.is_self ? "You" : "Hidden"))}</span>
                         ${p.is_self ? `<span class="dash-self-tag">YOU</span>` : ""}
+                        ${partyChip}
                     </div>
                     <div class="dash-player-sub">
                         <span>${escapeHtml(p.agent || "Picking…")}</span>
                         ${p.level ? `<span class="dash-player-lvl">LV ${p.level}</span>` : ""}
+                        ${hasPeak ? `<span class="dash-player-peak" title="Peak rank">
+                            <img src="${p.peak_tier_icon || DEFAULT_UNRANKED_ICON}" alt="" onerror="this.style.display='none';">
+                            ${escapeHtml(p.peak_tier_label || "")}</span>` : ""}
                     </div>
                     <div class="dash-player-stats-row">
-                        <span class="dash-player-stat-pill ${hasRank ? "is-ranked" : "is-unranked"}" title="Current Rank">
-                            <i class="fa-solid fa-medal"></i> ${escapeHtml(rankText)}
-                        </span>
-                        <span class="dash-player-stat-pill is-kd" title="Recent K/D Ratio">
-                            <i class="fa-solid fa-crosshairs"></i> ${hasKd ? `${p.kd} K/D` : "-- K/D"}
-                        </span>
-                        <span class="dash-player-stat-pill is-hs" title="Recent Headshot Accuracy">
-                            <i class="fa-solid fa-bullseye"></i> ${hasHs ? `${p.hs_pct}% HS` : "-- HS"}
-                        </span>
-                        ${hasWinrate ? `
-                            <span class="dash-player-stat-pill is-wr" title="${p.wins} Wins / ${p.games} Games">
-                                <i class="fa-solid fa-chart-simple"></i> ${p.winrate}% WR
-                            </span>
-                        ` : ""}
+                        ${stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "K/D over last 5 matches")}
+                        ${stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Headshot accuracy over last 5 matches")}
+                        ${stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Average damage per round over last 5 matches")}
+                        ${stat("is-wr", "fa-chart-simple", `${wr5}% WR (5G)`, wrTitle)}
+                        ${form5.length ? `
+                            <span class="dash-player-form-pips" title="Recent 5 games: ${form5.join(', ')}">
+                                ${form5.slice(0, 5).map(r => `<span class="dash-form-pip is-${(r || '').toLowerCase()}">${(r || '?')[0]}</span>`).join('')}
+                            </span>` : ''}
                     </div>
                 </div>
-                <div class="dash-player-rank-wrap" title="${escapeHtml(tierLabel)}${p.rr ? ` (${p.rr} RR)` : ''}">
-                    <img src="${tierIcon}" class="dash-player-rank" alt="${escapeHtml(tierLabel)}" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
+
+                <div class="dash-player-rank" title="${escapeHtml(tierLabel)}${p.rr ? ` (${p.rr} RR)` : ""}">
+                    <img src="${tierIcon}" alt="${escapeHtml(tierLabel)}" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
+                    <span class="dash-player-rr">${hasRank && p.rr ? `${p.rr} RR` : (hasRank ? "" : "Unranked")}</span>
                 </div>
             </div>
         `;
