@@ -960,6 +960,29 @@ async def detect_client():
     return {"found": bool(path), "path": path or ""}
 
 
+@app.get("/api/diagnostics")
+async def diagnostics():
+    """
+    Whether the pieces the login depends on are actually working in this
+    build. UI Automation in particular behaves differently frozen than it
+    does from source, and it's the only way the "Stay signed in" checkbox
+    can be set - so if it ever stops loading, this says so plainly instead
+    of the checkbox silently never being ticked.
+    """
+    def probe():
+        uia = client_launcher._uia()
+        return {
+            "ui_automation": uia is not None,
+            "riot_window": bool(launcher.find_riot_window()),
+            "session_persisted": client_launcher.is_session_persisted(),
+            "stay_signed_in_enabled": _stay_signed_in_pref(),
+            "auto_launch_after_login": _auto_launch_pref(),
+            "version": APP_VERSION,
+        }
+
+    return await asyncio.to_thread(probe)
+
+
 @app.get("/api/login-log-path")
 async def login_log_path():
     """Where the login/check debug log lives, for Settings' 'Open Log' button."""

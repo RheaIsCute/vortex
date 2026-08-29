@@ -160,6 +160,95 @@ PRIVATE_SETTINGS_PATH = os.path.join(
 )
 
 
+def _uia():
+    """
+    The UI Automation module, or None where it isn't usable.
+
+    Imported lazily and never at module scope: it pulls in comtypes, which
+    initialises COM on import, and a failure to load it must degrade the
+    login to "no checkbox" rather than taking the whole launcher down.
+    """
+    try:
+        # comtypes writes generated typelib wrappers next to its own package.
+        # That path is read-only inside a frozen build, so it's told to work
+        # in memory instead and use the wrappers collected at build time.
+        if getattr(sys, "frozen", False):
+            try:
+                import comtypes.client
+                comtypes.client.gen_dir = None
+            except Exception:
+                pass
+        import uiautomation
+        return uiautomation
+    except Exception as e:
+        login_logger.warning("UI Automation unavailable: %s", e)
+        return None
+
+
+def set_stay_signed_in(hwnd: int) -> Optional[bool]:
+    """
+    Ticks the Riot Client's "Stay signed in" checkbox, and puts keyboard focus
+    back on the password field afterwards.
+
+    Uses UI Automation to address the checkbox directly rather than counting
+    Tab presses to reach it. The login form's tab order runs
+
+        password -> Facebook -> Google -> Apple -> Xbox -> PlayStation
+                 -> Stay signed in -> submit
+
+    so every keyboard-based attempt at this has been a guess at how many
+    social buttons are rendered, and landing one short means Space activates
+    a social sign-in button and derails the login entirely. That is what the
+    tab-walking versions were doing. The checkbox exposes a Toggle pattern,
+    so it can just be found by name and set - no keystrokes, no mouse, and
+    the current state is readable, so an already-ticked box is left alone
+    instead of being toggled back off.
+
+    Returns True if it ended up ticked, False if it couldn't be, None when UI
+    Automation isn't available at all. Never raises.
+    """
+    auto = _uia()
+    if auto is None or not hwnd:
+        login_logger.info("stay-signed-in: UI Automation unavailable, skipping the checkbox")
+        return None
+
+    try:
+        auto.SetGlobalSearchTimeout(3)
+        window = auto.ControlFromHandle(hwnd)
+        if not window:
+            return None
+
+        checkbox = window.CheckBoxControl(searchDepth=40, Name="Stay signed in")
+        if not checkbox.Exists(2):
+            login_logger.warning("stay-signed-in: checkbox not found in the login form")
+            return False
+
+        toggle = checkbox.GetTogglePattern()
+        if toggle is None:
+            return False
+
+        # ToggleState: 0 off, 1 on, 2 indeterminate. Toggle() flips, so an
+        # already-ticked box must be left alone or it comes back off.
+        if toggle.ToggleState != 1:
+            toggle.Toggle()
+            time.sleep(0.35)
+
+        ticked = checkbox.GetTogglePattern().ToggleState == 1
+
+        # Toggling moves keyboard focus onto the checkbox, and Enter is only
+        # a submit from inside the password field - so focus has to go back.
+        password_field = window.EditControl(searchDepth=40, Name="PASSWORD")
+        if password_field.Exists(1):
+            password_field.SetFocus()
+            time.sleep(0.25)
+
+        login_logger.info("stay-signed-in: checkbox ticked=%s", ticked)
+        return ticked
+    except Exception as e:
+        login_logger.warning("stay-signed-in: could not set the checkbox: %s", e)
+        return False
+
+
 def is_session_persisted() -> Optional[bool]:
     """
     True when Riot has a persisted login stored ("Stay signed in" is on),
@@ -767,23 +856,12 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.08)
 
-            # Tick "Stay signed in", which sits immediately after the password
-            # field in the form's tab order, then step straight back to the
-            # password field.
-            #
-            # Going back matters: Enter inside the password field is the form's
-            # own submit and is the one submission path that reliably works.
-            # Earlier versions pressed Enter from wherever the tab walk had
-            # landed, which is how logins ended up triggering a social sign-in
-            # button instead. This borrows focus for one keystroke and returns
-            # it, so the submit is unchanged from the sequence that works.
-            if stay_signed_in and not is_session_persisted():
-                pyautogui.press('tab')
-                time.sleep(0.22)
-                pyautogui.press('space')
-                time.sleep(0.18)
-                pyautogui.hotkey('shift', 'tab')
-                time.sleep(0.22)
+            # Tick "Stay signed in" by addressing the checkbox directly. No
+            # keystrokes are involved, so there is no tab order to guess at
+            # and no way to land on a social sign-in button; focus is put
+            # back on the password field before the Enter below.
+            if stay_signed_in:
+                set_stay_signed_in(hwnd)
 
             # Submit. Enter inside the password field is the form's own submit -
             # nothing further should be pressed after this.

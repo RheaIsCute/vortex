@@ -26,6 +26,14 @@ block_cipher = None
 
 hidden_imports = [
     "win32timezone",
+    # UI Automation is how the Riot Client's "Stay signed in" checkbox is
+    # found and set. comtypes generates its typelib wrappers at runtime, so
+    # the generated package has to be collected explicitly or the frozen
+    # build can't talk to UIA at all.
+    "uiautomation",
+    "comtypes",
+    "comtypes.stream",
+] + collect_submodules("comtypes.gen") + [
     "uvicorn.logging",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",
