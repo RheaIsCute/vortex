@@ -7,6 +7,7 @@ import sys
 import os
 import io
 import ctypes
+import traceback
 
 # Set Windows AppUserModelID for custom Taskbar icon & grouping
 try:
@@ -68,6 +69,17 @@ def find_available_port(default_port: int = 8765) -> int:
 PORT = find_available_port(8765)
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
+STARTUP_LOG = os.path.join(os.environ.get("TEMP") or BASE_DIR, "vortex_startup.log")
+
+
+def _startup_log(message):
+    """Small persistent trace for failures that happen before the UI exists."""
+    try:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(STARTUP_LOG, "a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] pid={os.getpid()} {message}\n")
+    except OSError:
+        pass
 
 
 def start_server():
@@ -175,16 +187,9 @@ def _make_overlay_controller(overlay_window, main_window):
                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_FRAMECHANGED,
             )
         except Exception:
+            _startup_log("prepare_native_window failed:\n" + traceback.format_exc())
             return 0
         return hwnd
-
-    def prepare_native_window_loop():
-        for _ in range(80):
-            if prepare_native_window():
-                return
-            time.sleep(0.1)
-
-    threading.Thread(target=prepare_native_window_loop, daemon=True).start()
 
     def focus_overlay(hwnd):
         """Focus only the panel, without activating the shell/taskbar."""
@@ -228,7 +233,7 @@ def _make_overlay_controller(overlay_window, main_window):
                 if hwnd:
                     focus_overlay(hwnd)
         except Exception:
-            pass
+            _startup_log("showOverlay failed:\n" + traceback.format_exc())
 
     def hideOverlay():
         state["visible"] = False
@@ -284,9 +289,11 @@ def _start_overlay_hotkey(toggle):
 
 
 def main():
+    _startup_log("main entered")
     # Start server in background thread
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
+    _startup_log(f"server thread started on {URL}")
 
     # Start taskbar icon applicator thread
     threading.Thread(target=apply_window_icon_loop, daemon=True).start()
@@ -310,9 +317,12 @@ def main():
             text_select=True,
             easy_drag=True
         )
+        _startup_log("main WebView created")
         overlay_window = _create_overlay_window()
+        _startup_log("hidden Quick Panel WebView created")
         toggle_overlay = _make_overlay_controller(overlay_window, window)
         _start_overlay_hotkey(toggle_overlay)
+        _startup_log("overlay controller and hotkey initialized")
 
         def _on_main_closing():
             # pywebview keeps running as long as any window - including the
@@ -326,8 +336,11 @@ def main():
                 pass
 
         window.events.closing += _on_main_closing
+        _startup_log("entering WebView event loop")
         webview.start(debug=False)
+        _startup_log("WebView event loop exited")
     except Exception:
+        _startup_log("desktop startup failed:\n" + traceback.format_exc())
         webbrowser.open(URL)
         try:
             while True:
