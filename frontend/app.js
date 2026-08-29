@@ -2290,6 +2290,18 @@ function startLaunchPolling(options = {}) {
                     p.stage === "done" ? "success" : "error"
                 );
 
+                // Riot's checkbox can't be read back, so the only honest signal
+                // is whether it left a persisted login behind. Say so when it
+                // didn't, rather than letting the next launch surprise the user
+                // with a password prompt.
+                if (p.stage === "done" && p.stay_signed_in === false) {
+                    setTimeout(() => showToast(
+                        "Signed in, but Riot didn't keep the session - you'll be asked for the password next time. " +
+                        "Tick \"Stay signed in\" yourself on the next login, or turn the option off in Settings.",
+                        "warning"
+                    ), 900);
+                }
+
                 if (!settleTimer) {
                     settleTimer = setTimeout(() => {
                         fetchAccounts();
