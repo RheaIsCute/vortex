@@ -704,18 +704,18 @@ class ValorantLiveClient:
             return {}
 
     def player_combat_summary(self, puuid: str, max_matches: int = 5) -> Dict[str, Any]:
-        """Computes K/D, KDA, ADR, ACS, Headshot %, and Winrate across recent matches (default 5)."""
+        """Computes K/D, KDA, ADR, ACS, Headshot %, 5-match winrate and party partners across recent matches."""
         result = {
             "kd": 0.0, "kda": 0.0, "hs_pct": 0, "kills": 0, "deaths": 0, "assists": 0,
-            "adr": 0, "acs": 0, "rounds": 0, "matches_analyzed": 0,
-            "wins": 0, "losses": 0, "draws": 0, "winrate": 0,
-            "form": [], "parties": {}, "match_parties": {}
+            "adr": 0, "acs": 0, "rounds": 0, "matches_analyzed": 0, "parties": {},
+            "party_partners": [], "winrate_last5": 0, "last5_wins": 0, "last5_losses": 0,
+            "last5_games": 0, "last5_form": []
         }
         if not puuid or not self.pd:
             return result
         try:
             url = f"{self.pd}/match-history/v1/history/{puuid}?startIndex=0&endIndex={max_matches}"
-            res = self._remote("GET", url, timeout=4.0)
+            res = self._remote("GET", url, timeout=5.0)
             if res.status_code != 200:
                 return result
             history = res.json().get("History", []) or []
@@ -732,10 +732,10 @@ class ValorantLiveClient:
             total_score = 0
             total_rounds = 0
             valid_matches = 0
-            wins = 0
-            losses = 0
-            draws = 0
-            form_list: List[str] = []
+            wins_count = 0
+            losses_count = 0
+            form_list = []
+            party_partners_set = set()
 
             for h in history[:max_matches]:
                 m_id = h.get("MatchID")
@@ -746,66 +746,74 @@ class ValorantLiveClient:
                     continue
 
                 all_players = details.get("players", []) or []
-                p_entry = next((p for p in all_players if (p.get("subject") or p.get("Subject")) == puuid), None)
+                p_entry = next((p for p in all_players if p.get("subject") == puuid), None)
                 if not p_entry:
                     continue
 
-                # Extract party IDs for all participants in this match to power duo detection
-                party_map: Dict[str, str] = {}
-                for other_p in all_players:
-                    s_id = other_p.get("subject") or other_p.get("Subject") or ""
-                    party_id = other_p.get("partyId") or other_p.get("PartyId") or ""
-                    if s_id and party_id:
-                        party_map[s_id] = party_id
-                if party_map:
-                    result["match_parties"][m_id] = party_map
+                # Recent matches are the only place Riot publishes a party
+                # id, and it is what the premade grouping is built from.
+                party_id = p_entry.get("partyId") or ""
+                if party_id:
+                    result["parties"][m_id] = party_id
+                    # Find all other players in this match who shared the exact same party_id
+                    for op in all_players:
+                        op_subject = op.get("subject") or ""
+                        if op_subject and op_subject != puuid and op.get("partyId") == party_id:
+                            party_partners_set.add(op_subject)
 
-                my_party_id = p_entry.get("partyId") or p_entry.get("PartyId") or ""
-                if my_party_id:
-                    result["parties"][m_id] = my_party_id
-
-                # Match outcome calculation (Win / Loss / Draw)
+                # Determine match result (Win, Loss, Draw)
                 p_team_id = p_entry.get("teamId") or p_entry.get("TeamId") or ""
                 teams = details.get("teams", []) or []
                 own_team = next((t for t in teams if (t.get("teamId") or t.get("TeamId") or "") == p_team_id), None)
-                other_teams = [t for t in teams if t is not own_team]
+                other_team = next((t for t in teams if (t.get("teamId") or t.get("TeamId") or "") != p_team_id), None)
+
+                round_results = details.get("roundResults", []) or []
+                played_rounds = [r for r in round_results if (r.get("roundResultCode") or "").lower() != "surrendered"]
+                has_surrender = any((r.get("roundResultCode") or "").lower() == "surrendered" for r in round_results)
 
                 if len(teams) == 2 and own_team is not None:
-                    other_team = other_teams[0] if other_teams else {}
-                    pts_own = int(own_team.get("numPoints") if own_team.get("numPoints") is not None else (own_team.get("roundsWon") or 0))
-                    pts_other = int(other_team.get("numPoints") if other_team.get("numPoints") is not None else (other_team.get("roundsWon") or 0))
-                    if pts_own == pts_other:
-                        m_res = "Draw"
-                        draws += 1
-                    elif bool(own_team.get("won")) or pts_own > pts_other:
-                        m_res = "Win"
-                        wins += 1
+                    if has_surrender and played_rounds:
+                        rw = sum(1 for r in played_rounds if (r.get("winningTeam") or "") == p_team_id)
+                        rl = sum(1 for r in played_rounds if (r.get("winningTeam") or "") != p_team_id)
+                    elif own_team.get("numPoints") is not None and other_team and other_team.get("numPoints") is not None:
+                        rw = int(own_team.get("numPoints", 0) or 0)
+                        rl = int(other_team.get("numPoints", 0) or 0)
                     else:
-                        m_res = "Loss"
-                        losses += 1
-                else:
-                    score = int((p_entry.get("stats") or {}).get("score", 0) or 0)
-                    scores = sorted((int(((p.get("stats") or {}).get("score", 0)) or 0) for p in all_players), reverse=True)
-                    placement = scores.index(score) + 1 if score in scores else 0
-                    if placement == 1:
-                        m_res = "Win"
-                        wins += 1
-                    else:
-                        m_res = "Loss"
-                        losses += 1
-                form_list.append(m_res)
+                        rw = int(own_team.get("roundsWon", 0) or 0)
+                        rl = int(other_team.get("roundsWon", 0) or 0) if other_team else 0
 
-                p_stats = p_entry.get("stats") or p_entry.get("Stats") or {}
+                    if rw == rl:
+                        res_str = "D"
+                    elif bool(own_team.get("won")) or rw > rl:
+                        res_str = "W"
+                        wins_count += 1
+                    else:
+                        res_str = "L"
+                        losses_count += 1
+                else:
+                    score_val = int((p_entry.get("stats") or {}).get("score", 0) or 0)
+                    ranked_scores = sorted(
+                        (int(((p.get("stats") or {}).get("score", 0)) or 0) for p in all_players), reverse=True
+                    )
+                    place = ranked_scores.index(score_val) + 1 if score_val in ranked_scores else 0
+                    if place == 1:
+                        res_str = "W"
+                        wins_count += 1
+                    else:
+                        res_str = "L"
+                        losses_count += 1
+                form_list.append(res_str)
+
+                p_stats = p_entry.get("stats") or {}
                 total_kills += int(p_stats.get("kills") or 0)
                 total_deaths += int(p_stats.get("deaths") or 0)
                 total_assists += int(p_stats.get("assists") or 0)
                 total_score += int(p_stats.get("score") or 0)
 
-                rounds = details.get("roundResults", []) or []
-                total_rounds += len(rounds) or int(p_stats.get("roundsPlayed") or 0)
-                for r in rounds:
+                total_rounds += len(round_results) or int(p_stats.get("roundsPlayed") or 0)
+                for r in round_results:
                     for ps in r.get("playerStats", []) or []:
-                        if (ps.get("subject") or ps.get("Subject")) == puuid:
+                        if ps.get("subject") == puuid:
                             for d in ps.get("damage", []) or []:
                                 total_hs += int(d.get("headshots") or 0)
                                 total_bs += int(d.get("bodyshots") or 0)
@@ -825,11 +833,12 @@ class ValorantLiveClient:
                 result["adr"] = round(total_damage / max(1, total_rounds)) if total_rounds else 0
                 result["acs"] = round(total_score / max(1, total_rounds)) if total_rounds else 0
                 result["matches_analyzed"] = valid_matches
-                result["wins"] = wins
-                result["losses"] = losses
-                result["draws"] = draws
-                result["winrate"] = round(wins / valid_matches * 100)
-                result["form"] = form_list
+                result["party_partners"] = list(party_partners_set)
+                result["last5_wins"] = wins_count
+                result["last5_losses"] = losses_count
+                result["last5_games"] = valid_matches
+                result["last5_form"] = form_list
+                result["winrate_last5"] = round((wins_count / valid_matches) * 100)
             return result
         except Exception:
             return result

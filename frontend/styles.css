@@ -4886,51 +4886,11 @@ body.dashboard-mode .session-bar {
 }
 
 .dash-me-sub {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     font-size: 11.5px;
     color: var(--text-muted);
-    flex-wrap: wrap;
-}
-
-.dash-badge-wr5 {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 800;
-    color: #34d399;
-    background: rgba(52, 211, 153, 0.12);
-    border: 1px solid rgba(52, 211, 153, 0.35);
-}
-
-.dash-me-form-mini {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-}
-
-.dash-me-form-mini .dash-form-pip {
-    width: 15px;
-    height: 15px;
-    font-size: 8.5px;
-}
-
-.dash-player-form-pips {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    margin-left: 2px;
-}
-
-.dash-player-form-pips .dash-form-pip {
-    width: 14px;
-    height: 14px;
-    font-size: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .dash-me-rank {
@@ -5290,6 +5250,177 @@ body.dashboard-mode .session-bar {
     gap: 7px;
 }
 
+/* Duo & Premade Stacks Notifier Banner */
+.dash-duo-banner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    border: 1px solid var(--stroke-1);
+    box-shadow: 0 4px 14px -3px rgba(0, 0, 0, 0.4);
+}
+
+.dash-duo-section {
+    flex: 1;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.dash-duo-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ok);
+}
+
+.dash-duo-title.is-enemy {
+    color: var(--danger);
+}
+
+.dash-duo-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.dash-duo-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-main);
+    background: var(--surface-3);
+    border: 1px solid var(--stroke-2);
+}
+
+.dash-duo-tag.is-ally {
+    border-color: rgba(74, 222, 128, 0.4);
+    background: rgba(74, 222, 128, 0.08);
+}
+
+.dash-duo-tag.is-ally.is-confirmed {
+    border-color: rgba(251, 191, 36, 0.6);
+    background: rgba(251, 191, 36, 0.12);
+}
+
+.dash-duo-tag.is-enemy {
+    border-color: rgba(244, 63, 94, 0.4);
+    background: rgba(244, 63, 94, 0.08);
+}
+
+.dash-duo-tag.is-solo {
+    color: var(--text-dim);
+    font-style: italic;
+    font-weight: 500;
+}
+
+.dash-duo-tag-type {
+    font-family: var(--font-mono);
+    font-weight: 900;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    color: var(--text-bright);
+}
+
+.dash-duo-tag-names {
+    color: var(--text-main);
+}
+
+.dash-duo-badge {
+    padding: 1px 5px;
+    border-radius: var(--radius-full);
+    font-size: 8.5px;
+    font-weight: 900;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.dash-duo-badge.is-confirmed {
+    background: #fbbf24;
+    color: #000;
+}
+
+.dash-duo-badge.is-detected {
+    background: var(--surface-4);
+    color: var(--text-muted);
+    border: 1px solid var(--stroke-2);
+}
+
+.dash-me-form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 10px;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    border: 1px solid var(--stroke-1);
+    font-size: 11.5px;
+}
+
+.dash-me-form-lbl {
+    font-weight: 700;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.dash-me-form-sub {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.dash-player-form-pips {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 2px;
+}
+
+.dash-form-mini-pip {
+    display: inline-grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+    border-radius: var(--radius-full);
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 900;
+    line-height: 1;
+}
+
+.dash-form-mini-pip.is-w {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.5);
+}
+
+.dash-form-mini-pip.is-l {
+    background: rgba(244, 63, 94, 0.2);
+    color: #f43f5e;
+    border: 1px solid rgba(244, 63, 94, 0.5);
+}
+
+.dash-form-mini-pip.is-d {
+    background: rgba(148, 163, 184, 0.2);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
 .dash-roster-empty {
     padding: 14px;
     text-align: center;
@@ -5446,25 +5577,17 @@ body.dashboard-mode .session-bar {
 .dash-party-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     flex: none;
-    padding: 2px 7px;
+    padding: 1px 6px;
     border-radius: var(--radius-full);
     font-family: var(--font-mono);
-    font-size: 9px;
+    font-size: 9.5px;
     font-weight: 900;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
     color: var(--pg);
     background: var(--pg-soft);
     border: 1px solid var(--pg-line);
     cursor: help;
-    transition: var(--transition-fast);
-}
-
-.dash-party-chip:hover {
-    filter: brightness(1.2);
-    box-shadow: 0 0 8px var(--pg-soft);
 }
 
 /* Your own party is the one grouping Riot states outright - everything else
@@ -5473,7 +5596,6 @@ body.dashboard-mode .session-bar {
     color: #06121f;
     background: var(--pg);
     border-color: var(--pg);
-    box-shadow: 0 0 8px var(--pg-soft);
 }
 
 .dash-player-sub {

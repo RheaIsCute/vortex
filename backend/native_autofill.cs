@@ -27,13 +27,10 @@ namespace VortexNativeAutofill
         static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         [DllImport("user32.dll")]
+        static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
         static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
-        static extern bool SetCursorPos(int X, int Y);
-
-        [DllImport("user32.dll")]
-        static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
 
         [DllImport("user32.dll")]
         static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -48,8 +45,9 @@ namespace VortexNativeAutofill
         }
 
         const int SW_RESTORE = 9;
-        const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-        const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        const uint WM_LBUTTONDOWN = 0x0201;
+        const uint WM_LBUTTONUP = 0x0202;
+        const uint MK_LBUTTON = 0x0001;
         const uint KEYEVENTF_KEYUP = 0x0002;
         const byte VK_TAB = 0x09;
         const byte VK_RETURN = 0x0D;
@@ -98,25 +96,21 @@ namespace VortexNativeAutofill
             int height = rect.Bottom - rect.Top;
 
             // 3. Attempt In-Client Sign Out if on Games Dashboard
-            // Profile avatar is at top-right (Right - 35, Top + 25)
-            int avatarX = rect.Right - 35;
-            int avatarY = rect.Top + 25;
-            ClickAt(avatarX, avatarY);
+            // Profile avatar is at top-right (width - 35, 25)
+            ClickAt(riotHwnd, width - 35, 25);
             Thread.Sleep(150);
 
-            // Sign out is 2nd item in dropdown (Right - 65, Top + 105)
-            int signoutX = rect.Right - 65;
-            int signoutY = rect.Top + 105;
-            ClickAt(signoutX, signoutY);
+            // Sign out is 2nd item in dropdown (width - 65, 105)
+            ClickAt(riotHwnd, width - 65, 105);
             Thread.Sleep(600);
 
             // 4. Focus Username field on Sign-In screen
             GetWindowRect(riotHwnd, out rect);
             width = rect.Right - rect.Left;
             height = rect.Bottom - rect.Top;
-            int userX = rect.Left + (int)(width * 0.165);
-            int userY = rect.Top + (int)(height * 0.22);
-            ClickAt(userX, userY);
+            int userRelX = (int)(width * 0.165);
+            int userRelY = (int)(height * 0.245);
+            ClickAt(riotHwnd, userRelX, userRelY);
             Thread.Sleep(100);
 
             // 5. Clear Username & Paste
@@ -131,6 +125,10 @@ namespace VortexNativeAutofill
 
             // 6. Tab to Password field
             SendKey(VK_TAB);
+            Thread.Sleep(50);
+            int passRelX = (int)(width * 0.165);
+            int passRelY = (int)(height * 0.335);
+            ClickAt(riotHwnd, passRelX, passRelY);
             Thread.Sleep(50);
 
             // 7. Clear Password & Paste
@@ -147,12 +145,12 @@ namespace VortexNativeAutofill
             SendKey(VK_RETURN);
         }
 
-        static void ClickAt(int x, int y)
+        static void ClickAt(IntPtr hwnd, int relX, int relY)
         {
-            SetCursorPos(x, y);
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(20);
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+            IntPtr lParam = (IntPtr)((relY << 16) | (relX & 0xFFFF));
+            PostMessage(hwnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam);
+            Thread.Sleep(30);
+            PostMessage(hwnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
         }
 
         static IntPtr FindRiotWindow(out RECT outRect)

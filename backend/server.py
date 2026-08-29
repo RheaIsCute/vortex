@@ -1134,34 +1134,24 @@ def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, A
     except Exception:
         stats = valorant_client.parse_player_mmr({})
 
+    combat_keys = (
+        "kd", "kda", "hs_pct", "kills", "deaths", "assists", "adr", "acs",
+        "winrate_last5", "last5_wins", "last5_losses", "last5_games", "last5_form"
+    )
     try:
         combat = client.player_combat_summary(puuid, max_matches=5)
     except Exception:
         combat = {}
-
-    # Store combat & form metrics from the last 5 matches
-    stats["kd_last5"] = combat.get("kd", 0.0)
-    stats["kda_last5"] = combat.get("kda", 0.0)
-    stats["hs_pct_last5"] = combat.get("hs_pct", 0)
-    stats["adr_last5"] = combat.get("adr", 0)
-    stats["acs_last5"] = combat.get("acs", 0)
-    stats["wins_last5"] = combat.get("wins", 0)
-    stats["losses_last5"] = combat.get("losses", 0)
-    stats["draws_last5"] = combat.get("draws", 0)
-    stats["winrate_last5"] = combat.get("winrate", 0)
-    stats["form_last5"] = combat.get("form", [])
-    stats["matches_analyzed"] = combat.get("matches_analyzed", 0)
-
-    # Use 5-match combat metrics for recent performance indicators
-    stats["kd"] = stats["kd_last5"]
-    stats["kda"] = stats["kda_last5"]
-    stats["hs_pct"] = stats["hs_pct_last5"]
-    stats["adr"] = stats["adr_last5"]
-    stats["acs"] = stats["acs_last5"]
-
-    # Party data across all analyzed matches
+    for key in combat_keys:
+        if key in ("kd", "kda"):
+            stats[key] = combat.get(key, 0.0)
+        elif key == "last5_form":
+            stats[key] = combat.get(key, [])
+        else:
+            stats[key] = combat.get(key, 0)
+    # Kept off the roster payload - it only feeds the premade grouping.
     stats["parties"] = combat.get("parties") or {}
-    stats["match_parties"] = combat.get("match_parties") or {}
+    stats["party_partners"] = combat.get("party_partners") or []
 
     if stats["tier"] == 0 and fallback_tier > 0:
         stats["tier"] = fallback_tier
@@ -1207,14 +1197,12 @@ def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_pu
         "peak_tier_icon": stats.get("peak_tier_icon", valorant_client.tier_icon(0)),
         "wins": stats.get("wins", 0),
         "games": stats.get("games", 0),
-        "winrate_lifetime": stats.get("winrate", 0),
-        "winrate": stats.get("winrate_last5", 0),
+        "winrate": stats.get("winrate", 0),
         "winrate_last5": stats.get("winrate_last5", 0),
-        "wins_last5": stats.get("wins_last5", 0),
-        "losses_last5": stats.get("losses_last5", 0),
-        "draws_last5": stats.get("draws_last5", 0),
-        "form_last5": stats.get("form_last5", []),
-        "matches_analyzed": stats.get("matches_analyzed", 0),
+        "last5_wins": stats.get("last5_wins", 0),
+        "last5_losses": stats.get("last5_losses", 0),
+        "last5_games": stats.get("last5_games", 0),
+        "last5_form": stats.get("last5_form", []),
         "kd": stats.get("kd", 0.0),
         "kda": stats.get("kda", 0.0),
         "hs_pct": stats.get("hs_pct", 0),
@@ -1454,22 +1442,23 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "rr": me.get("rr", 0),
         "peak_tier_label": me.get("peak_tier_label", ""),
         "peak_tier_icon": me.get("peak_tier_icon", ""),
-        "winrate_lifetime": me.get("winrate_lifetime", 0),
-        "winrate": me.get("winrate_last5", me.get("winrate", 0)),
-        "winrate_last5": me.get("winrate_last5", 0),
-        "wins_last5": me.get("wins_last5", 0),
-        "losses_last5": me.get("losses_last5", 0),
-        "form_last5": me.get("form_last5", []),
-        "matches_analyzed": me.get("matches_analyzed", 0),
+        "winrate": me.get("winrate", 0),
         "wins": me.get("wins", 0),
         "games": me.get("games", 0),
+        "winrate_last5": me.get("winrate_last5", 0),
+        "last5_wins": me.get("last5_wins", 0),
+        "last5_losses": me.get("last5_losses", 0),
+        "last5_games": me.get("last5_games", 0),
+        "last5_form": me.get("last5_form", []),
+        "recent_kd": me.get("kd", 0.0),
+        "recent_hs_pct": me.get("hs_pct", 0),
         "queue_id": queue_id,
-        "is_live": bool(live),
     }
 
     if live:
         block.update({
             "source": "live",
+            "is_live_match": True,
             "kills": live.get("kills", 0),
             "deaths": live.get("deaths", 0),
             "assists": live.get("assists", 0),
@@ -1485,11 +1474,13 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "damage": live.get("total_damage", 0),
             "rounds": live.get("rounds", 0),
             "current_match_kd": live.get("kd", 0.0),
-            "current_match_hs_pct": live.get("hs_pct", 0),
+            "current_match_hs": live.get("hs_pct", 0),
+            "current_match_kda": f"{live.get('kills', 0)}/{live.get('deaths', 0)}/{live.get('assists', 0)}",
         })
     else:
         block.update({
             "source": "recent",
+            "is_live_match": False,
             "kills": me.get("kills", 0),
             "deaths": me.get("deaths", 0),
             "assists": me.get("assists", 0),
@@ -1503,8 +1494,9 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "legshots": 0,
             "damage": 0,
             "rounds": 0,
-            "current_match_kd": me.get("kd", 0.0),
-            "current_match_hs_pct": me.get("hs_pct", 0),
+            "current_match_kd": None,
+            "current_match_hs": None,
+            "current_match_kda": None,
         })
     return block
 
@@ -1611,8 +1603,8 @@ def _apply_parties(roster: List[Dict[str, Any]], my_party: List[str]) -> None:
     Marks who queued together, in place.
 
     Your own party is exact - it comes straight from the party endpoint.
-    Everyone else is inferred from shared party ids in recent matches across
-    both teams (teammates and enemies).
+    Everyone else is inferred from shared party ids and party partner sets in recent
+    matches across teammates and enemy team players.
     """
     parent: Dict[str, str] = {p["puuid"]: p["puuid"] for p in roster if p.get("puuid")}
     if not parent:
@@ -1635,36 +1627,28 @@ def _apply_parties(roster: List[Dict[str, Any]], my_party: List[str]) -> None:
     for other in known[1:]:
         union(known[0], other)
 
-    # 2. Everyone else, inferred from shared party ids in recent matches.
+    # 2. Everyone else, inferred from shared party ids and party partner sets in recent matches.
     by_team: Dict[str, List[str]] = {}
     for p in roster:
         if p.get("puuid"):
             by_team.setdefault(p.get("team", ""), []).append(p["puuid"])
 
-    # Aggregate all match party maps across the cached players
-    all_match_party_maps: List[Dict[str, str]] = []
-    for p in roster:
-        puuid = p.get("puuid", "")
-        if puuid and puuid in _PLAYER_MMR_CACHE:
-            mp = _PLAYER_MMR_CACHE[puuid].get("match_parties") or {}
-            for m_id, p_map in mp.items():
-                if isinstance(p_map, dict) and p_map not in all_match_party_maps:
-                    all_match_party_maps.append(p_map)
-
     for team_puuids in by_team.values():
         for i, a in enumerate(team_puuids):
             pa = (_PLAYER_MMR_CACHE.get(a) or {}).get("parties") or {}
+            partners_a = (_PLAYER_MMR_CACHE.get(a) or {}).get("party_partners") or []
             for b in team_puuids[i + 1:]:
                 pb = (_PLAYER_MMR_CACHE.get(b) or {}).get("parties") or {}
-                # Direct match party ID match
-                if any(pid and pb.get(mid) == pid for mid, pid in pa.items()):
+                partners_b = (_PLAYER_MMR_CACHE.get(b) or {}).get("party_partners") or []
+
+                # Check direct party partner co-occurrence
+                if b in partners_a or a in partners_b:
                     union(a, b)
                     continue
-                # Lobby-wide match details party map match
-                for p_map in all_match_party_maps:
-                    if a in p_map and b in p_map and p_map[a] and p_map[a] == p_map[b]:
-                        union(a, b)
-                        break
+
+                # Check shared match + party ID
+                if any(pid and pb.get(mid) == pid for mid, pid in pa.items()):
+                    union(a, b)
 
     groups: Dict[str, List[str]] = {}
     for puuid in parent:
@@ -1679,30 +1663,57 @@ def _apply_parties(roster: List[Dict[str, Any]], my_party: List[str]) -> None:
         for m in members:
             numbered[m] = next_id
 
-    self_puuid = next((p.get("puuid") for p in roster if p.get("is_self")), "")
-    self_team = next((p.get("team") for p in roster if p.get("is_self")), "")
+    # Create mapping of PUUID to player metadata for partner names
+    player_by_puuid = {p["puuid"]: p for p in roster if p.get("puuid")}
 
     for p in roster:
         puuid = p.get("puuid", "")
         gid = numbered.get(puuid, 0)
         group_members = groups.get(find(puuid), []) if gid else []
-        g_size = len(group_members)
-        is_self_party = puuid in confirmed and len(confirmed) > 1
-
-        p_type = "Duo" if g_size == 2 else ("Trio" if g_size == 3 else f"{g_size}-Stack") if gid else ""
-        if is_self_party:
-            badge = f"YOUR {p_type.upper()}"
-        elif gid:
-            is_ally = (p.get("team") == self_team) if self_team else (p.get("team", "").lower() in ("blue", "team_1"))
-            badge = f"{'TEAM' if is_ally else 'ENEMY'} {p_type.upper()}"
-        else:
-            badge = ""
+        size = len(group_members)
+        is_confirmed = bool(puuid in confirmed and len(confirmed) > 1)
 
         p["party_group"] = gid
-        p["party_size"] = g_size if gid else 1
-        p["party_type"] = p_type
-        p["party_badge"] = badge
-        p["party_confirmed"] = is_self_party
+        p["party_size"] = size
+        p["party_confirmed"] = is_confirmed
+        if size >= 2:
+            p["party_tag"] = "DUO" if size == 2 else ("TRIO" if size == 3 else f"{size}-STACK")
+            partner_names = []
+            for m in group_members:
+                if m != puuid and m in player_by_puuid:
+                    partner_names.append(player_by_puuid[m].get("name") or player_by_puuid[m].get("agent") or "Teammate")
+            p["party_partners"] = partner_names
+        else:
+            p["party_tag"] = ""
+            p["party_partners"] = []
+
+
+def _summarize_parties(roster: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Groups roster players by their party_group to produce a clean stack summary."""
+    stacks = []
+    groups: Dict[int, List[Dict[str, Any]]] = {}
+    for p in roster:
+        gid = p.get("party_group", 0)
+        if gid:
+            groups.setdefault(gid, []).append(p)
+
+    for gid, members in groups.items():
+        if len(members) < 2:
+            continue
+        tag = "DUO" if len(members) == 2 else ("TRIO" if len(members) == 3 else f"{len(members)}-STACK")
+        names = [p.get("name") or p.get("agent") or "Player" for p in members]
+        agents = [p.get("agent") or "Agent" for p in members]
+        confirmed = any(p.get("party_confirmed") for p in members)
+        stacks.append({
+            "group_id": gid,
+            "tag": tag,
+            "size": len(members),
+            "confirmed": confirmed,
+            "names": names,
+            "agents": agents,
+            "summary": f"{tag}: {' + '.join(names)}"
+        })
+    return stacks
 
 
 def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1736,6 +1747,11 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
     _apply_parties(team + enemy_roster, _my_party_members(client))
     me = next((r for r in team if r.get("is_self")), None)
 
+    stacks = {
+        "ally": _summarize_parties(team),
+        "enemy": _summarize_parties(enemy_roster)
+    }
+
     return {
         "phase": "agent_select",
         "match_id": match_id,
@@ -1744,6 +1760,7 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
         "time_remaining": round(remaining_ns / 1_000_000_000, 1),
         "team": team,
         "enemy": enemy_roster,
+        "stacks": stacks,
         "me": _self_block(client, "", me, queue_id),
         "progress": None,
         "score": {"ally": 0, "enemy": 0},
@@ -1809,6 +1826,11 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
     _apply_parties(ally + enemy, _my_party_members(client))
     me = next((r for r in ally if r.get("is_self")), None)
 
+    stacks = {
+        "ally": _summarize_parties(ally),
+        "enemy": _summarize_parties(enemy)
+    }
+
     return {
         "phase": "in_match",
         "match_id": match_id,
@@ -1817,6 +1839,7 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "time_remaining": 0,
         "team": ally,
         "enemy": enemy,
+        "stacks": stacks,
         "me": _self_block(client, match_id, me, queue_id),
         "progress": _build_progress(
             match_id, ally_score, enemy_score, starting_side, current_side, queue_id

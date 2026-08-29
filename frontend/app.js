@@ -267,6 +267,7 @@ const DOM = {
     dashIdle: document.getElementById("dash-idle"),
     dashIdleTitle: document.getElementById("dash-idle-title"),
     dashIdleText: document.getElementById("dash-idle-text"),
+    dashDuoBanner: document.getElementById("dash-duo-banner"),
     dashTeams: document.getElementById("dash-teams"),
     dashTeamEnemyWrap: document.getElementById("dash-team-enemy-wrap"),
     dashRosterAlly: document.getElementById("dash-roster-ally"),
@@ -3069,6 +3070,7 @@ function renderDashboard(live) {
     syncQueueTimer(live, inQueue);
 
     if (match) {
+        renderDuoBanner(match);
         renderRoster(DOM.dashRosterAlly, match.team);
         renderRoster(DOM.dashRosterEnemy, match.enemy);
         DOM.dashTeamEnemyWrap.style.display = (match.enemy && match.enemy.length) ? "block" : "none";
@@ -3077,6 +3079,8 @@ function renderDashboard(live) {
         const enemySide = allySide === "Defender" ? "Attacker" : "Defender";
         renderTeamTitle(".dash-team-ally", "fa-user-group", "Your Team", allySide, match.team);
         renderTeamTitle(".dash-team-enemy", "fa-crosshairs", "Enemy Team", enemySide, match.enemy);
+    } else if (DOM.dashDuoBanner) {
+        DOM.dashDuoBanner.style.display = "none";
     }
 
     if (inQueue && DOM.dashQueueBannerSub) {
@@ -3233,6 +3237,55 @@ function renderMatchHero(match, live) {
         : `<span class="dash-strip-empty">Round 1 in progress</span>`;
 }
 
+/** Renders a dedicated banner summarizing detected parties and stacks for both teams. */
+function renderDuoBanner(match) {
+    if (!DOM.dashDuoBanner) return;
+    if (!match) {
+        DOM.dashDuoBanner.style.display = "none";
+        return;
+    }
+
+    const stacks = match.stacks || { ally: [], enemy: [] };
+    const allyStacks = stacks.ally || [];
+    const enemyStacks = stacks.enemy || [];
+    const hasEnemy = (match.enemy && match.enemy.length > 0);
+
+    const allyHtml = allyStacks.length > 0
+        ? allyStacks.map(s => `
+            <div class="dash-duo-tag is-ally ${s.confirmed ? "is-confirmed" : ""}">
+                <i class="fa-solid ${s.confirmed ? "fa-user-group" : "fa-link"}"></i>
+                <span class="dash-duo-tag-type">${escapeHtml(s.tag)}</span>
+                <span class="dash-duo-tag-names">${escapeHtml(s.names.join(" + "))}</span>
+                ${s.confirmed ? `<span class="dash-duo-badge is-confirmed">YOUR PARTY</span>` : `<span class="dash-duo-badge is-detected">PREMADE</span>`}
+            </div>`).join("")
+        : `<div class="dash-duo-tag is-solo"><i class="fa-solid fa-user"></i> <span>All Solo Queue</span></div>`;
+
+    const enemyHtml = hasEnemy
+        ? (enemyStacks.length > 0
+            ? enemyStacks.map(s => `
+                <div class="dash-duo-tag is-enemy">
+                    <i class="fa-solid fa-link"></i>
+                    <span class="dash-duo-tag-type">${escapeHtml(s.tag)}</span>
+                    <span class="dash-duo-tag-names">${escapeHtml(s.names.join(" + "))}</span>
+                    <span class="dash-duo-badge is-detected">PREMADE</span>
+                </div>`).join("")
+            : `<div class="dash-duo-tag is-solo"><i class="fa-solid fa-user"></i> <span>No Stacks Detected</span></div>`)
+        : "";
+
+    DOM.dashDuoBanner.style.display = "flex";
+    DOM.dashDuoBanner.innerHTML = `
+        <div class="dash-duo-section">
+            <div class="dash-duo-title"><i class="fa-solid fa-shield-halved"></i> Ally Premades</div>
+            <div class="dash-duo-list">${allyHtml}</div>
+        </div>
+        ${hasEnemy ? `
+        <div class="dash-duo-section">
+            <div class="dash-duo-title is-enemy"><i class="fa-solid fa-skull"></i> Enemy Premades</div>
+            <div class="dash-duo-list">${enemyHtml}</div>
+        </div>` : ""}
+    `;
+}
+
 /** The "you, right now" card: agent, rank, and your combat line. */
 function renderMeCard(match) {
     const me = match && match.me;
@@ -3242,26 +3295,31 @@ function renderMeCard(match) {
     }
     DOM.dashMe.style.display = "block";
 
-    const isLive = me.source === "live";
+    const isLive = me.source === "live" || me.is_live_match;
     const shots = (me.headshots || 0) + (me.bodyshots || 0) + (me.legshots || 0);
     const pct = n => shots ? Math.round((n / shots) * 100) : 0;
 
     const tiles = isLive ? [
-        { k: "CURRENT K / D / A", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
-        { k: "CURRENT MATCH KD", v: (me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
-        { k: "CURRENT HS %", v: `${me.hs_pct || 0}%`, c: "is-hs" },
-        { k: "MATCH ADR", v: me.adr || 0, c: "is-adr" },
-        { k: "MATCH ACS", v: me.acs || 0, c: "is-acs" }
+        { k: "Current Match KDA", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
+        { k: "Current Match KD", v: (me.current_match_kd || me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
+        { k: "Current Match HS%", v: `${me.current_match_hs || me.hs_pct || 0}%`, c: "is-hs" },
+        { k: "ADR", v: me.adr || 0, c: "is-adr" },
+        { k: "ACS", v: me.acs || 0, c: "is-acs" }
     ] : [
-        { k: "LAST 5G K / D / A", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
-        { k: "LAST 5G KD", v: (me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
-        { k: "LAST 5G HS %", v: `${me.hs_pct || 0}%`, c: "is-hs" },
-        { k: "AVG ADR", v: me.adr || 0, c: "is-adr" },
-        { k: "AVG ACS", v: me.acs || 0, c: "is-acs" }
+        { k: "Recent KD", v: (me.recent_kd || me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
+        { k: "Recent HS%", v: `${me.recent_hs_pct || me.hs_pct || 0}%`, c: "is-hs" },
+        { k: "Last 5 Winrate", v: `${me.winrate_last5 != null ? me.winrate_last5 : (me.winrate || 0)}%`, c: (me.winrate_last5 || me.winrate || 0) >= 50 ? "is-good" : "is-bad" },
+        { k: "ADR", v: me.adr || 0, c: "is-adr" },
+        { k: "ACS", v: me.acs || 0, c: "is-acs" }
     ];
 
-    const wr5 = me.winrate_last5 != null ? me.winrate_last5 : me.winrate;
-    const form5 = me.form_last5 || [];
+    const formPips = (me.last5_form && me.last5_form.length > 0)
+        ? `<div class="dash-me-form-row">
+             <span class="dash-me-form-lbl">Last 5 Matches:</span>
+             ${me.last5_form.map(f => `<span class="dash-form-pip is-${f.toLowerCase()}">${f}</span>`).join("")}
+             <span class="dash-me-form-sub">${me.last5_wins || 0}W ${me.last5_losses || 0}L (${me.winrate_last5 != null ? me.winrate_last5 : 0}% WR)</span>
+           </div>`
+        : "";
 
     DOM.dashMe.innerHTML = `
         <div class="dash-me-head">
@@ -3270,26 +3328,22 @@ function renderMeCard(match) {
                 : `<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
             <div class="dash-me-id">
                 <span class="dash-me-title">${escapeHtml(me.agent || "Your agent")}</span>
-                <div class="dash-me-sub">
-                    <span>${escapeHtml(me.tier_label || "Unranked")}${me.rr ? ` · ${me.rr} RR` : ""}</span>
-                    <span class="dash-badge-wr5" title="Winrate over last 5 matches: ${me.wins_last5 || 0}W ${me.losses_last5 || 0}L">
-                        <i class="fa-solid fa-chart-simple"></i> ${wr5}% WR (Last 5)
-                    </span>
-                    ${form5.length ? `
-                        <div class="dash-me-form-mini" title="Last 5 match results">
-                            ${form5.map(r => `<span class="dash-form-pip is-${(r || '').toLowerCase()}">${(r || '?')[0]}</span>`).join('')}
-                        </div>` : ''}
-                </div>
+                <span class="dash-me-sub">
+                    ${escapeHtml(me.tier_label || "Unranked")}${me.rr ? ` · ${me.rr} RR` : ""}
+                    ${me.winrate_last5 != null ? ` · ${me.winrate_last5}% WR (last 5)` : (me.games ? ` · ${me.winrate}% WR` : "")}
+                </span>
             </div>
             ${me.tier_icon ? `<img src="${me.tier_icon}" class="dash-me-rank" alt="" onerror="this.style.display='none';">` : ""}
             <span class="dash-me-flag ${isLive ? "is-live" : "is-recent"}"
                   title="${isLive
-                      ? "Live tracking from your active match"
-                      : "Riot publishes exact combat line once the match completes; showing your rolling performance across last 5 matches"}">
+                      ? "Direct from this match"
+                      : "Round scores track live; combat breakdown reflects your last 5 matches"}">
                 <i class="fa-solid ${isLive ? "fa-circle-dot" : "fa-clock-rotate-left"}"></i>
-                ${isLive ? "CURRENT MATCH" : "LAST 5 MATCHES"}
+                ${isLive ? "CURRENT MATCH STATS" : "RECENT 5-MATCH FORM"}
             </span>
         </div>
+
+        ${formPips}
 
         <div class="dash-me-tiles">
             ${tiles.map(t => `
@@ -3365,40 +3419,17 @@ function renderRecap(live, hasMatch) {
     DOM.dashRecap.innerHTML = lastHtml + sessionHtml;
 }
 
-/** Team heading with its side and a count of the premades/duos on it. */
+/** Team heading with its side and a count of the premades on it. */
 function renderTeamTitle(selector, icon, text, side, players) {
     const el = document.querySelector(selector);
     if (!el) return;
     const meta = sideMeta(side);
-    
-    // Group analysis for duos / trios
-    const groupMap = new Map();
-    (players || []).forEach(p => {
-        if (p.party_group) {
-            if (!groupMap.has(p.party_group)) groupMap.set(p.party_group, []);
-            groupMap.get(p.party_group).push(p.name || p.agent || "Player");
-        }
-    });
-
-    let partyBadges = "";
-    if (groupMap.size > 0) {
-        const details = [];
-        groupMap.forEach((members, gid) => {
-            const label = members.length === 2 ? "Duo" : (members.length === 3 ? "Trio" : `${members.length}-Stack`);
-            details.push(`${label} (${members.join(" + ")})`);
-        });
-        const summaryText = Array.from(groupMap.values()).map(m => m.length === 2 ? "1 Duo" : (m.length === 3 ? "1 Trio" : `${m.length}P`)).join(", ");
-        partyBadges = `
-            <span class="dash-party-count" title="${escapeHtml(details.join(" | "))}">
-                <i class="fa-solid fa-link"></i> ${summaryText} detected
-            </span>
-        `;
-    }
-
+    const groups = new Set((players || []).map(p => p.party_group).filter(Boolean));
     el.innerHTML = `
         <i class="fa-solid ${icon}"></i> ${text}
         <span class="dash-side-pill ${meta.cls}"><i class="fa-solid ${meta.icon}"></i> ${side}</span>
-        ${partyBadges}
+        ${groups.size ? `<span class="dash-party-count" title="${groups.size} stack${groups.size > 1 ? "s" : ""} queued together on this team">
+            <i class="fa-solid fa-link"></i> ${groups.size} ${groups.size === 1 ? "Stack" : "Stacks"}</span>` : ""}
     `;
 }
 
@@ -3410,46 +3441,45 @@ function renderRoster(el, players) {
         return;
     }
 
-    // Map group members for tooltips
-    const groupMembersMap = new Map();
-    players.forEach(p => {
-        if (p.party_group) {
-            if (!groupMembersMap.has(p.party_group)) groupMembersMap.set(p.party_group, []);
-            groupMembersMap.get(p.party_group).push(p.is_self ? "You" : (p.name || p.agent || "Player"));
-        }
-    });
-
     el.innerHTML = players.map(p => {
         const tierIcon = p.tier_icon || DEFAULT_UNRANKED_ICON;
         const tierLabel = p.tier_label || "Unranked";
         const hasRank = (p.tier && p.tier > 0);
         const hasPeak = (p.peak_tier && p.peak_tier > 0 && p.peak_tier !== p.tier);
 
-        // Premade chip with clear Duo/Trio label & members tooltip
+        // Premades: your own party is confirmed by Riot, everyone else is
+        // inferred from party ids & co-occurrences across recent matches.
         const group = p.party_group || 0;
-        let partyChip = "";
-        if (group) {
-            const members = groupMembersMap.get(group) || [];
-            const pType = p.party_type || (p.party_size === 2 ? "Duo" : `${p.party_size}P`);
-            const pBadge = p.party_badge || (p.party_confirmed ? "YOUR DUO" : `${pType.toUpperCase()}`);
-            const tip = p.party_confirmed
-                ? `In your party with: ${members.filter(m => m !== "You").join(", ")}`
-                : `Premade ${pType} with: ${members.join(" + ")} (shared recent games)`;
-            
-            partyChip = `
-                <span class="dash-party-chip pg-${((group - 1) % 5) + 1} ${p.party_confirmed ? "is-confirmed" : ""}" title="${escapeHtml(tip)}">
-                    <i class="fa-solid ${p.party_confirmed ? "fa-user-group" : "fa-link"}"></i>${pBadge}
-                </span>`;
-        }
+        const tag = p.party_tag || (p.party_size === 2 ? "DUO" : (p.party_size === 3 ? "TRIO" : (p.party_size > 3 ? `${p.party_size}-STACK` : "")));
+        const partnerText = (p.party_partners && p.party_partners.length > 0)
+            ? p.party_partners.join(", ")
+            : "";
+
+        const partyChip = group ? `
+            <span class="dash-party-chip pg-${((group - 1) % 5) + 1} ${p.party_confirmed ? "is-confirmed" : ""}"
+                  title="${p.party_confirmed
+                      ? `In your party (${tag}) with: ${escapeHtml(partnerText || 'you')}`
+                      : `Queued (${tag}) with: ${escapeHtml(partnerText || 'teammates')} (matched in recent games)`}">
+                <i class="fa-solid ${p.party_confirmed ? "fa-user-group" : "fa-link"}"></i> ${tag}
+            </span>` : "";
 
         const stat = (cls, icon, value, title) => `
             <span class="dash-player-stat-pill ${cls}" title="${escapeHtml(title)}">
                 <i class="fa-solid ${icon}"></i> ${escapeHtml(String(value))}
             </span>`;
 
-        const wr5 = (p.winrate_last5 != null ? p.winrate_last5 : p.winrate) || 0;
-        const form5 = p.form_last5 || [];
-        const wrTitle = `Winrate over last 5 matches: ${p.wins_last5 || 0}W ${p.losses_last5 || 0}L${p.games > 0 ? ` · Career: ${p.winrate_lifetime || p.winrate}% (${p.wins}/${p.games})` : ""}`;
+        const wrValue = (p.winrate_last5 !== undefined && p.winrate_last5 !== null)
+            ? `${p.winrate_last5}% WR`
+            : `${p.winrate || 0}% WR`;
+        const wrTitle = (p.last5_games && p.last5_games > 0)
+            ? `Winrate across last ${p.last5_games} matches (${p.last5_wins}W ${p.last5_losses}L)`
+            : `${p.wins || 0} wins from ${p.games || 0} ranked games`;
+
+        const formPips = (p.last5_form && p.last5_form.length > 0)
+            ? `<div class="dash-player-form-pips" title="Recent form: ${p.last5_form.join(' ')}">
+                 ${p.last5_form.map(f => `<span class="dash-form-mini-pip is-${f.toLowerCase()}">${f}</span>`).join('')}
+               </div>`
+            : "";
 
         return `
             <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}">
@@ -3474,14 +3504,11 @@ function renderRoster(el, players) {
                             ${escapeHtml(p.peak_tier_label || "")}</span>` : ""}
                     </div>
                     <div class="dash-player-stats-row">
-                        ${stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "K/D over last 5 matches")}
-                        ${stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Headshot accuracy over last 5 matches")}
-                        ${stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Average damage per round over last 5 matches")}
-                        ${stat("is-wr", "fa-chart-simple", `${wr5}% WR (5G)`, wrTitle)}
-                        ${form5.length ? `
-                            <span class="dash-player-form-pips" title="Recent 5 games: ${form5.join(', ')}">
-                                ${form5.slice(0, 5).map(r => `<span class="dash-form-pip is-${(r || '').toLowerCase()}">${(r || '?')[0]}</span>`).join('')}
-                            </span>` : ''}
+                        ${stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "Recent matches K/D")}
+                        ${stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Recent matches Headshot accuracy")}
+                        ${stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Average damage per round")}
+                        ${stat("is-wr", "fa-chart-simple", wrValue, wrTitle)}
+                        ${formPips}
                     </div>
                 </div>
 
