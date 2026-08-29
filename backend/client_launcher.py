@@ -640,119 +640,120 @@ class ClientLauncher:
                 orig_clipboard = ""
 
             try:
-                user_rel_x = int(w * 0.165)
-                user_rel_y = int(h * 0.245)
+                user_screen_x = rect[0] + int(w * 0.165)
+                user_screen_y = rect[1] + int(h * 0.245)
 
-                pass_rel_x = int(w * 0.165)
-                pass_rel_y = int(h * 0.335)
+                pass_screen_x = rect[0] + int(w * 0.165)
+                pass_screen_y = rect[1] + int(h * 0.335)
 
-                def _post_click(rel_x: int, rel_y: int):
-                    """Sends a targeted click directly to the window message queue without touching or moving the mouse cursor."""
-                    l_param = (rel_y << 16) | (rel_x & 0xFFFF)
+                stay_screen_x = rect[0] + int(w * 0.082)
+                stay_screen_y = rect[1] + int(h * 0.405)
+
+                signin_btn_x = rect[0] + int(w * 0.165)
+                signin_btn_y = rect[1] + int(h * 0.585)
+
+                def _instant_click(screen_x: int, screen_y: int):
+                    """
+                    Performs an instant physical click at (screen_x, screen_y) so Chromium CEF
+                    registers the focus, and immediately restores the user's cursor position.
+                    """
                     try:
-                        win32gui.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, l_param)
-                        time.sleep(0.04)
-                        win32gui.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, l_param)
+                        orig = win32api.GetCursorPos()
                     except Exception:
-                        pass
+                        orig = None
+
+                    try:
+                        win32api.SetCursorPos((int(screen_x), int(screen_y)))
+                        time.sleep(0.02)
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                        time.sleep(0.02)
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        time.sleep(0.02)
+                    except Exception as e:
+                        login_logger.warning("instant_click failed: %s", e)
+                    finally:
+                        if orig:
+                            try:
+                                win32api.SetCursorPos(orig)
+                            except Exception:
+                                pass
 
                 def _read_focused_text() -> Optional[str]:
-                    """
-                    Reads back whatever the focused field contains, via
-                    select-all + copy. The clipboard is primed with a sentinel
-                    first: Ctrl+C over a non-text element leaves the clipboard
-                    untouched, so without the sentinel a stale value would read
-                    back as a successful write.
-                    """
+                    """Reads back whatever the focused field contains via select-all + copy."""
                     sentinel = "__vortex_probe__"
                     try:
                         pyperclip.copy(sentinel)
-                        time.sleep(0.04)
+                        time.sleep(0.03)
                         pyautogui.hotkey('ctrl', 'a')
                         time.sleep(0.03)
                         pyautogui.hotkey('ctrl', 'c')
-                        time.sleep(0.09)
+                        time.sleep(0.06)
                         got = pyperclip.paste()
                     except Exception:
                         return None
                     return None if got == sentinel else got
 
-                def _fill_field(value: str, label: str) -> bool:
-                    """Clears the focused field and enters `value`, pasting first
-                    and falling back to real keystrokes if paste is refused."""
-                    pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.03)
-                    pyautogui.press('backspace')
-                    time.sleep(0.03)
+                # 1. Bring window to front
+                cls.focus_window(hwnd)
+                time.sleep(0.15)
 
-                    try:
-                        pyperclip.copy(value)
-                        time.sleep(0.04)
-                        pyautogui.hotkey('ctrl', 'v')
-                        time.sleep(0.14)
-                    except Exception:
-                        pass
-
-                    readback = _read_focused_text()
-                    if readback == value:
-                        return True
-
-                    # Riot's login inputs have blocked paste before, and a
-                    # password field never yields to Ctrl+C at all - so an
-                    # unreadable field is retried by typing rather than
-                    # declared broken.
-                    login_logger.info(
-                        "[%s] %s paste unverified (read back %r) - typing instead",
-                        username, label, readback
-                    )
-                    pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.03)
-                    pyautogui.press('backspace')
-                    time.sleep(0.03)
-                    pyautogui.write(value, interval=0.015)
-                    time.sleep(0.10)
-                    return _read_focused_text() == value
-
-                # 1. Land on the username field without moving or hijacking the mouse cursor.
-                entered = False
-                for attempt in range(8):
-                    _post_click(user_rel_x, user_rel_y)
-                    time.sleep(0.06)
-                    cls.focus_window(hwnd)
-
-                    if _fill_field(username, "username"):
-                        entered = True
-                        break
-
-                    login_logger.info(
-                        "[%s] login form not ready (attempt %d/8) - retrying",
-                        username, attempt + 1
-                    )
-                    time.sleep(0.7)
-
-                if not entered:
-                    raise RuntimeError(
-                        "The Riot Client login form never accepted the username - "
-                        "it may still be loading, or the window layout changed."
-                    )
-
-                # 2. Smooth keyboard transition to Password field via Tab + targeted click message
-                pyautogui.press('tab')
-                time.sleep(0.05)
-                _post_click(pass_rel_x, pass_rel_y)
-                time.sleep(0.06)
+                # 2. Click and enter Username
+                _instant_click(user_screen_x, user_screen_y)
+                time.sleep(0.08)
+                cls.focus_window(hwnd)
 
                 pyautogui.hotkey('ctrl', 'a')
                 time.sleep(0.03)
                 pyautogui.press('backspace')
                 time.sleep(0.03)
-                pyperclip.copy(password)
-                time.sleep(0.04)
-                pyautogui.hotkey('ctrl', 'v')
-                time.sleep(0.14)
 
-                # 3. Submit login
+                try:
+                    pyperclip.copy(username)
+                    time.sleep(0.04)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.08)
+                except Exception:
+                    pass
+
+                # If paste was unverified, type directly
+                readback = _read_focused_text()
+                if readback != username:
+                    login_logger.info("[%s] username typing directly (readback: %r)", username, readback)
+                    pyautogui.hotkey('ctrl', 'a')
+                    time.sleep(0.02)
+                    pyautogui.press('backspace')
+                    time.sleep(0.02)
+                    pyautogui.write(username, interval=0.012)
+                    time.sleep(0.08)
+
+                # 3. Click and enter Password
+                _instant_click(pass_screen_x, pass_screen_y)
+                time.sleep(0.08)
+                cls.focus_window(hwnd)
+
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.03)
+                pyautogui.press('backspace')
+                time.sleep(0.03)
+
+                try:
+                    pyperclip.copy(password)
+                    time.sleep(0.04)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.08)
+                except Exception:
+                    pass
+
+                # 4. Check "Stay signed in" checkbox
+                time.sleep(0.05)
+                _instant_click(stay_screen_x, stay_screen_y)
+                time.sleep(0.06)
+
+                # 5. Submit Login (Click red arrow + Enter)
+                _instant_click(signin_btn_x, signin_btn_y)
+                time.sleep(0.04)
                 pyautogui.press('enter')
+
                 _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
             finally:
                 # Never leave the password on the clipboard.
