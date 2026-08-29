@@ -7232,3 +7232,206 @@ body.dashboard-mode .session-bar {
     margin-top: 10px;
     justify-content: center;
 }
+
+/* ==========================================================================
+   SETTINGS PRESET - saved snapshot, and the log of what actually moved
+   ========================================================================== */
+
+.preset-card {
+    margin: 10px 0;
+    padding: 11px 13px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    border: 1px solid var(--stroke-1);
+}
+
+.preset-card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.preset-card-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    color: var(--a-soft);
+}
+
+.preset-card-when {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    text-align: right;
+}
+
+.preset-empty {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.preset-files,
+.preset-accounts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.preset-files li,
+.preset-accounts li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-main);
+}
+
+.preset-files li i,
+.preset-accounts li i {
+    width: 13px;
+    text-align: center;
+    font-size: 11px;
+}
+
+.preset-files li.is-present i,
+.preset-accounts li.is-present i { color: var(--ok); }
+.preset-files li.is-missing i,
+.preset-accounts li.is-missing i { color: var(--text-dim); }
+.preset-files li.is-missing,
+.preset-accounts li.is-missing { color: var(--text-muted); }
+
+.preset-file-label { flex: 1; min-width: 0; }
+
+.preset-file-meta {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.preset-values {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 6px 14px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--stroke-1);
+}
+
+.preset-value {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    min-width: 0;
+}
+
+.preset-value span { color: var(--text-dim); }
+
+.preset-value strong {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.preset-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    margin: 10px 0;
+}
+
+.preset-actions .btn { justify-content: center; }
+
+.preset-log {
+    margin: 10px 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(var(--ok-rgb), 0.4);
+    background: rgba(var(--ok-rgb), 0.06);
+    overflow: hidden;
+}
+
+.preset-log.is-error {
+    border-color: rgba(var(--danger-rgb), 0.42);
+    background: rgba(var(--danger-rgb), 0.07);
+}
+
+.preset-log-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 11px;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--ok);
+    border-bottom: 1px solid var(--stroke-1);
+}
+
+.preset-log.is-error .preset-log-head { color: var(--danger); }
+
+.preset-log-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 2px;
+}
+
+.preset-log-close:hover { color: var(--text-main); }
+
+.preset-log-body {
+    padding: 10px 11px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.preset-log-msg {
+    margin: 0 0 9px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-main);
+}
+
+.preset-log-section {
+    margin: 11px 0 6px;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.preset-log-section:first-child { margin-top: 0; }
+
+.preset-advanced {
+    margin: 10px 0;
+    font-size: 11.5px;
+}
+
+.preset-advanced > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 0;
+    user-select: none;
+}
+
+.preset-advanced > summary:hover { color: var(--text-main); }

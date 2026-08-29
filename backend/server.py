@@ -1163,6 +1163,16 @@ class GameConfigCopyRequest(BaseModel):
     video: bool = True
 
 
+class PresetCaptureRequest(BaseModel):
+    account_id: Optional[int] = None   # omitted = whoever's signed in now
+    set_as_profile: bool = True
+
+
+class PresetApplyRequest(BaseModel):
+    account_id: Optional[int] = None   # omitted = whoever's signed in now
+    all_accounts: bool = False
+
+
 class GameConfigCopyAllRequest(BaseModel):
     source_account_id: int
     gameplay: bool = True
@@ -2338,40 +2348,91 @@ def _current_puuid() -> str:
     return ""
 
 
+# Set while the in-lobby borderless watcher is running, so a second launch
+# doesn't stack another one on top of it.
+_BORDERLESS_WATCH: Dict[str, Any] = {"running": False, "applied_for": ""}
+
+
+def _borderless_when_in_lobby(puuid: str) -> None:
+    """
+    Forces windowed borderless once the game is actually up and sitting in
+    the menus, rather than before it launches.
+
+    VALORANT reads its video config at startup and writes it back from memory
+    afterwards, so a pre-launch write is racing the game's own save and gets
+    silently undone. Waiting until the client reports MENUS means the game has
+    finished its startup read and settled, so the value written is the one
+    still on disk when it next starts.
+
+    Runs on its own thread and gives up quietly - a launch the user cancels,
+    or a game that never reaches the menus, must not leave anything behind.
+    """
+    if not puuid or _BORDERLESS_WATCH["running"]:
+        return
+
+    def watch() -> None:
+        _BORDERLESS_WATCH["running"] = True
+        try:
+            deadline = time.time() + 300  # five minutes covers a slow cold start
+            while time.time() < deadline:
+                time.sleep(3.0)
+                if not launcher.is_valorant_running():
+                    continue
+                try:
+                    client = valorant_client.ValorantLiveClient()
+                    if not client.connect():
+                        continue
+                    state = (client.presence().get("sessionLoopState") or "").upper()
+                except Exception:
+                    continue
+
+                # MENUS is "in the lobby" - past the startup read, not in a match.
+                if state != "MENUS":
+                    continue
+
+                result = game_config.force_borderless(puuid)
+                _BORDERLESS_WATCH["applied_for"] = puuid
+                client_launcher.login_logger.info(
+                    "forced borderless for %s once in the lobby: %s", puuid[:8], result
+                )
+                return
+        finally:
+            _BORDERLESS_WATCH["running"] = False
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 async def _apply_launch_prefs(puuid: str) -> None:
     """
-    Applies this app's local-launch preferences - forced borderless display,
-    and (if armed) copying a chosen "profile" account's settings onto this
-    one - before the game reads its config on startup.
+    Applies the settings preset to the account that is about to play, when
+    auto-apply is armed.
 
     Runs synchronously when the account's local config folder already exists
     (a returning account - this is a couple of small file writes, well under
     a launch's normal latency). When it doesn't - a first-ever login for this
     account on this PC, where Riot hasn't created the folder yet - the launch
-    is never blocked on it; a background watcher applies the preference the
-    moment the folder shows up instead.
+    is never blocked on it; a background watcher applies it the moment the
+    folder shows up instead.
+
+    Forced borderless is handled separately by _borderless_when_in_lobby().
     """
     if not puuid:
         return
 
     settings = db.get_settings()
-    force_border = settings.get("force_borderless", "1") != "0"
     autoapply = settings.get("settings_autoapply", "0") == "1"
-    profile_id = settings.get("settings_profile_account_id", "") or ""
 
-    profile_puuid = ""
-    if autoapply and profile_id.isdigit():
-        prof = db.get_account_by_id(int(profile_id))
-        profile_puuid = (prof or {}).get("puuid", "") or ""
-
-    if not (force_border or profile_puuid):
+    # Forced borderless deliberately does NOT happen here any more. VALORANT
+    # reads its video config at startup and writes it back out from memory
+    # afterwards, so anything set before launch is liable to be overwritten by
+    # the game's own idea of the settings. It's applied once the game is up
+    # and sitting in the menus instead - see _borderless_when_in_lobby().
+    if not autoapply:
         return
 
     def apply_now() -> None:
-        if profile_puuid and profile_puuid != puuid:
-            game_config.copy_settings(profile_puuid, puuid)
-        if force_border:
-            game_config.force_borderless(puuid)
+        if game_config.describe_preset().get("exists"):
+            game_config.apply_preset(puuid)
 
     if game_config.account_dir(puuid):
         await asyncio.to_thread(apply_now)
@@ -2382,6 +2443,14 @@ async def _apply_launch_prefs(puuid: str) -> None:
             apply_now()
 
     threading.Thread(target=watch, daemon=True).start()
+
+
+async def _arm_launch_prefs(puuid: str) -> None:
+    """Everything that should happen around a launch: preset first, then the
+    in-lobby borderless pass."""
+    await _apply_launch_prefs(puuid)
+    if db.get_settings().get("force_borderless", "1") != "0":
+        _borderless_when_in_lobby(puuid)
 
 
 # --------------------------------------------------------------------------
@@ -2495,6 +2564,107 @@ async def copy_game_config(req: GameConfigCopyRequest):
         game_config.copy_settings, src["puuid"], dst_puuid, req.gameplay, req.video
     )
     return result
+
+
+@app.get("/api/game-config/preset")
+async def get_settings_preset():
+    """What's currently saved as the settings preset."""
+    return await asyncio.to_thread(game_config.describe_preset)
+
+
+@app.post("/api/game-config/preset/capture")
+async def capture_settings_preset(req: PresetCaptureRequest):
+    """
+    Saves the signed-in account's settings as the preset.
+
+    Capturing from the live session rather than a stored account is what makes
+    this usable at all: the puuid comes from the Riot Client directly, so an
+    account Vortex has never identified can still be used as the source. Most
+    accounts are in exactly that state - they have real settings sitting on
+    this PC, but no stored puuid to find them by.
+    """
+    puuid = ""
+    label = ""
+
+    if req.account_id:
+        acc = db.get_account_by_id(req.account_id)
+        if not acc:
+            return {"success": False, "message": "Account not found."}
+        puuid = (acc.get("puuid") or "").strip()
+        label = acc.get("display_name") or acc.get("username", "")
+        if not puuid:
+            return {"success": False, "message":
+                    f"Vortex hasn't identified {label} yet - sign into it and capture from the live session."}
+    else:
+        puuid = await asyncio.to_thread(_current_puuid)
+        info = await asyncio.to_thread(launcher.get_active_riot_account)
+        label = (info or {}).get("display_name") or (info or {}).get("username") or ""
+        if not puuid:
+            return {"success": False, "message":
+                    "No account is signed into the Riot Client right now."}
+        # Learn this account's puuid while we have it, so it can be a copy
+        # target later without needing another sign-in.
+        matched = _match_account_to_session((info or {}).get("username", ""), label)
+        if matched and (matched.get("puuid") or "") != puuid:
+            try:
+                db.update_account(matched["id"], {"puuid": puuid})
+            except Exception:
+                pass
+
+    result = await asyncio.to_thread(game_config.capture_preset, puuid, label)
+    if result.get("success") and req.set_as_profile:
+        matched = db.get_account_by_puuid(puuid)
+        if matched:
+            db.update_settings({"settings_profile_account_id": str(matched["id"])})
+    return result
+
+
+@app.post("/api/game-config/preset/apply")
+async def apply_settings_preset(req: PresetApplyRequest):
+    """Writes the saved preset onto one account, or onto every account that can take it."""
+    if req.all_accounts:
+        def run_all() -> Dict[str, Any]:
+            applied, skipped = [], []
+            for acc in db.get_all_accounts():
+                name = acc.get("display_name") or acc.get("username", "")
+                pu = (acc.get("puuid") or "").strip()
+                if not pu:
+                    skipped.append({"name": name, "why": "not identified on this PC yet"})
+                    continue
+                res = game_config.apply_preset(pu, name)
+                if res.get("success"):
+                    applied.append({"name": name, "files": res.get("applied", [])})
+                else:
+                    skipped.append({"name": name, "why": res.get("message", "failed")})
+            return {"applied": applied, "skipped": skipped}
+
+        res = await asyncio.to_thread(run_all)
+        applied, skipped = res["applied"], res["skipped"]
+        if not applied:
+            return {"success": False, "message":
+                    "No account was ready to receive the preset yet.", **res}
+        msg = f"Applied the preset to {len(applied)} account{'s' if len(applied) != 1 else ''}."
+        if skipped:
+            msg += f" {len(skipped)} skipped."
+        return {"success": True, "message": msg, **res}
+
+    if req.account_id:
+        acc = db.get_account_by_id(req.account_id)
+        if not acc:
+            return {"success": False, "message": "Account not found."}
+        puuid = (acc.get("puuid") or "").strip()
+        label = acc.get("display_name") or acc.get("username", "")
+        if not puuid:
+            return {"success": False, "message":
+                    f"Vortex hasn't identified {label} yet - sign into it once, then apply."}
+    else:
+        puuid = await asyncio.to_thread(_current_puuid)
+        info = await asyncio.to_thread(launcher.get_active_riot_account)
+        label = (info or {}).get("display_name") or (info or {}).get("username") or ""
+        if not puuid:
+            return {"success": False, "message": "No account is signed into the Riot Client right now."}
+
+    return await asyncio.to_thread(game_config.apply_preset, puuid, label)
 
 
 @app.post("/api/game-config/copy-all")
@@ -2749,7 +2919,7 @@ async def live_launch():
     settings = db.get_settings()
     client_path = settings.get("riot_client_path", "") or ""
 
-    await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
+    await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
     result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
     invalidate_live_snapshot()
     return {**result, "launch": valorant_client.launch_state()}
@@ -2778,7 +2948,7 @@ async def _launch_game_for_current_session() -> None:
         await asyncio.sleep(1.5)
 
         puuid = await asyncio.to_thread(_current_puuid)
-        await _apply_launch_prefs(puuid)
+        await _arm_launch_prefs(puuid)
 
         settings = db.get_settings()
         client_path = settings.get("riot_client_path", "") or             await asyncio.to_thread(launcher.detect_riot_client_path)
@@ -2808,7 +2978,7 @@ async def background_login_then_play(account_id: int):
             if apply_account_update(account_id, update_payload):
                 return  # banned/suspended - don't launch
             await asyncio.sleep(1.5)
-            await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
+            await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
             await asyncio.to_thread(valorant_client.launch_valorant, client_path)
             return
 
@@ -2838,7 +3008,7 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
             return {"success": True, "already_running": True, "switched": False,
                     "message": "VALORANT is already running for this account."}
 
-        await _apply_launch_prefs(await asyncio.to_thread(_current_puuid))
+        await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
         result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
         if not result.get("success"):
             return {"success": False, "message": result.get("message") or

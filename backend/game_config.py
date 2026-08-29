@@ -19,8 +19,11 @@ routine, expected case rather than an error.
 """
 
 import os
+import sys
+import json
 import time
 import shutil
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 GAMEPLAY_REL = os.path.join("Windows", "RiotUserSettings.ini")
@@ -262,3 +265,233 @@ def describe(puuid: str) -> Dict[str, Any]:
         path = os.path.join(d, rel)
         files.append({"label": label, "present": os.path.isfile(path)})
     return {"found": True, "path": d, "files": files}
+
+
+# --------------------------------------------------------------------------
+# SETTINGS PRESET
+#
+# A copy of one account's local VALORANT settings, kept in Vortex's own data
+# directory rather than being read out of the source account's folder every
+# time it's needed.
+#
+# Snapshotting matters because a source account's folder is not stable:
+# VALORANT rewrites it whenever that account plays, and it can only be read
+# at all while Vortex knows which puuid the account has. Capturing from
+# whichever account is signed in right now needs no stored identity at all -
+# the live session supplies the puuid - which is what makes a preset possible
+# for accounts Vortex has never seen before.
+# --------------------------------------------------------------------------
+
+FILE_SPECS = (
+    (GAMEPLAY_REL, "Crosshair, sensitivity & HUD", "RiotUserSettings.ini"),
+    (KEYBINDS_REL, "Keybinds", "BackupKeybinds.json"),
+    (VIDEO_REL, "Video & graphics", "GameUserSettings.ini"),
+)
+
+
+def preset_dir() -> str:
+    if getattr(sys, "frozen", False):
+        base = os.path.join(os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "Vortex")
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "settings_preset")
+
+
+def _ini_value(text: str, key: str) -> str:
+    """Value of `key=` from an ini/settings body, or ''."""
+    needle = key.lower() + "="
+    for line in text.splitlines():
+        s = line.strip()
+        if s.lower().startswith(needle):
+            return s.split("=", 1)[1].strip()
+    return ""
+
+
+FULLSCREEN_LABELS = {"0": "Fullscreen", "1": "Windowed Fullscreen (borderless)", "2": "Windowed"}
+
+
+def summarize_files(folder: str) -> Dict[str, Any]:
+    """
+    A human-readable account of what a settings folder actually contains.
+
+    This is what the UI shows after a copy, so that "it copied" can be checked
+    against real values - a crosshair name, a sensitivity, a keybind count -
+    rather than taken on trust.
+    """
+    files = []
+    details: Dict[str, Any] = {}
+
+    for rel, label, filename in FILE_SPECS:
+        path = os.path.join(folder, rel)
+        present = os.path.isfile(path)
+        size = os.path.getsize(path) if present else 0
+        entry = {"label": label, "file": filename, "present": present, "size": size}
+
+        if present and rel == GAMEPLAY_REL:
+            try:
+                with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                    text = f.read()
+                details["crosshair_profile"] = _ini_value(text, "EAresStringSettingName::CrosshairProfileName")
+                details["sensitivity"] = _ini_value(text, "EAresFloatSettingName::MouseSensitivity")
+                details["scoped_sensitivity"] = _ini_value(text, "EAresFloatSettingName::MouseSensitivityZoomed")
+                details["settings_lines"] = len([l for l in text.splitlines() if "=" in l])
+            except OSError:
+                pass
+
+        if present and rel == KEYBINDS_REL:
+            try:
+                with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                    data = json.load(f)
+                mappings = data.get("actionMappings") or []
+                details["keybind_count"] = len(mappings)
+                details["agent_keybinds"] = len(
+                    [m for m in mappings if (m.get("characterName") or "None") != "None"]
+                )
+            except (OSError, ValueError):
+                pass
+
+        if present and rel == VIDEO_REL:
+            try:
+                with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                    text = f.read()
+                mode = _ini_value(text, "FullscreenMode")
+                details["display_mode"] = FULLSCREEN_LABELS.get(mode, f"Unknown ({mode})") if mode else ""
+                w = _ini_value(text, "ResolutionSizeX")
+                h = _ini_value(text, "ResolutionSizeY")
+                details["resolution"] = f"{w} x {h}" if w and h else ""
+            except OSError:
+                pass
+
+        files.append(entry)
+
+    return {"files": files, "details": details}
+
+
+def capture_preset(puuid: str, label: str = "") -> Dict[str, Any]:
+    """
+    Snapshots one account's settings into Vortex's own storage and reports
+    exactly what was taken, file by file.
+    """
+    if not puuid:
+        return {"success": False, "message": "No account is signed in, so there's nothing to capture."}
+
+    src = account_dir(puuid)
+    if not src:
+        return {"success": False, "message":
+                "This account has no VALORANT settings on this PC yet. "
+                "Play one match on it, then capture again."}
+
+    dest = preset_dir()
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except OSError as e:
+        return {"success": False, "message": f"Couldn't create the preset folder: {e}"}
+
+    copied, missing = [], []
+    for rel, lbl, filename in FILE_SPECS:
+        src_f = os.path.join(src, rel)
+        if not os.path.isfile(src_f):
+            missing.append(lbl)
+            continue
+        try:
+            dst_f = os.path.join(dest, rel)
+            os.makedirs(os.path.dirname(dst_f), exist_ok=True)
+            shutil.copyfile(src_f, dst_f)
+            copied.append(lbl)
+        except OSError:
+            missing.append(lbl)
+
+    if not copied:
+        return {"success": False, "message":
+                "None of this account's settings files could be read."}
+
+    summary = summarize_files(dest)
+    meta = {
+        "puuid": puuid,
+        "label": label,
+        "captured_at": datetime.now().isoformat(timespec="seconds"),
+        "copied": copied,
+        "missing": missing,
+    }
+    try:
+        with open(os.path.join(dest, "preset.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except OSError:
+        pass
+
+    return {
+        "success": True,
+        "message": f"Saved {_join(copied)} from {label or 'the signed-in account'}.",
+        "meta": meta,
+        **summary,
+    }
+
+
+def describe_preset() -> Dict[str, Any]:
+    """What's currently stored as the preset, if anything."""
+    dest = preset_dir()
+    meta = {}
+    try:
+        with open(os.path.join(dest, "preset.json"), "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        pass
+
+    if not any(os.path.isfile(os.path.join(dest, rel)) for rel, _, _ in FILE_SPECS):
+        return {"exists": False, "meta": meta, "files": [], "details": {}}
+
+    return {"exists": True, "meta": meta, **summarize_files(dest)}
+
+
+def apply_preset(puuid: str, label: str = "") -> Dict[str, Any]:
+    """
+    Writes the stored preset onto one account, and reports what landed.
+
+    Each file is verified by size after the write rather than trusting that
+    copyfile returning meant the game will see it - the target folder is one
+    VALORANT also writes to.
+    """
+    dest = preset_dir()
+    if not any(os.path.isfile(os.path.join(dest, rel)) for rel, _, _ in FILE_SPECS):
+        return {"success": False, "message":
+                "No preset saved yet - capture one from a signed-in account first."}
+
+    if not puuid:
+        return {"success": False, "message": "No account is signed in to apply the preset to."}
+
+    target = account_dir(puuid)
+    if not target:
+        return {"success": False, "message":
+                "This account has no VALORANT settings folder on this PC yet. "
+                "Play one match on it, then apply again."}
+
+    applied, failed = [], []
+    for rel, lbl, filename in FILE_SPECS:
+        src_f = os.path.join(dest, rel)
+        if not os.path.isfile(src_f):
+            continue
+        dst_f = os.path.join(target, rel)
+        try:
+            os.makedirs(os.path.dirname(dst_f), exist_ok=True)
+            shutil.copyfile(src_f, dst_f)
+            if os.path.getsize(dst_f) == os.path.getsize(src_f):
+                applied.append(lbl)
+            else:
+                failed.append(lbl)
+        except OSError as e:
+            failed.append(f"{lbl} ({e.strerror or e})")
+
+    if not applied:
+        return {"success": False, "message": "Nothing could be written to this account.",
+                "applied": [], "failed": failed}
+
+    message = f"Applied {_join(applied)} to {label or 'this account'}."
+    if failed:
+        message += f" Couldn't write {_join(failed)}."
+    return {
+        "success": True,
+        "message": message,
+        "applied": applied,
+        "failed": failed,
+        **summarize_files(target),
+    }

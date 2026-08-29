@@ -191,6 +191,15 @@ const DOM = {
     settingsCopyTarget: document.getElementById("settings-copy-target"),
     btnCopySettingsNow: document.getElementById("btn-copy-settings-now"),
     btnCopySettingsAll: document.getElementById("btn-copy-settings-all"),
+    presetSummary: document.getElementById("preset-summary"),
+    presetWhen: document.getElementById("preset-when"),
+    presetLog: document.getElementById("preset-log"),
+    presetLogTitle: document.getElementById("preset-log-title"),
+    presetLogBody: document.getElementById("preset-log-body"),
+    presetLogClose: document.getElementById("preset-log-close"),
+    btnPresetCapture: document.getElementById("btn-preset-capture"),
+    btnPresetApply: document.getElementById("btn-preset-apply"),
+    btnPresetApplyAll: document.getElementById("btn-preset-apply-all"),
     settingsProfileStatus: document.getElementById("settings-profile-status"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
@@ -589,6 +598,12 @@ function initEventListeners() {
     if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
     if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
     if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
+    if (DOM.btnPresetCapture) DOM.btnPresetCapture.addEventListener("click", capturePreset);
+    if (DOM.btnPresetApply) DOM.btnPresetApply.addEventListener("click", applyPresetToCurrent);
+    if (DOM.btnPresetApplyAll) DOM.btnPresetApplyAll.addEventListener("click", applyPresetToAll);
+    if (DOM.presetLogClose) DOM.presetLogClose.addEventListener("click", () => {
+        DOM.presetLog.style.display = "none";
+    });
     // Picking a different profile changes what a copy would carry, so the
     // description under the picker has to follow the selection.
     if (DOM.settingsProfileAccount) {
@@ -2407,6 +2422,7 @@ async function loadGameConfigSettings() {
     } catch (err) {
         state.gameConfig = null;
     }
+    loadPreset();
 }
 
 /**
@@ -4633,4 +4649,217 @@ function initLiveEventListeners() {
     window.addEventListener("resize", () => {
         if (state.dashboardOpen) moveTabGlide();
     });
+}
+
+// ==========================================================================
+// SETTINGS PRESET
+//
+// The preset is captured from whichever account is signed in right now, not
+// from a stored account. That's the whole point: most accounts have real
+// settings sitting on this PC but no puuid stored, so they can't be picked
+// from a list - but the live Riot Client always knows who is signed in.
+//
+// Every action reports exactly what it moved, so "it copied" can be checked
+// against real values rather than taken on trust.
+// ==========================================================================
+
+/** Loads the saved preset and renders its summary. */
+async function loadPreset() {
+    if (!DOM.presetSummary) return;
+    try {
+        const res = await fetch("/api/game-config/preset");
+        state.preset = await res.json();
+    } catch (err) {
+        state.preset = null;
+    }
+    renderPresetSummary();
+}
+
+function renderPresetSummary() {
+    if (!DOM.presetSummary) return;
+    const p = state.preset;
+
+    if (!p || !p.exists) {
+        DOM.presetSummary.innerHTML =
+            '<span class="preset-empty">Nothing saved yet. Sign into the account whose settings you want, ' +
+            'then press <strong>Save Current Account As Preset</strong>.</span>';
+        if (DOM.presetWhen) DOM.presetWhen.textContent = "";
+        return;
+    }
+
+    const d = p.details || {};
+    const meta = p.meta || {};
+    if (DOM.presetWhen) {
+        DOM.presetWhen.textContent = meta.captured_at
+            ? `from ${meta.label || "an account"} · ${formatPresetDate(meta.captured_at)}`
+            : (meta.label ? `from ${meta.label}` : "");
+    }
+
+    const rows = [
+        ["Crosshair profile", d.crosshair_profile],
+        ["Sensitivity", d.sensitivity],
+        ["Scoped sensitivity", d.scoped_sensitivity],
+        ["Keybinds", d.keybind_count != null ? `${d.keybind_count} bound` : ""],
+        ["Display mode", d.display_mode],
+        ["Resolution", d.resolution]
+    ].filter(r => r[1] !== undefined && r[1] !== null && String(r[1]).trim() !== "");
+
+    const fileRows = (p.files || []).map(f =>
+        `<li class="${f.present ? "is-present" : "is-missing"}">
+            <i class="fa-solid ${f.present ? "fa-circle-check" : "fa-circle-xmark"}"></i>
+            <span class="preset-file-label">${escapeHtml(f.label)}</span>
+            <span class="preset-file-meta">${f.present ? formatBytes(f.size) : "not captured"}</span>
+         </li>`).join("");
+
+    DOM.presetSummary.innerHTML =
+        `<ul class="preset-files">${fileRows}</ul>` +
+        (rows.length
+            ? `<div class="preset-values">${rows.map(([k, v]) =>
+                `<div class="preset-value"><span>${escapeHtml(k)}</span><strong>${escapeHtml(String(v))}</strong></div>`
+              ).join("")}</div>`
+            : "");
+}
+
+function formatPresetDate(iso) {
+    try {
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    } catch (e) {
+        return iso;
+    }
+}
+
+function formatBytes(n) {
+    if (!n) return "0 B";
+    return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
+}
+
+/** Shows the result panel: what moved, what didn't, and the values that landed. */
+function showPresetLog(title, data, ok) {
+    if (!DOM.presetLog) return;
+    DOM.presetLog.style.display = "block";
+    DOM.presetLog.classList.toggle("is-error", !ok);
+    DOM.presetLogTitle.innerHTML =
+        `<i class="fa-solid ${ok ? "fa-clipboard-check" : "fa-triangle-exclamation"}"></i> ${escapeHtml(title)}`;
+
+    const parts = [];
+    if (data.message) parts.push(`<p class="preset-log-msg">${escapeHtml(data.message)}</p>`);
+
+    // Per-file outcome, for a capture or a single-account load.
+    if (data.files && data.files.length) {
+        parts.push(`<div class="preset-log-section">Files</div><ul class="preset-files">` +
+            data.files.map(f =>
+                `<li class="${f.present ? "is-present" : "is-missing"}">
+                    <i class="fa-solid ${f.present ? "fa-circle-check" : "fa-circle-xmark"}"></i>
+                    <span class="preset-file-label">${escapeHtml(f.label)}</span>
+                    <span class="preset-file-meta">${f.present ? formatBytes(f.size) : "not found"}</span>
+                 </li>`).join("") + `</ul>`);
+    }
+
+    if (data.details && Object.keys(data.details).length) {
+        const labels = {
+            crosshair_profile: "Crosshair profile",
+            sensitivity: "Sensitivity",
+            scoped_sensitivity: "Scoped sensitivity",
+            settings_lines: "Settings entries",
+            keybind_count: "Keybinds",
+            agent_keybinds: "Per-agent keybinds",
+            display_mode: "Display mode",
+            resolution: "Resolution"
+        };
+        const rows = Object.entries(data.details)
+            .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+            .map(([k, v]) =>
+                `<div class="preset-value"><span>${escapeHtml(labels[k] || k)}</span><strong>${escapeHtml(String(v))}</strong></div>`);
+        if (rows.length) {
+            parts.push(`<div class="preset-log-section">Values now stored</div>
+                        <div class="preset-values">${rows.join("")}</div>`);
+        }
+    }
+
+    // Per-account outcome, for a load-onto-all.
+    if (data.applied && data.applied.length && typeof data.applied[0] === "object") {
+        parts.push(`<div class="preset-log-section">Applied to ${data.applied.length}</div>
+            <ul class="preset-accounts">` + data.applied.map(a =>
+                `<li class="is-present"><i class="fa-solid fa-circle-check"></i>
+                    <span>${escapeHtml(a.name)}</span>
+                    <span class="preset-file-meta">${escapeHtml((a.files || []).length + " files")}</span></li>`
+            ).join("") + `</ul>`);
+    }
+
+    if (data.skipped && data.skipped.length) {
+        parts.push(`<div class="preset-log-section">Skipped ${data.skipped.length}</div>
+            <ul class="preset-accounts">` + data.skipped.map(sk =>
+                `<li class="is-missing"><i class="fa-solid fa-circle-minus"></i>
+                    <span>${escapeHtml(sk.name)}</span>
+                    <span class="preset-file-meta">${escapeHtml(sk.why || "")}</span></li>`
+            ).join("") + `</ul>`);
+    }
+
+    if (data.failed && data.failed.length) {
+        parts.push(`<div class="preset-log-section">Couldn't write</div>
+            <ul class="preset-accounts">` + data.failed.map(f =>
+                `<li class="is-missing"><i class="fa-solid fa-circle-xmark"></i><span>${escapeHtml(String(f))}</span></li>`
+            ).join("") + `</ul>`);
+    }
+
+    DOM.presetLogBody.innerHTML = parts.join("");
+}
+
+async function presetRequest(btn, url, body, busyLabel, title) {
+    const original = btn ? btn.innerHTML : "";
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> ${busyLabel}`;
+    }
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        showPresetLog(title, data, !!data.success);
+        showToast(data.message || (data.success ? "Done." : "Didn't work."),
+                  data.success ? "success" : "error");
+        if (data.success) {
+            loadPreset();
+            loadGameConfigSettings();
+        }
+        return data;
+    } catch (err) {
+        showToast("Failed to reach the app's backend.", "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        }
+    }
+}
+
+function capturePreset() {
+    return presetRequest(
+        DOM.btnPresetCapture, "/api/game-config/preset/capture", {},
+        "Saving...", "Saved from the signed-in account"
+    );
+}
+
+function applyPresetToCurrent() {
+    return presetRequest(
+        DOM.btnPresetApply, "/api/game-config/preset/apply", {},
+        "Loading...", "Loaded onto the signed-in account"
+    );
+}
+
+async function applyPresetToAll() {
+    const n = ((state.gameConfig || {}).accounts || []).filter(a => a.has_puuid).length;
+    if (!confirm(
+        `Load the saved preset onto every account Vortex has identified (${n} right now)?\n\n` +
+        `This overwrites their crosshair, sensitivity, keybinds and video settings and can't be undone.`)) {
+        return;
+    }
+    return presetRequest(
+        DOM.btnPresetApplyAll, "/api/game-config/preset/apply", { all_accounts: true },
+        "Loading...", "Loaded onto all accounts"
+    );
 }
