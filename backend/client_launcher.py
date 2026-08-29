@@ -261,7 +261,8 @@ class ClientLauncher:
             "peak_rank_tier": "",
             "peak_rank_division": "",
             "peak_rank_icon_url": "",
-            "status": "PLAYABLE"
+            "status": "PLAYABLE",
+            "puuid": ""
         }
 
         # 1. Parse official userinfo payload
@@ -273,6 +274,10 @@ class ClientLauncher:
                 uinfo = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
 
                 result["username"] = uinfo.get("username") or uinfo.get("preferred_username", "")
+                # Riot's stable per-account id. This is the key the account's
+                # local VALORANT settings folder is named after, so capturing
+                # it here is what makes crosshair/keybind copying possible.
+                result["puuid"] = (uinfo.get("sub") or uinfo.get("puuid") or "").strip()
                 
                 # Verify expected username if supplied
                 if expected_username and result["username"]:
@@ -317,6 +322,17 @@ class ClientLauncher:
         except Exception:
             pass
 
+        # userinfo comes back empty while the game is mid-session, but the
+        # entitlements token always carries the puuid as its subject.
+        if not result["puuid"]:
+            try:
+                url_ent = f"https://127.0.0.1:{port}/entitlements/v1/token"
+                res = requests.get(url_ent, auth=auth, verify=False, timeout=1.5)
+                if res.status_code == 200:
+                    result["puuid"] = (res.json().get("subject") or "").strip()
+            except Exception:
+                pass
+
         # Fallback chat session for Riot ID & region if userinfo was incomplete
         if not result["display_name"]:
             try:
@@ -327,6 +343,8 @@ class ClientLauncher:
                     game_name = data.get("game_name", "").strip()
                     tag_line = data.get("game_tag", "").strip()
                     pid = data.get("pid", "").lower()
+                    if not result["puuid"]:
+                        result["puuid"] = (data.get("puuid") or "").strip()
                     
                     if "la1" in pid or "la2" in pid or "las" in pid: result["region"] = "LATAM"
                     elif "br" in pid: result["region"] = "BR"
@@ -563,13 +581,22 @@ class ClientLauncher:
     @classmethod
     def auto_fill_credentials(cls, username: str, password: str, cold_start: bool = False):
         """
-        Enters credentials into the Riot Client login window:
-        1. Signs out existing session via API if logged in.
-        2. Waits for the login window to appear & stabilize.
-        3. Brings window to foreground.
-        4. Focuses Username field directly and inputs username.
-        5. Focuses Password field directly and inputs password.
-        6. Submits login.
+        Pure keyboard autofill (ZERO mouse movement), the v3-era sequence that
+        the Riot Client login form actually behaves with:
+
+        1. Signs out of the existing session via the local API.
+        2. Waits for the login window (and, on a cold start, for it to settle).
+        3. Types Username -> Tab -> Password -> Enter. Nothing else.
+
+        Deliberately NOT done here, because each one broke logins in 4.x/5.x:
+        - No second "type it again" pass over the username. Pasting and then
+          re-typing the same value races the form's own input handler and
+          regularly left a truncated or doubled username.
+        - No tab-walk to the submit button after Enter. Enter in the password
+          field already submits; the extra tabs then landed on the social
+          sign-in buttons and fired one of those instead.
+        - No repeated focus grabs once the form is up. Every extra grab is a
+          chance for keyboard focus to move off the username field.
         """
         # Ensure any running Valorant game instance is closed first so session can be cleanly switched
         cls.kill_valorant()
@@ -577,12 +604,15 @@ class ClientLauncher:
         _set_login_stage("signout", "Signing out of the current session...", username)
         did_sign_out = cls.api_sign_out()
         if did_sign_out:
-            # Allow CEF UI time to transition to login view
-            time.sleep(1.2)
+            # Riot Client auto-navigates straight to the username/password form
+            # as soon as sign-out completes and keeps its own window focused
+            # through that transition, so this is only a settle delay.
+            time.sleep(0.5)
 
-        # On cold start, give client process time to pass splash screen
+        # On cold start, give the client process time to get past its splash
+        # screen before we even start looking for the real window.
         if cold_start:
-            time.sleep(2.0)
+            time.sleep(2.5)
 
         _set_login_stage("waiting_window", "Waiting for the Riot Client login window...", username)
         max_attempts = 90 if cold_start else 45
@@ -591,112 +621,112 @@ class ClientLauncher:
             hwnd = cls.find_riot_window()
             if hwnd:
                 break
-            time.sleep(0.15)
+            time.sleep(0.12)
 
         if not hwnd:
             _set_login_stage("error", "Riot Client login window did not appear.", username)
             return
 
-        # Wait until window dimensions stabilize
-        stable_checks = 0
-        last_rect = None
-        for _ in range(50 if cold_start else 20):
-            time.sleep(0.12)
-            curr_hwnd = cls.find_riot_window() or hwnd
-            hwnd = curr_hwnd
-            try:
-                rect = win32gui.GetWindowRect(hwnd)
-            except Exception:
-                rect = None
+        if cold_start:
+            # Wait until the window's rect stops changing (splash -> real login
+            # window swap, or the login form finishing layout) before typing.
+            stable_checks = 0
+            last_rect = None
+            for _ in range(60):
+                time.sleep(0.15)
+                current_hwnd = cls.find_riot_window()
+                if not current_hwnd:
+                    continue
+                hwnd = current_hwnd
+                try:
+                    rect = win32gui.GetWindowRect(hwnd)
+                except Exception:
+                    rect = None
 
-            if rect and rect == last_rect and (rect[2] - rect[0]) >= 300:
-                stable_checks += 1
-                if stable_checks >= 5:
-                    break
-            else:
-                stable_checks = 0
-            last_rect = rect
+                if rect and rect == last_rect and rect[2] - rect[0] > 300:
+                    stable_checks += 1
+                    if stable_checks >= 6:
+                        break
+                else:
+                    stable_checks = 0
+                last_rect = rect
 
-        # Bring window to front
-        cls.focus_window(hwnd)
-        time.sleep(0.8)
+            # Extra settle time for the login form's inputs to become interactive.
+            time.sleep(1.2)
+
+            # Only fight for foreground focus on cold start, where Riot Client is
+            # a brand new process and Windows' foreground-lock restrictions are
+            # most likely to block SetForegroundWindow.
+            focused_ok = False
+            for _ in range(6):
+                cls.focus_window(hwnd)
+                time.sleep(0.25)
+                try:
+                    if win32gui.GetForegroundWindow() == hwnd:
+                        focused_ok = True
+                        break
+                except Exception:
+                    pass
+
+            if not focused_ok:
+                _set_login_stage("error", "Could not focus the Riot Client window.", username)
+                return
+        else:
+            # Warm path (already logged in -> API sign-out): Riot Client
+            # auto-navigates to the login form and keeps its own window focused
+            # through the transition, so a single non-repeated nudge is enough.
+            cls.focus_window(hwnd)
+
+        # A bit more settle time before typing starts - the login form can be
+        # visible before its inputs are actually interactive/focused, which is
+        # what causes the password to land in the username field.
+        time.sleep(0.9)
 
         _set_login_stage("typing", "Entering credentials into Riot Client...", username)
+
+        # Save the clipboard so the password isn't left sitting in it afterwards.
         try:
-            # Save the clipboard so we don't leave the password sitting in it.
-            try:
-                orig_clipboard = pyperclip.paste()
-            except Exception:
-                orig_clipboard = ""
+            orig_clipboard = pyperclip.paste()
+        except Exception:
+            orig_clipboard = ""
 
-            try:
-                # Ensure window is frontmost
-                cls.focus_window(hwnd)
-                time.sleep(0.2)
+        try:
+            # Clear Username & paste (the username field is focused by default)
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.04)
+            pyautogui.press('backspace')
+            time.sleep(0.04)
+            pyperclip.copy(username)
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.15)
 
-                # 1. Clear Username & Paste/Write (Username is default focused on sign-in screen)
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.04)
-                pyautogui.press('backspace')
-                time.sleep(0.04)
+            # Tab to Password - the extra pause gives the password field time to
+            # actually receive focus before anything is typed into it.
+            pyautogui.press('tab')
+            time.sleep(0.3)
 
-                try:
-                    pyperclip.copy(username)
-                    time.sleep(0.04)
-                    pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.12)
-                except Exception:
-                    pass
+            # Clear Password & paste
+            pyautogui.hotkey('ctrl', 'a')
+            time.sleep(0.04)
+            pyautogui.press('backspace')
+            time.sleep(0.04)
+            pyperclip.copy(password)
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.08)
 
-                # Also write directly if paste didn't apply
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.02)
-                pyautogui.press('backspace')
-                time.sleep(0.02)
-                pyautogui.write(username, interval=0.015)
-                time.sleep(0.10)
-
-                # 2. Tab to Password field
-                pyautogui.press('tab')
-                time.sleep(0.25)
-
-                # Clear Password & Paste
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.04)
-                pyautogui.press('backspace')
-                time.sleep(0.04)
-
-                try:
-                    pyperclip.copy(password)
-                    time.sleep(0.04)
-                    pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.12)
-                except Exception:
-                    pass
-
-                # 3. Submit Login:
-                # First attempt direct Enter in password field
-                pyautogui.press('enter')
-                time.sleep(0.15)
-
-                # Tab forward to the red circular Submit button (7 tabs past social icons & checkbox)
-                for _ in range(7):
-                    pyautogui.press('tab')
-                    time.sleep(0.04)
-
-                time.sleep(0.06)
-                pyautogui.press('enter')
-
-                _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
-            finally:
-                # Never leave the password on the clipboard.
-                try:
-                    pyperclip.copy(orig_clipboard or "")
-                except Exception:
-                    pass
+            # Submit. Enter inside the password field is the form's own submit -
+            # nothing further should be pressed after this.
+            pyautogui.press('enter')
+            _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
         except Exception as e:
             login_logger.exception("[%s] Failed to enter credentials: %s", username, e)
             _set_login_stage("error", f"Failed to type credentials: {e}", username)
+        finally:
+            # Never leave the password on the clipboard.
+            try:
+                pyperclip.copy(orig_clipboard or "")
+            except Exception:
+                pass
 
     # Backward compatibility alias
     auto_fill_credentials_pure_keyboard = auto_fill_credentials
@@ -744,7 +774,10 @@ class ClientLauncher:
                 "message": "Riot Client executable not found. Please set path in Settings."
             }
 
-        cls.copy_to_clipboard(password)
+        # The password is put on the clipboard by the autofill worker itself,
+        # immediately before it pastes and restored immediately after - putting
+        # it there now would leave it sitting in the clipboard for the whole
+        # window-wait, and for good if the login never gets that far.
 
         try:
             hwnd = cls.find_riot_window()

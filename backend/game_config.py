@@ -25,6 +25,10 @@ from typing import Any, Dict, Optional
 
 GAMEPLAY_REL = os.path.join("Windows", "RiotUserSettings.ini")
 VIDEO_REL = os.path.join("WindowsClient", "GameUserSettings.ini")
+# The keybind table lives in its own file next to the video settings, so
+# copying only the two .ini files left keybinds behind - "copy my settings"
+# is not much use if the binds don't come with them.
+KEYBINDS_REL = os.path.join("WindowsClient", "BackupKeybinds.json")
 
 # The section header Unreal writes display-mode keys under, and the keys
 # that all have to agree or the game silently reverts to windowed/fullscreen
@@ -205,14 +209,17 @@ def copy_settings(src_puuid: str, dst_puuid: str,
 
     plan = []
     if gameplay:
-        plan.append((GAMEPLAY_REL, "crosshair, sensitivity & keybinds"))
+        plan.append((GAMEPLAY_REL, "crosshair, sensitivity & HUD"))
+        plan.append((KEYBINDS_REL, "keybinds"))
     if video:
         plan.append((VIDEO_REL, "video & graphics"))
 
     copied = []
+    missing = []
     for rel, label in plan:
         src_f = os.path.join(src_dir, rel)
         if not os.path.isfile(src_f):
+            missing.append(label)
             continue
         dst_f = os.path.join(dst_dir, rel)
         try:
@@ -220,8 +227,38 @@ def copy_settings(src_puuid: str, dst_puuid: str,
             shutil.copyfile(src_f, dst_f)
             copied.append(label)
         except OSError:
+            missing.append(label)
             continue
 
     if not copied:
         return {"success": False, "message": "Nothing to copy - the source account's settings files weren't found."}
-    return {"success": True, "message": f"Copied {' and '.join(copied)}.", "copied": copied}
+
+    message = f"Copied {_join(copied)}."
+    if missing:
+        message += f" ({_join(missing)} not found on the source account.)"
+    return {"success": True, "message": message, "copied": copied, "missing": missing}
+
+
+def _join(items) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    items = list(items)
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def describe(puuid: str) -> Dict[str, Any]:
+    """
+    What an account actually has stored on this PC - used to tell the user
+    exactly what a copy would carry across, rather than making them guess.
+    """
+    d = account_dir(puuid)
+    if not d:
+        return {"found": False, "files": []}
+    files = []
+    for rel, label in ((GAMEPLAY_REL, "Crosshair, sensitivity & HUD"),
+                       (KEYBINDS_REL, "Keybinds"),
+                       (VIDEO_REL, "Video & graphics")):
+        path = os.path.join(d, rel)
+        files.append({"label": label, "present": os.path.isfile(path)})
+    return {"found": True, "path": d, "files": files}

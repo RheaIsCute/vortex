@@ -8,6 +8,7 @@
 // Global State
 const state = {
     accounts: [],
+    bannedAccounts: [],
     settings: {},
     stats: {},
     currentRegion: "ALL",
@@ -186,6 +187,7 @@ const DOM = {
     settingsProfileAutoapply: document.getElementById("settings-profile-autoapply"),
     settingsCopyTarget: document.getElementById("settings-copy-target"),
     btnCopySettingsNow: document.getElementById("btn-copy-settings-now"),
+    btnCopySettingsAll: document.getElementById("btn-copy-settings-all"),
     settingsProfileStatus: document.getElementById("settings-profile-status"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
@@ -296,6 +298,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     fetchStatsSummary();
     fetchAccounts();
+    fetchBannedAccounts(true);
     startContinuousSync();
     startLiveSessionPolling();
     loadAppVersion();
@@ -581,6 +584,12 @@ function initEventListeners() {
     if (DOM.btnCheckUpdate) DOM.btnCheckUpdate.addEventListener("click", () => checkForUpdate(true));
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
     if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
+    if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
+    // Picking a different profile changes what a copy would carry, so the
+    // description under the picker has to follow the selection.
+    if (DOM.settingsProfileAccount) {
+        DOM.settingsProfileAccount.addEventListener("change", onProfileAccountChange);
+    }
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -874,15 +883,38 @@ async function fetchStatsSummary() {
 // BANNED ACCOUNTS
 // ==========================================================================
 
-async function fetchBannedAccounts() {
-    if (!DOM.bannedListContainer) return;
+async function fetchBannedAccounts(silent = false) {
     try {
         const res = await fetch("/api/banned-accounts");
         const data = await res.json();
-        renderBannedAccounts(data.accounts || []);
+        // Cached in state because the "currently logged in" card has to be
+        // able to edit/delete a banned account without the Banned modal ever
+        // having been opened.
+        state.bannedAccounts = data.accounts || [];
+        if (DOM.bannedListContainer) renderBannedAccounts(state.bannedAccounts);
     } catch (err) {
-        showToast("Failed to load banned accounts", "error");
+        if (!silent) showToast("Failed to load banned accounts", "error");
     }
+}
+
+/** The banned-store record for an id, if that's where the account lives. */
+function findBannedAccount(id) {
+    const numId = Number(id);
+    return (state.bannedAccounts || []).find(a => Number(a.id) === numId) || null;
+}
+
+/**
+ * Resolves an id against both stores. The hero card can be showing an account
+ * that got flagged and moved to the banned store mid-session, and every action
+ * on it (edit, delete, restore) has to follow it there.
+ */
+function resolveAccount(id) {
+    const numId = Number(id);
+    const active = state.accounts.find(a => Number(a.id) === numId);
+    if (active) return { acc: active, banned: false };
+    const banned = findBannedAccount(numId);
+    if (banned) return { acc: banned, banned: true };
+    return { acc: null, banned: false };
 }
 
 function renderBannedAccounts(accounts) {
@@ -1191,23 +1223,29 @@ function buildAccountView(acc) {
     };
 }
 
-function renderHeroAccountCard(acc) {
+function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
     const v = buildAccountView(acc);
     const peakBadge = buildPeakBadge(acc);
     const combat = getAccountCombatStats(acc);
     const isValRunning = state.live && state.live.valorant_running;
     const sessionInfo = sessionStateInfo(state.live);
 
+    // A flagged account keeps its card - it's still the signed-in session -
+    // but the actions change: there's nothing to play, and the useful moves
+    // are correcting the record, putting it back, or deleting it.
+    const bannedLabel = ((acc.status || "BANNED").toUpperCase() === "SUSPENDED")
+        ? "SUSPENDED" : "BANNED";
+
     return `
-        <div class="account-card account-card-hero is-active-session ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}">
+        <div class="account-card account-card-hero is-active-session ${isBanned ? 'is-banned-session' : ''} ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}">
             <div class="hero-ambient-glow"></div>
 
             <!-- Hero Top Header -->
             <div class="hero-header">
                 <div class="hero-header-left">
-                    <span class="badge-live-hero" title="Currently signed in to Riot Client">
+                    <span class="badge-live-hero ${isBanned ? 'is-banned' : ''}" title="Currently signed in to Riot Client">
                         <span class="live-dot-hero"></span>
-                        <span class="live-label-hero">CURRENTLY LOGGED IN</span>
+                        <span class="live-label-hero">${isBanned ? `LOGGED IN &middot; ${bannedLabel}` : 'CURRENTLY LOGGED IN'}</span>
                     </span>
                     <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
                     <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
@@ -1216,9 +1254,11 @@ function renderHeroAccountCard(acc) {
                     <span class="hero-last-login"><i class="fa-regular fa-clock"></i> Last Login: <strong>Active Now</strong></span>
                 </div>
                 <div class="hero-header-right">
+                    ${(isBanned || isUnsaved) ? "" : `
                     <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
                         <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
                     </button>
+                    `}
                 </div>
             </div>
 
@@ -1300,14 +1340,52 @@ function renderHeroAccountCard(acc) {
 
                 <!-- Hero Right: Launch & Actions -->
                 <div class="hero-actions-col">
+                    ${isUnsaved ? `
+                    <div class="hero-banned-notice">
+                        <i class="fa-solid fa-circle-info"></i>
+                        <div class="hero-banned-text">
+                            <span class="hero-banned-title">This session isn't in your accounts</span>
+                            <span class="hero-banned-sub">${isBanned
+                                ? "Riot reports it as " + bannedLabel + ", so it wasn't added automatically."
+                                : "Add it to store the credentials and track it."}</span>
+                        </div>
+                    </div>
+                    <button class="btn-hero-play is-restore" onclick="openAccountModal()" title="Add this account">
+                        <div class="hero-play-text-wrap">
+                            <span class="hero-play-title">ADD TO MY ACCOUNTS</span>
+                            <span class="hero-play-sub">Store this login</span>
+                        </div>
+                    </button>
+                    ` : isBanned ? `
+                    <div class="hero-banned-notice">
+                        <i class="fa-solid fa-ban"></i>
+                        <div class="hero-banned-text">
+                            <span class="hero-banned-title">Riot reports this account as ${bannedLabel}</span>
+                            <span class="hero-banned-sub">It's kept in Banned Accounts. You can still fix its details, put it back, or delete it.</span>
+                        </div>
+                    </div>
+                    <button class="btn-hero-play is-restore" onclick="restoreBannedAccount(${acc.id})" title="Move this account back to your main roster">
+                        <div class="hero-play-text-wrap">
+                            <span class="hero-play-title">MOVE BACK TO ACCOUNTS</span>
+                            <span class="hero-play-sub">Undo the banned flag</span>
+                        </div>
+                    </button>
+                    ` : `
                     <button class="btn-hero-play ${isValRunning ? 'is-running' : ''}" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
                         <div class="hero-play-text-wrap">
                             <span class="hero-play-title">${isValRunning ? 'VALORANT RUNNING' : 'PLAY VALORANT'}</span>
                             <span class="hero-play-sub">${isValRunning ? 'Client Active' : 'Launch Game Client'}</span>
                         </div>
                     </button>
+                    `}
 
                     <div class="hero-aux-actions">
+                        ${isUnsaved ? "" : isBanned ? `
+                        <button class="btn btn-secondary hero-action-btn" onclick="recheckBannedAccount(${acc.id})" title="Log in again and re-check this account's status">
+                            <i class="fa-solid fa-arrows-rotate"></i>
+                            <span>Recheck</span>
+                        </button>
+                        ` : `
                         <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
                             <span>Matches (${acc.games_played || 0})</span>
@@ -1316,6 +1394,8 @@ function renderHeroAccountCard(acc) {
                             <i class="fa-solid fa-gauge-high"></i>
                             <span>Dashboard</span>
                         </button>
+                        `}
+                        ${isUnsaved ? "" : `
                         <button class="btn btn-secondary hero-action-btn" onclick="openEditModal(${acc.id})" title="Edit Account">
                             <i class="fa-solid fa-pen"></i>
                             <span>Edit</span>
@@ -1323,6 +1403,7 @@ function renderHeroAccountCard(acc) {
                         <button class="btn btn-icon hero-delete-btn is-danger" onclick="deleteAccount(${acc.id})" title="Delete Account">
                             <i class="fa-solid fa-trash"></i>
                         </button>
+                        `}
                     </div>
                 </div>
             </div>
@@ -1338,6 +1419,26 @@ function renderGridView() {
             (a.display_name && state.live.display_name && a.display_name.toLowerCase() === state.live.display_name.toLowerCase())
         );
     }
+
+    // The signed-in account may be one that got flagged and moved to the
+    // banned store. It still owns the hero card, but it has to be rendered
+    // from its real banned-store record - otherwise the card is built from a
+    // synthetic stand-in with id 0, and every button on it silently no-ops.
+    let activeIsBanned = false;
+    if (!activeAcc && state.live && state.live.available) {
+        const bannedId = state.live.banned_account_id;
+        const bannedAcc = bannedId
+            ? findBannedAccount(bannedId)
+            : (state.live.username
+                ? (state.bannedAccounts || []).find(a =>
+                    (a.username || "").toLowerCase() === state.live.username.toLowerCase())
+                : null);
+        if (bannedAcc) {
+            activeAcc = bannedAcc;
+            activeIsBanned = true;
+        }
+    }
+
     if (!activeAcc && state.live && state.live.available && state.live.username) {
         activeAcc = {
             id: state.live.account_id || 0,
@@ -1350,7 +1451,7 @@ function renderGridView() {
             lp: 0,
             rank_icon_url: state.live.rank_icon_url || DEFAULT_TIER_ICON,
             tag: "Active Session",
-            status: "PLAYABLE",
+            status: state.live.status || "PLAYABLE",
             games_played: 0,
             winrate: 0
         };
@@ -1362,7 +1463,10 @@ function renderGridView() {
 
     let html = "";
     if (activeAcc) {
-        html += renderHeroAccountCard(activeAcc);
+        // id 0 means this session has no stored record at all (it was deleted,
+        // or Riot reports it banned so it was never auto-added). The card still
+        // shows the session, but with actions that can actually do something.
+        html += renderHeroAccountCard(activeAcc, activeIsBanned, !activeAcc.id);
     }
 
     html += regularAccounts.map((acc, i) => {
@@ -1707,10 +1811,14 @@ function renderMatchHistoryList(matches) {
 // CLEAN ADD ACCOUNT MODAL
 // ==========================================================================
 
-function openAccountModal(acc = null) {
+function openAccountModal(acc = null, isBanned = false) {
     DOM.formAccount.reset();
     DOM.formPassword.type = "password";
     DOM.btnToggleFormPassword.innerHTML = '<i class="fa-regular fa-eye"></i>';
+
+    // Which store this record came from decides where the save goes - a
+    // banned account is edited through the banned endpoint, not /api/accounts.
+    state.editingBanned = !!(acc && isBanned);
 
     if (acc) {
         DOM.modalAccountTitle.textContent = "Edit Valorant Account";
@@ -1721,6 +1829,10 @@ function openAccountModal(acc = null) {
         DOM.formTag.value = acc.tag || "";
         DOM.formNotes.value = acc.notes || "";
         DOM.formFavorite.checked = !!acc.favorite;
+        if (isBanned) {
+            DOM.modalAccountTitle.textContent = "Edit Banned Account";
+            DOM.modalAccountIcon.className = "fa-solid fa-user-lock";
+        }
     } else {
         DOM.modalAccountTitle.textContent = "Add Valorant Account";
         DOM.modalAccountIcon.className = "fa-solid fa-user-plus";
@@ -1733,8 +1845,19 @@ function openAccountModal(acc = null) {
 }
 
 function openEditModal(id) {
-    const acc = state.accounts.find(a => a.id === id);
-    if (acc) openAccountModal(acc);
+    const { acc, banned } = resolveAccount(id);
+    if (acc) {
+        openAccountModal(acc, banned);
+        return;
+    }
+    // The record may have been moved to the banned store since the last fetch
+    // (that's exactly what happens the moment a login comes back flagged), so
+    // refresh that store once before giving up rather than doing nothing.
+    fetchBannedAccounts(true).then(() => {
+        const again = resolveAccount(id);
+        if (again.acc) openAccountModal(again.acc, again.banned);
+        else showToast("That account is no longer stored.", "error");
+    });
 }
 
 /**
@@ -1777,9 +1900,11 @@ function validateAccountForm() {
         return showError("Use the Riot username, not the email address - the Riot Client login won't accept an email.");
     }
 
-    const dupe = state.accounts.find(a =>
-        a.username.trim().toLowerCase() === username.toLowerCase() &&
-        String(a.id) !== String(DOM.formAccountId.value)
+    const editingId = String(DOM.formAccountId.value);
+    const pool = state.editingBanned ? (state.bannedAccounts || []) : state.accounts;
+    const dupe = pool.find(a =>
+        (a.username || "").trim().toLowerCase() === username.toLowerCase() &&
+        String(a.id) !== editingId
     );
     if (dupe) return showError(`"${username}" is already in your accounts.`);
 
@@ -1802,9 +1927,17 @@ async function handleAccountSubmit(e, checkAfterSave = false) {
         favorite: DOM.formFavorite.checked
     };
 
+    const editingBanned = isEdit && state.editingBanned;
+
     try {
         let res;
-        if (isEdit) {
+        if (editingBanned) {
+            res = await fetch(`/api/banned-accounts/${id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+        } else if (isEdit) {
             res = await fetch(`/api/accounts/${id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
@@ -1825,6 +1958,8 @@ async function handleAccountSubmit(e, checkAfterSave = false) {
             if (data.moved_to_banned) {
                 showToast("Account is banned/suspended - moved to Banned Accounts.", "warning");
                 fetchBannedAccounts();
+            } else if (data.restored_from_banned) {
+                showToast(`${creds.username} moved back to your accounts.`, "success");
             } else {
                 showToast(
                     isEdit
@@ -1834,13 +1969,16 @@ async function handleAccountSubmit(e, checkAfterSave = false) {
                 );
             }
 
+            state.editingBanned = false;
             closeModal(DOM.modalAccount);
             await fetchAccounts();
+            await fetchBannedAccounts(true);
             fetchStatsSummary();
 
             // Point straight at the row that just changed, so it's obvious
             // which account this was.
-            if (savedId && !data.moved_to_banned) {
+            const stillBanned = editingBanned && !data.restored_from_banned;
+            if (savedId && !data.moved_to_banned && !stillBanned) {
                 highlightAccount(savedId);
                 if (checkAfterSave) checkAccount(savedId);
             }
@@ -1857,20 +1995,41 @@ async function handleAccountSubmit(e, checkAfterSave = false) {
 }
 
 async function deleteAccount(id) {
-    const acc = state.accounts.find(a => a.id === id);
+    const { acc, banned } = resolveAccount(id);
     const name = acc ? (acc.display_name || acc.username) : "this account";
     if (!confirm(`Delete ${name}?`)) return;
 
+    const url = banned ? `/api/banned-accounts/${id}` : `/api/accounts/${id}`;
     try {
-        const res = await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+        const res = await fetch(url, { method: "DELETE" });
         const data = await res.json();
         if (data.success) {
             showToast("Account deleted", "info");
             fetchAccounts();
+            fetchBannedAccounts(true);
             fetchStatsSummary();
         }
     } catch (err) {
         showToast("Failed to delete account", "error");
+    }
+}
+
+/** Puts a banned account back on the main roster without waiting on a recheck. */
+async function restoreBannedAccount(id) {
+    try {
+        const res = await fetch(`/api/banned-accounts/${id}/restore`, { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            showToast("Moved back to your accounts", "success");
+            await fetchAccounts();
+            await fetchBannedAccounts(true);
+            fetchStatsSummary();
+            pollLiveSession();
+        } else {
+            showToast(data.message || "Could not restore that account", "error");
+        }
+    } catch (err) {
+        showToast("Could not restore that account", "error");
     }
 }
 
@@ -2219,36 +2378,152 @@ async function loadGameConfigSettings() {
         if (DOM.settingsProfileAutoapply) DOM.settingsProfileAutoapply.checked = !!data.autoapply;
 
         const accounts = data.accounts || [];
-        const known = accounts.filter(a => a.has_config);
+        const ready = accounts.filter(a => a.has_config);
 
         fillAccountSelect(DOM.settingsProfileAccount, accounts, data.profile_account_id,
             "No profile account selected");
-        fillAccountSelect(DOM.settingsCopyTarget, known, null,
+        fillAccountSelect(DOM.settingsCopyTarget, accounts, null,
             "Copy to: whoever's signed in now");
 
-        if (!known.length) {
-            DOM.settingsProfileStatus.textContent =
-                "No accounts have signed into VALORANT on this PC yet - log one in and reach the menus once, then its settings can be used as a profile.";
-        } else if (known.length < accounts.length) {
-            DOM.settingsProfileStatus.textContent =
-                `${known.length} of ${accounts.length} accounts have local settings on this PC and can be used.`;
-        }
+        renderProfileStatus(data, accounts, ready);
     } catch (err) {
         state.gameConfig = null;
     }
 }
 
-/** Fills a <select> with accounts, greying out ones with no local config
- *  found yet rather than hiding them - a copy target just needs to have
- *  logged in once, which the option's disabled state makes obvious. */
+/**
+ * Spells out what the profile actually holds and how many accounts can take
+ * a copy right now. Accounts become usable on their own: signing into one
+ * with Vortex open records its Riot id, and playing one match on this PC
+ * creates the settings folder a copy reads from and writes to.
+ */
+function renderProfileStatus(data, accounts, ready) {
+    const el = DOM.settingsProfileStatus;
+    if (!el) return;
+
+    const bits = [];
+    const detail = data.profile_detail;
+    if (detail && detail.found) {
+        const present = (detail.files || []).filter(f => f.present).map(f => f.label);
+        bits.push(present.length
+            ? `Profile carries: ${present.join(", ")}.`
+            : "That profile account has no settings files on this PC yet.");
+    }
+
+    const unidentified = accounts.filter(a => !a.has_puuid).length;
+
+    if (!accounts.length) {
+        bits.push("No accounts stored yet.");
+    } else if (!ready.length) {
+        bits.push("No account has VALORANT settings on this PC yet. Sign into one with Vortex open, play a match, and it becomes usable here.");
+    } else {
+        bits.push(`${ready.length} of ${accounts.length} accounts can send or receive settings.`);
+        if (unidentified) {
+            bits.push(`${unidentified} still need to be signed into once with Vortex open so it can identify them - "Check Accounts" does all of them in one pass.`);
+        }
+    }
+
+    el.textContent = bits.join(" ");
+}
+
+/**
+ * Saves the newly picked profile and re-reads what it holds, so the summary
+ * under the picker describes the account actually selected.
+ */
+async function onProfileAccountChange() {
+    const id = parseInt(DOM.settingsProfileAccount?.value || "", 10) || 0;
+    try {
+        await fetch("/api/game-config/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profile_account_id: id })
+        });
+    } catch (err) {
+        // A failed save just means the summary stays as it was.
+    }
+    loadGameConfigSettings();
+}
+
+/** Copies the profile's whole setup onto every account that can take it. */
+async function copySettingsToAll() {
+    const profileId = parseInt(DOM.settingsProfileAccount?.value || "", 10);
+    if (!profileId) {
+        showToast("Pick a profile account to copy from first.", "info");
+        return;
+    }
+
+    const cfg = state.gameConfig || {};
+    const others = (cfg.accounts || []).filter(a => a.id !== profileId && a.has_config);
+    const name = (cfg.accounts || []).find(a => a.id === profileId);
+    const label = name ? name.display_name : "this account";
+
+    if (!others.length) {
+        showToast("No other account has settings on this PC yet, so there's nothing to copy onto.", "info");
+        return;
+    }
+    if (!confirm(
+        `Copy ${label}'s crosshair, sensitivity, HUD, keybinds and video settings onto ` +
+        `${others.length} other account${others.length === 1 ? "" : "s"}?
+
+` +
+        `This overwrites their current settings and can't be undone.`)) {
+        return;
+    }
+
+    const btn = DOM.btnCopySettingsAll;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Applying...`;
+    }
+    try {
+        const res = await fetch("/api/game-config/copy-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source_account_id: profileId, gameplay: true, video: true })
+        });
+        const data = await res.json();
+        showToast(data.message || (data.success ? "Applied." : "Couldn't apply settings."),
+                  data.success ? "success" : "error");
+
+        if (DOM.settingsProfileStatus) {
+            const lines = [data.message || ""];
+            if (data.applied && data.applied.length) {
+                lines.push(`Applied to: ${data.applied.join(", ")}.`);
+            }
+            if (data.skipped && data.skipped.length) {
+                lines.push("Skipped: " + data.skipped.map(sk => `${sk.name} (${sk.why})`).join(", ") + ".");
+            }
+            DOM.settingsProfileStatus.textContent = lines.filter(Boolean).join(" ");
+        }
+    } catch (err) {
+        showToast("Failed to reach the app's backend.", "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fa-solid fa-users-gear"></i> Apply to All Accounts`;
+        }
+    }
+}
+
+/**
+ * Fills a <select> with accounts.
+ *
+ * Options are never `disabled`. They used to be, for any account with no
+ * local config detected - and since the app had no way to identify accounts
+ * at all, that was every account, which made the whole dropdown unclickable
+ * with no explanation. Accounts that aren't ready are now selectable and
+ * labelled with the reason, and the copy action explains what to do instead
+ * of the list silently refusing to respond.
+ */
 function fillAccountSelect(selectEl, accounts, selectedId, placeholder) {
     if (!selectEl) return;
     const opts = [`<option value="">${escapeHtml(placeholder)}</option>`];
     for (const acc of accounts) {
-        const disabled = acc.has_config === false ? "disabled" : "";
-        const suffix = acc.has_config === false ? " (never played here)" : "";
-        opts.push(`<option value="${acc.id}" ${disabled}
-            ${selectedId === acc.id ? "selected" : ""}>${escapeHtml(acc.display_name)}${suffix}</option>`);
+        const suffix = acc.has_config === false
+            ? ` - ${acc.reason || "no settings on this PC yet"}`
+            : "";
+        opts.push(`<option value="${acc.id}" ${selectedId === acc.id ? "selected" : ""}>` +
+                  `${escapeHtml(acc.display_name)}${escapeHtml(suffix)}</option>`);
     }
     selectEl.innerHTML = opts.join("");
 }
@@ -2275,6 +2550,7 @@ async function copySettingsNow() {
         showToast(data.message || (data.success ? "Copied." : "Couldn't copy settings."),
                   data.success ? "success" : "error");
         if (DOM.settingsProfileStatus) DOM.settingsProfileStatus.textContent = data.message || "";
+        if (data.success) loadGameConfigSettings();
     } catch (err) {
         showToast("Failed to reach the app's backend.", "error");
     } finally {
@@ -2717,6 +2993,15 @@ async function pollLiveSession() {
         await fetchAccounts(false);
     }
 
+    // A signed-in account that's been flagged lives in the banned store, so
+    // the hero card can only be built once that store is loaded.
+    const wasBanned = state._liveBanned === true;
+    const nowBanned = !!(live.available && live.account_banned);
+    state._liveBanned = nowBanned;
+    if (nowBanned && !findBannedAccount(live.banned_account_id)) {
+        await fetchBannedAccounts(true);
+    }
+
     renderSessionBar(live);
     updateLiveHeroCardState(live);
 
@@ -2735,8 +3020,10 @@ async function pollLiveSession() {
     }
     state._wasInMatch = !!live.match;
 
-    // Re-render when the active card moved or when hero card needs to appear
-    if (previousId !== state.activeAccountId || (live.available && !hadHero)) {
+    // Re-render when the active card moved, when the hero card needs to
+    // appear, or when the signed-in account crossed the banned line in either
+    // direction (both change which card is rendered and what it can do).
+    if (previousId !== state.activeAccountId || (live.available && !hadHero) || wasBanned !== nowBanned) {
         renderAccounts();
     }
 }
@@ -3286,7 +3573,19 @@ function renderDuoBanner(match) {
     `;
 }
 
-/** The "you, right now" card: agent, rank, and your combat line. */
+/**
+ * The "you, right now" panel.
+ *
+ * Two strictly separated blocks, because conflating them is what made the old
+ * panel look live without being live:
+ *
+ *  - CURRENT MATCH: this match only. The round line (score, round win rate,
+ *    attack/defense split, streak) is live on every poll. The combat line
+ *    (K/D/A, HS%, ADR, ACS) is only filled in from a real read of this match -
+ *    when Riot hasn't published it yet the tiles show "--" and say so, rather
+ *    than borrowing an average from previous games.
+ *  - LAST 5 MATCHES: the rolling average, always labelled as the average.
+ */
 function renderMeCard(match) {
     const me = match && match.me;
     if (!me) {
@@ -3295,78 +3594,155 @@ function renderMeCard(match) {
     }
     DOM.dashMe.style.display = "block";
 
-    const isLive = me.source === "live" || me.is_live_match;
-    const shots = (me.headshots || 0) + (me.bodyshots || 0) + (me.legshots || 0);
-    const pct = n => shots ? Math.round((n / shots) * 100) : 0;
+    const cur = me.current || {};
+    const recent = me.recent || {};
+    const hasCombat = !!cur.available;
+    const inMatch = match.phase === "in_match";
 
-    const tiles = isLive ? [
-        { k: "Current Match KDA", v: `${me.kills || 0} / ${me.deaths || 0} / ${me.assists || 0}`, c: "is-kda" },
-        { k: "Current Match KD", v: (me.current_match_kd || me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
-        { k: "Current Match HS%", v: `${me.current_match_hs || me.hs_pct || 0}%`, c: "is-hs" },
-        { k: "ADR", v: me.adr || 0, c: "is-adr" },
-        { k: "ACS", v: me.acs || 0, c: "is-acs" }
-    ] : [
-        { k: "Recent KD", v: (me.recent_kd || me.kd || 0).toFixed(2), c: (me.kd || 0) >= 1 ? "is-good" : "is-bad" },
-        { k: "Recent HS%", v: `${me.recent_hs_pct || me.hs_pct || 0}%`, c: "is-hs" },
-        { k: "Last 5 Winrate", v: `${me.winrate_last5 != null ? me.winrate_last5 : (me.winrate || 0)}%`, c: (me.winrate_last5 || me.winrate || 0) >= 50 ? "is-good" : "is-bad" },
-        { k: "ADR", v: me.adr || 0, c: "is-adr" },
-        { k: "ACS", v: me.acs || 0, c: "is-acs" }
+    const num = (v, digits) => (v === null || v === undefined)
+        ? "--"
+        : (digits ? Number(v).toFixed(digits) : String(v));
+    const pct = v => (v === null || v === undefined) ? "--" : v + "%";
+    const goodBad = (v, threshold) =>
+        (v === null || v === undefined) ? "is-pending" : (v >= threshold ? "is-good" : "is-bad");
+
+    // -- current match: combat line -------------------------------------
+    const combatTiles = [
+        { k: "K / D / A", v: cur.kda_line || "--", c: hasCombat ? "is-kda" : "is-pending" },
+        { k: "K/D", v: num(cur.kd, 2), c: goodBad(cur.kd, 1) },
+        { k: "Headshot %", v: pct(cur.hs_pct), c: hasCombat ? "is-hs" : "is-pending" },
+        { k: "ADR", v: num(cur.adr), c: hasCombat ? "is-adr" : "is-pending" },
+        { k: "ACS", v: num(cur.acs), c: hasCombat ? "is-acs" : "is-pending" }
     ];
 
+    // -- current match: round line (live on every poll) -------------------
+    const atk = cur.attack_record || { won: 0, played: 0 };
+    const def = cur.defense_record || { won: 0, played: 0 };
+    const streak = cur.streak || { count: 0, won: false };
+
+    const roundTiles = [
+        {
+            k: "Rounds",
+            v: (cur.rounds_won || 0) + " - " + (cur.rounds_lost || 0),
+            c: (cur.rounds_won || 0) >= (cur.rounds_lost || 0) ? "is-good" : "is-bad"
+        },
+        {
+            k: "Round Win %",
+            v: cur.rounds_played ? cur.round_winrate + "%" : "--",
+            c: goodBad(cur.rounds_played ? cur.round_winrate : null, 50)
+        },
+        { k: "On Attack", v: atk.played ? atk.won + "/" + atk.played : "--", c: "is-atk" },
+        { k: "On Defense", v: def.played ? def.won + "/" + def.played : "--", c: "is-def" },
+        {
+            k: "Streak",
+            v: streak.count >= 2 ? streak.count + " " + (streak.won ? "W" : "L") : "--",
+            c: streak.count >= 2 ? (streak.won ? "is-good" : "is-bad") : "is-pending"
+        }
+    ];
+
+    // -- last 5 matches (the average, named as the average) ---------------
+    const recentTiles = [
+        { k: "Avg K/D", v: num(recent.kd, 2), c: goodBad(recent.kd, 1) },
+        { k: "Avg HS%", v: pct(recent.hs_pct), c: "is-hs" },
+        { k: "Avg ADR", v: num(recent.adr), c: "is-adr" },
+        { k: "Win Rate", v: pct(recent.winrate), c: goodBad(recent.winrate, 50) }
+    ];
+
+    const tileHtml = tiles => tiles.map(t =>
+        '<div class="dash-me-tile ' + t.c + '">' +
+            '<span class="dash-me-tile-v">' + escapeHtml(String(t.v)) + '</span>' +
+            '<span class="dash-me-tile-k">' + t.k + '</span>' +
+        '</div>').join("");
+
     const formPips = (me.last5_form && me.last5_form.length > 0)
-        ? `<div class="dash-me-form-row">
-             <span class="dash-me-form-lbl">Last 5 Matches:</span>
-             ${me.last5_form.map(f => `<span class="dash-form-pip is-${f.toLowerCase()}">${f}</span>`).join("")}
-             <span class="dash-me-form-sub">${me.last5_wins || 0}W ${me.last5_losses || 0}L (${me.winrate_last5 != null ? me.winrate_last5 : 0}% WR)</span>
-           </div>`
+        ? '<div class="dash-me-form-row">' +
+              me.last5_form.map(f =>
+                  '<span class="dash-form-pip is-' + f.toLowerCase() + '">' + f + '</span>').join("") +
+              '<span class="dash-me-form-sub">' +
+                  (me.last5_wins || 0) + 'W ' + (me.last5_losses || 0) + 'L &middot; ' +
+                  (me.winrate_last5 != null ? me.winrate_last5 : 0) + '% WR</span>' +
+          '</div>'
         : "";
 
-    DOM.dashMe.innerHTML = `
-        <div class="dash-me-head">
-            ${me.agent_icon
-                ? `<img src="${me.agent_icon}" class="dash-me-agent" alt="${escapeHtml(me.agent || "")}" onerror="this.style.visibility='hidden';">`
-                : `<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
-            <div class="dash-me-id">
-                <span class="dash-me-title">${escapeHtml(me.agent || "Your agent")}</span>
-                <span class="dash-me-sub">
-                    ${escapeHtml(me.tier_label || "Unranked")}${me.rr ? ` · ${me.rr} RR` : ""}
-                    ${me.winrate_last5 != null ? ` · ${me.winrate_last5}% WR (last 5)` : (me.games ? ` · ${me.winrate}% WR` : "")}
-                </span>
-            </div>
-            ${me.tier_icon ? `<img src="${me.tier_icon}" class="dash-me-rank" alt="" onerror="this.style.display='none';">` : ""}
-            <span class="dash-me-flag ${isLive ? "is-live" : "is-recent"}"
-                  title="${isLive
-                      ? "Direct from this match"
-                      : "Round scores track live; combat breakdown reflects your last 5 matches"}">
-                <i class="fa-solid ${isLive ? "fa-circle-dot" : "fa-clock-rotate-left"}"></i>
-                ${isLive ? "CURRENT MATCH STATS" : "RECENT 5-MATCH FORM"}
-            </span>
-        </div>
+    const shots = cur.shots || 0;
+    const share = n => shots ? Math.round((n / shots) * 100) : 0;
 
-        ${formPips}
+    const agentHtml = me.agent_icon
+        ? '<img src="' + me.agent_icon + '" class="dash-me-agent" alt="' +
+          escapeHtml(me.agent || "") + '" onerror="this.style.visibility=\'hidden\';">'
+        : '<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>';
 
-        <div class="dash-me-tiles">
-            ${tiles.map(t => `
-                <div class="dash-me-tile ${t.c}">
-                    <span class="dash-me-tile-v">${escapeHtml(String(t.v))}</span>
-                    <span class="dash-me-tile-k">${t.k}</span>
-                </div>`).join("")}
-        </div>
+    const rankHtml = me.tier_icon
+        ? '<img src="' + me.tier_icon + '" class="dash-me-rank" alt="" onerror="this.style.display=\'none\';">'
+        : "";
 
-        ${shots ? `
-            <div class="dash-hs-bar" title="${me.headshots} head · ${me.bodyshots} body · ${me.legshots} leg">
-                <span class="dash-hs-seg is-head" style="width:${pct(me.headshots)}%"></span>
-                <span class="dash-hs-seg is-body" style="width:${pct(me.bodyshots)}%"></span>
-                <span class="dash-hs-seg is-leg" style="width:${pct(me.legshots)}%"></span>
-            </div>
-            <div class="dash-hs-legend">
-                <span><i class="dot is-head"></i> Head ${pct(me.headshots)}%</span>
-                <span><i class="dot is-body"></i> Body ${pct(me.bodyshots)}%</span>
-                <span><i class="dot is-leg"></i> Leg ${pct(me.legshots)}%</span>
-                ${me.damage ? `<span class="dash-hs-dmg">${me.damage.toLocaleString()} dmg over ${me.rounds} rounds</span>` : ""}
-            </div>` : ""}
-    `;
+    const pendingHtml = hasCombat ? "" :
+        '<div class="dash-me-pending">' +
+            '<i class="fa-solid fa-hourglass-half"></i>' +
+            '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
+            ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS fill in the moment Riot publishes them.</span>' +
+        '</div>';
+
+    const hitHtml = (hasCombat && shots)
+        ? '<div class="dash-hs-bar" title="' + cur.headshots + ' head &middot; ' + cur.bodyshots +
+              ' body &middot; ' + cur.legshots + ' leg">' +
+              '<span class="dash-hs-seg is-head" style="width:' + share(cur.headshots) + '%"></span>' +
+              '<span class="dash-hs-seg is-body" style="width:' + share(cur.bodyshots) + '%"></span>' +
+              '<span class="dash-hs-seg is-leg" style="width:' + share(cur.legshots) + '%"></span>' +
+          '</div>' +
+          '<div class="dash-hs-legend">' +
+              '<span><i class="dot is-head"></i> Head ' + share(cur.headshots) + '%</span>' +
+              '<span><i class="dot is-body"></i> Body ' + share(cur.bodyshots) + '%</span>' +
+              '<span><i class="dot is-leg"></i> Leg ' + share(cur.legshots) + '%</span>' +
+              (cur.damage
+                  ? '<span class="dash-hs-dmg">' + cur.damage.toLocaleString() +
+                    ' dmg over ' + (cur.rounds_played || 0) + ' rounds</span>'
+                  : "") +
+          '</div>'
+        : "";
+
+    const roundChip = inMatch
+        ? '<span class="dash-me-round-chip">Round ' + (cur.round_number || 1) + '</span>'
+        : "";
+
+    DOM.dashMe.innerHTML =
+        '<div class="dash-me-head">' +
+            agentHtml +
+            '<div class="dash-me-id">' +
+                '<span class="dash-me-title">' + escapeHtml(me.agent || "Your agent") + '</span>' +
+                '<span class="dash-me-sub">' +
+                    escapeHtml(me.tier_label || "Unranked") +
+                    (me.rr ? ' &middot; ' + me.rr + ' RR' : "") +
+                '</span>' +
+            '</div>' +
+            rankHtml +
+        '</div>' +
+
+        '<div class="dash-me-section">' +
+            '<div class="dash-me-section-head">' +
+                '<span class="dash-me-section-title">' +
+                    '<i class="fa-solid fa-circle-dot"></i> Current Match' +
+                '</span>' +
+                roundChip +
+            '</div>' +
+            '<div class="dash-me-tiles">' + tileHtml(roundTiles) + '</div>' +
+            '<div class="dash-me-tiles is-combat">' + tileHtml(combatTiles) + '</div>' +
+            pendingHtml +
+            hitHtml +
+        '</div>' +
+
+        '<div class="dash-me-section is-recent">' +
+            '<div class="dash-me-section-head">' +
+                '<span class="dash-me-section-title">' +
+                    '<i class="fa-solid fa-clock-rotate-left"></i> Last 5 Matches' +
+                '</span>' +
+                '<span class="dash-me-section-note">average, not this match</span>' +
+            '</div>' +
+            formPips +
+            '<div class="dash-me-tiles">' + tileHtml(recentTiles) + '</div>' +
+        '</div>';
 }
+
 
 /** Between matches: how the last one went, and how the session is going. */
 function renderRecap(live, hasMatch) {

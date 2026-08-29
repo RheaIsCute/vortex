@@ -7006,3 +7006,223 @@ body.dashboard-mode .session-bar {
         animation: none !important;
     }
 }
+
+/* ==========================================================================
+   BANNED ACTIVE SESSION - the hero card when the signed-in account is flagged
+   ========================================================================== */
+
+.account-card-hero.is-banned-session {
+    border-color: rgba(var(--danger-rgb), 0.45);
+    box-shadow: 0 0 40px -18px rgba(var(--danger-rgb), 0.85), var(--bevel);
+}
+
+.account-card-hero.is-banned-session .hero-ambient-glow {
+    background: radial-gradient(circle at 20% 0%, rgba(var(--danger-rgb), 0.16), transparent 62%);
+}
+
+.badge-live-hero.is-banned {
+    color: var(--danger);
+    border-color: rgba(var(--danger-rgb), 0.55);
+    background: rgba(var(--danger-rgb), 0.16);
+    box-shadow: 0 0 16px -2px rgba(var(--danger-rgb), 0.45);
+}
+
+.badge-live-hero.is-banned .live-dot-hero {
+    background: var(--danger);
+    box-shadow: 0 0 8px var(--danger);
+}
+
+.hero-banned-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(var(--danger-rgb), 0.32);
+    background: rgba(var(--danger-rgb), 0.08);
+}
+
+.hero-banned-notice > i {
+    color: var(--danger);
+    font-size: 15px;
+    margin-top: 2px;
+}
+
+.hero-banned-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.hero-banned-title {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    color: var(--danger);
+}
+
+.hero-banned-sub {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-muted);
+}
+
+.btn-hero-play.is-restore {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
+    border-color: rgba(var(--danger-rgb), 0.42);
+    box-shadow: none;
+}
+
+.btn-hero-play.is-restore:hover {
+    border-color: rgba(var(--danger-rgb), 0.75);
+    box-shadow: 0 6px 20px -6px rgba(var(--danger-rgb), 0.6);
+}
+
+/* ==========================================================================
+   LIVE MATCH PANEL - current match vs. rolling average, kept visibly apart
+   ========================================================================== */
+
+.dash-me-section {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--stroke-1);
+}
+
+.dash-me-section:first-of-type {
+    margin-top: 12px;
+}
+
+.dash-me-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 9px;
+}
+
+.dash-me-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--a-soft);
+}
+
+.dash-me-section-title i {
+    font-size: 10px;
+}
+
+.dash-me-section.is-recent .dash-me-section-title {
+    color: var(--text-muted);
+}
+
+.dash-me-section-note {
+    margin-left: auto;
+    font-size: 10px;
+    font-style: italic;
+    color: var(--text-dim);
+}
+
+.dash-me-round-chip {
+    margin-left: auto;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    background: rgba(var(--a-rgb), 0.16);
+    border: 1px solid rgba(var(--a-soft-rgb), 0.4);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 800;
+    color: var(--a-soft);
+}
+
+.dash-me-tiles.is-combat {
+    margin-top: 8px;
+}
+
+.dash-me-tile.is-pending .dash-me-tile-v {
+    color: var(--text-dim);
+}
+
+.dash-me-tile.is-kda .dash-me-tile-v { color: var(--text-main); }
+.dash-me-tile.is-atk .dash-me-tile-v { color: #f0abfc; }
+.dash-me-tile.is-def .dash-me-tile-v { color: #7dd3fc; }
+
+.dash-me-pending {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 9px;
+    padding: 9px 11px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    border: 1px dashed var(--stroke-2);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.dash-me-pending > i {
+    margin-top: 2px;
+    color: var(--text-dim);
+}
+
+.dash-me-section.is-recent .dash-me-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* ==========================================================================
+   SETTINGS PROFILE - spelling out what a copy actually carries
+   ========================================================================== */
+
+.profile-copy-block {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    border: 1px solid var(--stroke-1);
+}
+
+.profile-copy-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 7px;
+}
+
+.profile-copy-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.profile-copy-list li {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 11.5px;
+    color: var(--text-main);
+}
+
+.profile-copy-list li i {
+    width: 14px;
+    text-align: center;
+    color: var(--a-soft);
+    font-size: 11px;
+}
+
+.btn-copy-all {
+    width: 100%;
+    margin-top: 8px;
+    justify-content: center;
+}

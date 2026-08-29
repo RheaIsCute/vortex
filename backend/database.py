@@ -84,6 +84,7 @@ class Database:
                     match_history TEXT DEFAULT '[]',
                     status TEXT DEFAULT 'PLAYABLE',
                     favorite INTEGER DEFAULT 0,
+                    puuid TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT ''
@@ -103,7 +104,12 @@ class Database:
                 ("card_small_url", "TEXT DEFAULT ''"),
                 ("match_history", "TEXT DEFAULT '[]'"),
                 ("status", "TEXT DEFAULT 'PLAYABLE'"),
-                ("last_login", "TEXT DEFAULT ''")
+                ("last_login", "TEXT DEFAULT ''"),
+                # Riot's stable per-account id. Everything that reads an
+                # account's local VALORANT settings folder is keyed on this -
+                # without it, crosshair/keybind copying can never find a
+                # source or a target.
+                ("puuid", "TEXT DEFAULT ''")
             ]
 
             for col_name, col_def in new_columns:
@@ -142,6 +148,7 @@ class Database:
                     match_history TEXT DEFAULT '[]',
                     status TEXT DEFAULT 'BANNED',
                     favorite INTEGER DEFAULT 0,
+                    puuid TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT '',
@@ -151,11 +158,13 @@ class Database:
 
             cursor.execute("PRAGMA table_info(banned_accounts)")
             existing_banned_cols = [col["name"] for col in cursor.fetchall()]
-            if "last_login" not in existing_banned_cols:
-                try:
-                    cursor.execute("ALTER TABLE banned_accounts ADD COLUMN last_login TEXT DEFAULT ''")
-                except Exception:
-                    pass
+            for col_name, col_def in (("last_login", "TEXT DEFAULT ''"),
+                                      ("puuid", "TEXT DEFAULT ''")):
+                if col_name not in existing_banned_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE banned_accounts ADD COLUMN {col_name} {col_def}")
+                    except Exception:
+                        pass
 
             # App Settings table
             cursor.execute("""
@@ -331,6 +340,19 @@ class Database:
         finally:
             conn.close()
 
+    def get_account_by_puuid(self, puuid: str) -> Optional[Dict[str, Any]]:
+        """The stored account for a Riot puuid, or None."""
+        if not (puuid or "").strip():
+            return None
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM accounts WHERE puuid = ? LIMIT 1", (puuid.strip(),))
+            row = cursor.fetchone()
+            return self._row_to_dict(row) if row else None
+        finally:
+            conn.close()
+
     def account_exists(self, username: str) -> Optional[str]:
         """
         Checks whether a username already exists, in either the main roster
@@ -385,8 +407,8 @@ class Database:
                     rank_tier, rank_division, lp, level, winrate, games_played,
                     top_champs, rank_icon_url, peak_rank_tier, peak_rank_division,
                     peak_rank_icon_url, peak_rank_season, card_small_url,
-                    match_history, status, favorite, last_updated, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    match_history, status, favorite, puuid, last_updated, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 account.get("username", "").strip(),
                 account.get("password", "").strip(),
@@ -410,6 +432,7 @@ class Database:
                 match_history_json,
                 (account.get("status") or "PLAYABLE"),
                 1 if account.get("favorite") else 0,
+                (account.get("puuid") or "").strip(),
                 now,
                 now
             ))
@@ -430,7 +453,8 @@ class Database:
     # failure. Without this guard, a single failed background sync would
     # wipe out a peak rank that was correctly fetched moments earlier.
     STICKY_NON_EMPTY_FIELDS = {
-        "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season", "match_history", "top_champs"
+        "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season",
+        "match_history", "top_champs", "puuid"
     }
 
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> bool:
@@ -502,8 +526,8 @@ class Database:
         "rank_tier", "rank_division", "lp", "level", "winrate", "games_played",
         "top_champs", "rank_icon_url", "peak_rank_tier", "peak_rank_division",
         "peak_rank_icon_url", "peak_rank_season", "card_small_url",
-        "match_history", "status", "favorite", "last_login", "last_updated",
-        "created_at"
+        "match_history", "status", "favorite", "puuid", "last_login",
+        "last_updated", "created_at"
     ]
 
     def move_to_banned(self, account_id: int) -> bool:

@@ -1796,8 +1796,16 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
     }
 
 
-def _cached_match(client: "ValorantLiveClient", match_id: str) -> Optional[Dict[str, Any]]:
-    if match_id in _MATCH_CACHE:
+def _cached_match(client: "ValorantLiveClient", match_id: str,
+                  use_cache: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Parsed match line for an id, memoised by default.
+
+    `use_cache=False` is for a match that is still being played: its numbers
+    change every round, so serving the first answer forever would freeze the
+    live scoreline at whatever it was the first time it was read.
+    """
+    if use_cache and match_id in _MATCH_CACHE:
         return _MATCH_CACHE[match_id]
 
     details = client.match_details(match_id)
@@ -1805,24 +1813,29 @@ def _cached_match(client: "ValorantLiveClient", match_id: str) -> Optional[Dict[
         return None
 
     parsed = _parse_match(details, client.puuid)
-    if parsed:
+    if parsed and use_cache:
         if len(_MATCH_CACHE) > _MATCH_CACHE_MAX:
             _MATCH_CACHE.clear()
         _MATCH_CACHE[match_id] = parsed
     return parsed
 
 
-def personal_match_summary(client: "ValorantLiveClient", match_id: str) -> Optional[Dict[str, Any]]:
+def personal_match_summary(client: "ValorantLiveClient", match_id: str,
+                           live: bool = False) -> Optional[Dict[str, Any]]:
     """
     This player's line for one match id - K/D/A, HS%, ADR, ACS and the round
     score. Returns None while Riot has nothing to give: match-details stays
-    empty until a match has actually finished (customs are the exception and
-    do answer mid-match), so a miss here is expected, not an error.
+    empty until a match has actually finished (customs, deathmatch and
+    practice are the exceptions and do answer mid-match), so a miss here is
+    expected, not an error.
+
+    Pass live=True for a match still in progress so the answer is re-read
+    rather than served from the cache.
     """
     if not match_id:
         return None
     try:
-        return _cached_match(client, match_id)
+        return _cached_match(client, match_id, use_cache=not live)
     except Exception:
         return None
 

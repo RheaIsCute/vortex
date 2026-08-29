@@ -366,12 +366,62 @@ async def get_banned_accounts():
     return {"accounts": db.get_banned_accounts()}
 
 
+@app.put("/api/banned-accounts/{account_id}")
+async def update_banned_account(account_id: int, updates: AccountUpdate):
+    """
+    Edits an account that lives in the Banned tab.
+
+    Being flagged banned should never make a record read-only: the credentials
+    may simply have been typed wrong, or the user may want to correct the Riot
+    ID/notes before rechecking. If the edit sets the status back to something
+    playable, the account moves back onto the main roster and its new id is
+    returned so the caller can follow it.
+    """
+    acc = db.get_banned_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Banned account not found")
+
+    data = {k: v for k, v in updates.dict().items() if v is not None}
+    status = str(data.get("status", "") or "").upper()
+
+    if status and status not in ("BANNED", "SUSPENDED"):
+        # Explicitly un-flagged - apply the edit, then move it back.
+        if data:
+            db.update_banned_account(account_id, data)
+        new_id = db.restore_from_banned(account_id)
+        if new_id:
+            return {
+                "success": True,
+                "restored_from_banned": True,
+                "account": db.get_account_by_id(new_id),
+            }
+
+    if data:
+        db.update_banned_account(account_id, data)
+    return {"success": True, "account": db.get_banned_account_by_id(account_id)}
+
+
+@app.post("/api/banned-accounts/{account_id}/restore")
+async def restore_banned_account(account_id: int):
+    """Moves a banned account back onto the main roster without a recheck."""
+    if not db.get_banned_account_by_id(account_id):
+        raise HTTPException(status_code=404, detail="Banned account not found")
+
+    new_id = db.restore_from_banned(account_id)
+    if not new_id:
+        raise HTTPException(status_code=404, detail="Banned account not found")
+
+    invalidate_live_snapshot()
+    return {"success": True, "account": db.get_account_by_id(new_id)}
+
+
 @app.delete("/api/banned-accounts/{account_id}")
 async def delete_banned_account(account_id: int):
     """Permanently deletes one banned account record (explicit action, not automatic)."""
     success = db.delete_banned_account(account_id)
     if not success:
         raise HTTPException(status_code=404, detail="Banned account not found")
+    invalidate_live_snapshot()
     return {"success": True}
 
 
@@ -1053,6 +1103,12 @@ class GameConfigCopyRequest(BaseModel):
     video: bool = True
 
 
+class GameConfigCopyAllRequest(BaseModel):
+    source_account_id: int
+    gameplay: bool = True
+    video: bool = True
+
+
 class GameConfigBorderlessRequest(BaseModel):
     account_id: Optional[int] = None  # omitted = whoever's signed in now
 
@@ -1116,6 +1172,32 @@ def _match_account_to_session(username: str, display_name: str = "", puuid: str 
             if acc.get("puuid") and acc["puuid"].strip() == p_target:
                 return acc
 
+    return None
+
+
+def _match_banned_to_session(username: str, display_name: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Same lookup as _match_account_to_session, but over the banned store.
+
+    A banned account is still a real, signed-in session - it just lives in a
+    different table. Without this the live snapshot came back with no
+    account_id at all, which is what left the "currently logged in" card
+    pointing at nothing and refusing to edit or delete.
+    """
+    u_target = (username or "").strip().lower()
+    d_target = (display_name or "").strip().lower()
+    if not (u_target or d_target):
+        return None
+
+    banned = db.get_banned_accounts()
+    if u_target:
+        for acc in banned:
+            if (acc.get("username") or "").strip().lower() == u_target:
+                return acc
+    if d_target:
+        for acc in banned:
+            if (acc.get("display_name") or "").strip().lower() == d_target:
+                return acc
     return None
 
 
@@ -1282,8 +1364,11 @@ _MATCH_PROGRESS: Dict[str, Any] = {
 
 # Best-effort probe for the live match's own stats. Ranked and unrated only
 # answer once the match ends, so this is retried slowly rather than per poll.
-_LIVE_PROBE: Dict[str, Any] = {"match_id": "", "next_at": 0.0, "data": None}
-_LIVE_PROBE_INTERVAL = 20.0
+_LIVE_PROBE: Dict[str, Any] = {"match_id": "", "next_at": 0.0, "data": None, "at_rounds": -1}
+# How often the in-progress match is re-read. Modes that answer mid-match
+# (deathmatch, custom, practice) update at this cadence; modes that don't
+# answer until the end just miss this often, which is cheap.
+_LIVE_PROBE_INTERVAL = 6.0
 
 # The match that just finished, resolved after the fact. Details take a few
 # seconds to appear, so the lookup is retried on a backoff before giving up.
@@ -1400,37 +1485,135 @@ def _build_progress(match_id: str, ally: int, enemy: int, starting_side: str,
     }
 
 
-def _live_probe(client, match_id: str) -> Optional[Dict[str, Any]]:
+def _live_probe(client, match_id: str, rounds_played: int = -1) -> Optional[Dict[str, Any]]:
     """
-    Your own scoreline for the match in progress, when Riot will give it up.
-    Custom games answer live; ranked and unrated only once the match ends, so
-    a miss is normal and simply retried on a slow cadence.
+    Your own scoreline for the match in progress, re-read as the match runs.
+
+    Modes that publish mid-match (deathmatch, custom, practice) answer every
+    time, so this keeps asking rather than freezing on the first answer - that
+    freeze is what made the "live" numbers stop moving after the first round.
+    Ranked and unrated only publish once the match ends, so a miss is normal;
+    the last good answer is kept so the panel doesn't flicker back to empty,
+    and a fresh read is forced the moment the round score moves.
     """
     p = _LIVE_PROBE
     if p["match_id"] != match_id:
-        p.update({"match_id": match_id, "next_at": 0.0, "data": None})
-    if p["data"]:
+        p.update({"match_id": match_id, "next_at": 0.0, "data": None, "at_rounds": -1})
+
+    # A completed round is the only moment the numbers can actually have
+    # changed, so it always earns a read regardless of the interval.
+    round_changed = rounds_played >= 0 and rounds_played != p["at_rounds"]
+    if not round_changed and time.time() < p["next_at"]:
         return p["data"]
-    if time.time() < p["next_at"]:
-        return None
 
     p["next_at"] = time.time() + _LIVE_PROBE_INTERVAL
-    p["data"] = valorant_client.personal_match_summary(client, match_id)
+    fresh = valorant_client.personal_match_summary(client, match_id, live=True)
+    if fresh:
+        p["data"] = fresh
+        p["at_rounds"] = rounds_played
     return p["data"]
 
 
 def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
-                queue_id: str) -> Optional[Dict[str, Any]]:
+                queue_id: str, progress: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
-    The "you, right now" card: agent and rank straight from the match, plus
-    your combat line. `source` says where the numbers came from - "live" when
-    they belong to this match, "recent" when they're your rolling average and
-    this match hasn't been published yet.
+    The "you, right now" card: agent and rank straight from the match, plus two
+    strictly separated combat lines.
+
+    `current` is THIS match and nothing else. It is only populated from a real
+    read of this match's details - when Riot hasn't published them yet the
+    numbers stay None and `current.available` is false, so the UI can say so
+    instead of quietly showing a rolling average under a "current match" label,
+    which is what made the old panel look live without being live.
+
+    `recent` is the rolling last-5-matches average, always labelled as such.
     """
     if not me:
         return None
 
-    live = _live_probe(client, match_id) if match_id else None
+    progress = progress or {}
+    rounds_played = int(progress.get("rounds_played", -1) or 0) if progress else -1
+    live = _live_probe(client, match_id, rounds_played) if match_id else None
+
+    # What the round ledger alone can tell us about this match. This part is
+    # live every poll, with no dependency on Riot publishing match details.
+    rounds_won = int(progress.get("rounds_won", 0) or 0)
+    rounds_lost = int(progress.get("rounds_lost", 0) or 0)
+    played = rounds_won + rounds_lost
+    history = progress.get("history") or []
+    attack_won = sum(1 for r in history if r.get("known") and r.get("side") == "Attacker" and r.get("won"))
+    attack_played = sum(1 for r in history if r.get("known") and r.get("side") == "Attacker")
+    defense_won = sum(1 for r in history if r.get("known") and r.get("side") == "Defender" and r.get("won"))
+    defense_played = sum(1 for r in history if r.get("known") and r.get("side") == "Defender")
+
+    current: Dict[str, Any] = {
+        "available": False,
+        "reason": "Riot publishes this match's combat stats when it ends.",
+        "kills": None,
+        "deaths": None,
+        "assists": None,
+        "kda_line": None,
+        "kd": None,
+        "kda": None,
+        "hs_pct": None,
+        "adr": None,
+        "acs": None,
+        "headshots": 0,
+        "bodyshots": 0,
+        "legshots": 0,
+        "shots": 0,
+        "damage": 0,
+        # Round-derived - live every poll, whatever Riot is or isn't publishing.
+        "rounds_played": played,
+        "rounds_won": rounds_won,
+        "rounds_lost": rounds_lost,
+        "round_number": progress.get("round_number", played + 1),
+        "round_winrate": round(rounds_won / played * 100, 1) if played else 0.0,
+        "streak": progress.get("streak", {"count": 0, "won": False}),
+        "attack_record": {"won": attack_won, "played": attack_played},
+        "defense_record": {"won": defense_won, "played": defense_played},
+    }
+
+    if live:
+        kills = int(live.get("kills", 0) or 0)
+        deaths = int(live.get("deaths", 0) or 0)
+        assists = int(live.get("assists", 0) or 0)
+        head = int(live.get("headshots", 0) or 0)
+        body = int(live.get("bodyshots", 0) or 0)
+        leg = int(live.get("legshots", 0) or 0)
+        shots = head + body + leg
+        live_rounds = int(live.get("rounds", 0) or 0) or played
+
+        current.update({
+            "available": True,
+            "reason": "",
+            "kills": kills,
+            "deaths": deaths,
+            "assists": assists,
+            "kda_line": f"{kills}/{deaths}/{assists}",
+            "kd": round(kills / max(1, deaths), 2),
+            "kda": round((kills + assists) / max(1, deaths), 2),
+            "hs_pct": round(head / shots * 100, 1) if shots else 0.0,
+            "adr": live.get("adr", 0),
+            "acs": live.get("acs", 0),
+            "headshots": head,
+            "bodyshots": body,
+            "legshots": leg,
+            "shots": shots,
+            "damage": int(live.get("total_damage", 0) or 0),
+            "kills_per_round": round(kills / max(1, live_rounds), 2),
+        })
+
+    recent = {
+        "kd": me.get("kd", 0.0),
+        "kda": me.get("kda", 0.0),
+        "hs_pct": me.get("hs_pct", 0),
+        "adr": me.get("adr", 0),
+        "acs": me.get("acs", 0),
+        "games": me.get("last5_games", 0) or me.get("games", 0),
+        "winrate": me.get("winrate_last5", me.get("winrate", 0)),
+    }
+
     block = {
         "name": me.get("name", ""),
         "agent": me.get("agent", ""),
@@ -1450,54 +1633,41 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "last5_losses": me.get("last5_losses", 0),
         "last5_games": me.get("last5_games", 0),
         "last5_form": me.get("last5_form", []),
-        "recent_kd": me.get("kd", 0.0),
-        "recent_hs_pct": me.get("hs_pct", 0),
         "queue_id": queue_id,
+
+        "current": current,
+        "recent": recent,
+
+        # Provenance, kept unambiguous: "live" only ever means this match.
+        "source": "live" if current["available"] else "recent",
+        "is_live_match": current["available"],
+        "recent_kd": recent["kd"],
+        "recent_hs_pct": recent["hs_pct"],
+        "recent_adr": recent["adr"],
+        "recent_acs": recent["acs"],
     }
 
-    if live:
-        block.update({
-            "source": "live",
-            "is_live_match": True,
-            "kills": live.get("kills", 0),
-            "deaths": live.get("deaths", 0),
-            "assists": live.get("assists", 0),
-            "kd": live.get("kd", 0.0),
-            "kda": round((live.get("kills", 0) + live.get("assists", 0)) /
-                         max(1, live.get("deaths", 0)), 2),
-            "hs_pct": live.get("hs_pct", 0),
-            "adr": live.get("adr", 0),
-            "acs": live.get("acs", 0),
-            "headshots": live.get("headshots", 0),
-            "bodyshots": live.get("bodyshots", 0),
-            "legshots": live.get("legshots", 0),
-            "damage": live.get("total_damage", 0),
-            "rounds": live.get("rounds", 0),
-            "current_match_kd": live.get("kd", 0.0),
-            "current_match_hs": live.get("hs_pct", 0),
-            "current_match_kda": f"{live.get('kills', 0)}/{live.get('deaths', 0)}/{live.get('assists', 0)}",
-        })
-    else:
-        block.update({
-            "source": "recent",
-            "is_live_match": False,
-            "kills": me.get("kills", 0),
-            "deaths": me.get("deaths", 0),
-            "assists": me.get("assists", 0),
-            "kd": me.get("kd", 0.0),
-            "kda": me.get("kda", 0.0),
-            "hs_pct": me.get("hs_pct", 0),
-            "adr": me.get("adr", 0),
-            "acs": me.get("acs", 0),
-            "headshots": 0,
-            "bodyshots": 0,
-            "legshots": 0,
-            "damage": 0,
-            "rounds": 0,
-            "current_match_kd": None,
-            "current_match_hs": None,
-            "current_match_kda": None,
-        })
+    # Flat mirrors of the current-match figures. These are None (not an
+    # average) when this match hasn't published, so nothing downstream can
+    # accidentally present last-5 numbers as this match's.
+    block.update({
+        "kills": current["kills"],
+        "deaths": current["deaths"],
+        "assists": current["assists"],
+        "kd": current["kd"],
+        "kda": current["kda"],
+        "hs_pct": current["hs_pct"],
+        "adr": current["adr"],
+        "acs": current["acs"],
+        "headshots": current["headshots"],
+        "bodyshots": current["bodyshots"],
+        "legshots": current["legshots"],
+        "damage": current["damage"],
+        "rounds": current["rounds_played"],
+        "current_match_kd": current["kd"],
+        "current_match_hs": current["hs_pct"],
+        "current_match_kda": current["kda_line"],
+    })
     return block
 
 
@@ -1831,6 +2001,10 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "enemy": _summarize_parties(enemy)
     }
 
+    progress = _build_progress(
+        match_id, ally_score, enemy_score, starting_side, current_side, queue_id
+    )
+
     return {
         "phase": "in_match",
         "match_id": match_id,
@@ -1840,10 +2014,8 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "team": ally,
         "enemy": enemy,
         "stacks": stacks,
-        "me": _self_block(client, match_id, me, queue_id),
-        "progress": _build_progress(
-            match_id, ally_score, enemy_score, starting_side, current_side, queue_id
-        ),
+        "me": _self_block(client, match_id, me, queue_id, progress),
+        "progress": progress,
         "score": {"ally": ally_score, "enemy": enemy_score},
         "round": total_rounds + 1,
         "starting_side": starting_side,
@@ -1863,6 +2035,8 @@ def build_live_snapshot() -> Dict[str, Any]:
         "available": False,
         "valorant_running": False,
         "account_id": None,
+        "banned_account_id": None,
+        "account_banned": False,
         "username": "",
         "display_name": "",
         "region": "",
@@ -1902,9 +2076,38 @@ def build_live_snapshot() -> Dict[str, Any]:
         snapshot["account_id"] = matched["id"]
         if not snapshot["display_name"]:
             snapshot["display_name"] = matched.get("display_name", "")
+        # Learn this account's puuid the first time we ever see it signed in.
+        # It's the key to its local settings folder, so recording it here is
+        # what lets crosshair/keybind copying find the account later.
+        session_puuid = (info.get("puuid") or "").strip()
+        if session_puuid and (matched.get("puuid") or "") != session_puuid:
+            try:
+                db.update_account(matched["id"], {"puuid": session_puuid})
+            except Exception:
+                pass
     else:
+        # The signed-in account may be one that was flagged and moved to the
+        # banned store. It's still the live session, so it still owns the
+        # "currently logged in" card - it just has to be addressed by its
+        # banned-store id, or the card ends up with nothing to act on.
+        banned_match = _match_banned_to_session(
+            info.get("username", ""), info.get("display_name", "")
+        )
+        if banned_match:
+            snapshot["banned_account_id"] = banned_match["id"]
+            snapshot["account_banned"] = True
+            if not snapshot["display_name"]:
+                snapshot["display_name"] = banned_match.get("display_name", "")
+
+        # A session Riot itself reports as banned/suspended is never
+        # auto-added to the roster: it would reappear the instant the user
+        # deleted it, which is exactly the loop that made the card unshakeable.
+        riot_status = (info.get("status") or "PLAYABLE").upper()
+        if riot_status in ("BANNED", "SUSPENDED"):
+            snapshot["account_banned"] = True
+
         uname = (info.get("username") or "").strip()
-        if uname and not db.account_exists(uname):
+        if uname and riot_status not in ("BANNED", "SUSPENDED") and not db.account_exists(uname):
             try:
                 new_acc_id = db.add_account({
                     "username": uname,
@@ -1938,6 +2141,13 @@ def build_live_snapshot() -> Dict[str, Any]:
         return snapshot
 
     snapshot["puuid"] = client.puuid
+    if snapshot.get("account_id") and client.puuid:
+        try:
+            stored = db.get_account_by_id(snapshot["account_id"])
+            if stored and (stored.get("puuid") or "") != client.puuid:
+                db.update_account(snapshot["account_id"], {"puuid": client.puuid})
+        except Exception:
+            pass
     if not snapshot.get("account_id") and snapshot.get("puuid"):
         matched = _match_account_to_session(info.get("username", ""), info.get("display_name", ""), snapshot["puuid"])
         if matched:
@@ -2138,20 +2348,47 @@ async def get_game_config_settings():
             return False
 
     def build_status() -> List[Dict[str, Any]]:
-        return [{
-            "id": acc["id"],
-            "display_name": acc.get("display_name") or acc.get("username", ""),
-            "has_config": has_config(acc.get("puuid", "") or ""),
-        } for acc in accounts]
+        out = []
+        for acc in accounts:
+            puuid = (acc.get("puuid") or "").strip()
+            ready = has_config(puuid)
+            # Two genuinely different reasons an account can't be used, which
+            # the old UI collapsed into one unexplained greyed-out row.
+            if ready:
+                reason = ""
+            elif not puuid:
+                reason = "not identified yet - log in once with Vortex open"
+            else:
+                reason = "no settings on this PC yet - play one match on it"
+            out.append({
+                "id": acc["id"],
+                "display_name": acc.get("display_name") or acc.get("username", ""),
+                "username": acc.get("username", ""),
+                "has_config": ready,
+                "has_puuid": bool(puuid),
+                "reason": reason,
+            })
+        return out
 
     account_status = await asyncio.to_thread(build_status)
     profile_id = settings.get("settings_profile_account_id", "") or ""
+
+    # Exactly what the chosen profile has on disk, so the UI can spell out
+    # what a copy would actually carry across instead of leaving it to guesswork.
+    profile_detail = None
+    if profile_id.isdigit():
+        prof = db.get_account_by_id(int(profile_id))
+        if prof and (prof.get("puuid") or "").strip():
+            profile_detail = await asyncio.to_thread(game_config.describe, prof["puuid"].strip())
 
     return {
         "force_borderless": settings.get("force_borderless", "1") != "0",
         "autoapply": settings.get("settings_autoapply", "0") == "1",
         "profile_account_id": int(profile_id) if profile_id.isdigit() else None,
         "accounts": account_status,
+        "ready_count": sum(1 for a in account_status if a["has_config"]),
+        "total_count": len(account_status),
+        "profile_detail": profile_detail,
     }
 
 
@@ -2191,6 +2428,70 @@ async def copy_game_config(req: GameConfigCopyRequest):
         game_config.copy_settings, src["puuid"], dst_puuid, req.gameplay, req.video
     )
     return result
+
+
+@app.post("/api/game-config/copy-all")
+async def copy_game_config_to_all(req: GameConfigCopyAllRequest):
+    """
+    Copies the profile account's whole local setup onto every other account
+    that has settings on this PC, in one go.
+
+    This is the "make all my accounts identical" button - doing it one target
+    at a time through the single-target copy was the only way before, which
+    is not an obvious way to say "apply this everywhere".
+    """
+    src = db.get_account_by_id(req.source_account_id)
+    if not src:
+        return {"success": False, "message": "Profile account not found."}
+    src_puuid = (src.get("puuid") or "").strip()
+    if not src_puuid:
+        return {"success": False, "message":
+                "That account hasn't been identified yet - sign into it once with Vortex open, then try again."}
+
+    def run() -> Dict[str, Any]:
+        if not game_config.has_config(src_puuid):
+            return {"success": False, "message":
+                    "The profile account has no VALORANT settings on this PC yet - "
+                    "play one match on it, then copy."}
+
+        applied, skipped = [], []
+        for acc in db.get_all_accounts():
+            if acc["id"] == src["id"]:
+                continue
+            name = acc.get("display_name") or acc.get("username", "")
+            puuid = (acc.get("puuid") or "").strip()
+            if not puuid:
+                skipped.append({"name": name, "why": "not identified on this PC yet"})
+                continue
+            if puuid == src_puuid:
+                continue
+            if not game_config.has_config(puuid):
+                skipped.append({"name": name, "why": "has never played on this PC"})
+                continue
+            res = game_config.copy_settings(src_puuid, puuid, req.gameplay, req.video)
+            if res.get("success"):
+                applied.append(name)
+            else:
+                skipped.append({"name": name, "why": res.get("message", "copy failed")})
+        return {"applied": applied, "skipped": skipped}
+
+    result = await asyncio.to_thread(run)
+    if "success" in result:
+        return result
+
+    applied, skipped = result["applied"], result["skipped"]
+    src_name = src.get("display_name") or src.get("username", "")
+    if not applied:
+        return {
+            "success": False,
+            "message": "No account was ready to receive the settings yet.",
+            "applied": [], "skipped": skipped,
+        }
+
+    msg = f"Copied {src_name}'s settings onto {len(applied)} account{'s' if len(applied) != 1 else ''}."
+    if skipped:
+        msg += f" {len(skipped)} skipped."
+    return {"success": True, "message": msg, "applied": applied, "skipped": skipped}
 
 
 @app.post("/api/game-config/force-borderless")
