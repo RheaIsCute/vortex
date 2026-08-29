@@ -889,7 +889,13 @@ async def sync_active_account():
 
 
 @app.post("/api/accounts/{account_id}/launch")
-async def launch_account(account_id: int, background_tasks: BackgroundTasks):
+async def launch_account(account_id: int, background_tasks: BackgroundTasks,
+                         in_place: bool = False):
+    """
+    Logs an account in. `in_place` retries into the sign-in page that is
+    already open instead of restarting the client - what the Retry button
+    wants, since the window on screen is usually fine and only reloaded.
+    """
     account = db.get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -902,7 +908,8 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks):
         account["username"],
         account["password"],
         custom_path if custom_path else None,
-        _stay_signed_in_pref()
+        _stay_signed_in_pref(),
+        not in_place
     )
 
     # Automatically watch, sync Level, Region, Rank, Peak Rank, and link Riot ID

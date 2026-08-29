@@ -2344,19 +2344,26 @@ function setLaunchModalTitle(text) {
     if (el) el.textContent = text;
 }
 
-async function launchAccount(id) {
+async function launchAccount(id, inPlace = false) {
     const acc = state.accounts.find(a => a.id === id);
     if (!acc) return;
 
     state.activeLaunchAcc = acc;
-    state._launchRetry = () => launchAccount(id);
+    // Retry goes back into the sign-in page that's already open rather than
+    // restarting the client. Restarting closed the window the user was
+    // watching and began the whole wait again, which is why retrying looked
+    // like it never retried.
+    state._launchRetry = () => launchAccount(id, true);
     DOM.launchUserVal.textContent = acc.username;
     setLaunchModalTitle("Logging In to Riot Client");
-    renderLaunchProgress({ stage: "opening", message: "Starting…" });
+    renderLaunchProgress({
+        stage: "opening",
+        message: inPlace ? "Retrying in the open Riot Client…" : "Starting…"
+    });
     openModal(DOM.modalLaunch);
 
     // Fire the login (backend spawns its own worker thread and returns fast).
-    fetch(`/api/accounts/${id}/launch`, { method: "POST" })
+    fetch(`/api/accounts/${id}/launch${inPlace ? "?in_place=true" : ""}`, { method: "POST" })
         .then(r => r.json())
         .then(data => {
             if (!data.success) {
