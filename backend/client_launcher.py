@@ -674,13 +674,8 @@ class ClientLauncher:
                 except Exception:
                     pass
 
-                # 3. Tab to "Stay signed in" checkbox & toggle/check it
-                pyautogui.press('tab')
-                time.sleep(0.20)
-                pyautogui.press('space')
-                time.sleep(0.15)
-
-                # 4. Submit Login
+                # 3. Directly Submit Login from password field with Enter
+                time.sleep(0.10)
                 pyautogui.press('enter')
 
                 _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
