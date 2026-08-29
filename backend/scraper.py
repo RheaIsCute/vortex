@@ -252,15 +252,42 @@ class StatScraper:
                     participant_agent = participant.get("assets", {}).get("agent", {}) or {}
                     participant_name = participant.get("name", "") or "Unknown"
                     participant_tag = participant.get("tag", "") or ""
+                    participant_score = int(participant_stats.get("score", 0) or 0)
+                    participant_rounds = max(1, int(participant_stats.get("rounds", 0) or (rounds_won + rounds_lost) or 1))
+                    participant_head = int(participant_stats.get("headshots", 0) or 0)
+                    participant_body = int(participant_stats.get("bodyshots", 0) or 0)
+                    participant_leg = int(participant_stats.get("legshots", 0) or 0)
+                    participant_shots = participant_head + participant_body + participant_leg
+                    participant_damage = int(participant_stats.get("damage_made", 0) or 0)
                     roster.append({
+                        "puuid": participant.get("puuid", "") or "",
                         "riot_id": f"{participant_name}#{participant_tag}" if participant_tag else participant_name,
-                        "name": participant_name,
+                        "name": f"{participant_name}#{participant_tag}" if participant_tag else participant_name,
                         "team": participant.get("team", ""),
+                        "is_self": (
+                            participant_name.lower().strip() == target_name_lower
+                            and (not target_tag_lower or participant_tag.lower().strip() == target_tag_lower)
+                        ),
                         "agent": participant.get("character", ""),
                         "agent_icon": participant_agent.get("small", "") or participant_agent.get("bust", ""),
                         "kills": participant_stats.get("kills", 0),
                         "deaths": participant_stats.get("deaths", 0),
                         "assists": participant_stats.get("assists", 0),
+                        "score": participant_score,
+                        "acs": round(participant_score / participant_rounds),
+                        "damage": participant_damage,
+                        "adr": round(participant_damage / participant_rounds),
+                        "hs_pct": round(participant_head / participant_shots * 100, 1)
+                                  if participant_shots else 0.0,
+                    })
+
+                team_summaries = []
+                for team_name, summary in teams.items():
+                    summary = summary or {}
+                    team_summaries.append({
+                        "team": team_name,
+                        "rounds_won": int(summary.get("rounds_won", 0) or 0),
+                        "won": bool(summary.get("has_won", False)),
                     })
 
                 matches.append({
@@ -279,6 +306,8 @@ class StatScraper:
                     "score": score,
                     "hs_pct": hs_pct,
                     "game_date": game_start,
+                    "teams": team_summaries,
+                    "round_results": [],
                     "roster": roster
                 })
             except Exception:

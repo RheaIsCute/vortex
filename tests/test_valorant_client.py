@@ -50,6 +50,11 @@ class _IncrementingMatchClient(vc.ValorantLiveClient):
         self.remote_calls += 1
         return _Response(_match_payload("match-1", self.puuid, self.remote_calls))
 
+    def resolve_names(self, _puuids):
+        # This test counts match-detail reads only; name resolution has its own
+        # coverage and is a separate Riot endpoint in production.
+        return {}
+
 
 class MatchCacheTests(unittest.TestCase):
     def setUp(self):
@@ -314,6 +319,56 @@ class CachedNamesTests(unittest.TestCase):
             if "m2" in self.server._NAME_CACHE:
                 self.server._NAME_CACHE["m2"]["next_at"] = 0.0  # ignore the retry gap
         self.assertEqual(self.server._NAME_MAX_TRIES, client.calls)
+
+
+class MatchScoreboardTests(unittest.TestCase):
+    def _details(self):
+        return {
+            "matchInfo": {"matchId": "scoreboard-1", "mapId": "map-1", "queueID": "competitive"},
+            "players": [
+                {"subject": "p1", "teamId": "Blue", "characterId": "a1",
+                 "stats": {"kills": 12, "deaths": 7, "assists": 3, "score": 3200, "roundsPlayed": 20}},
+                {"subject": "p2", "teamId": "Red", "characterId": "a2",
+                 "stats": {"kills": 8, "deaths": 12, "assists": 4, "score": 2400, "roundsPlayed": 20}},
+            ],
+            "teams": [
+                {"teamId": "Blue", "numPoints": 13, "won": True},
+                {"teamId": "Red", "numPoints": 7, "won": False},
+            ],
+            "roundResults": [{
+                "winningTeam": "Blue", "roundResult": "Eliminated",
+                "playerStats": [
+                    {"subject": "p1", "damage": [{"headshots": 2, "bodyshots": 4, "legshots": 0, "damage": 480}]},
+                    {"subject": "p2", "damage": [{"headshots": 1, "bodyshots": 3, "legshots": 1, "damage": 350}]},
+                ],
+            }],
+        }
+
+    @patch.object(vc, "resolve_map", return_value={"name": "Ascent"})
+    @patch.object(vc, "agent_by_id", side_effect=lambda agent: {"name": agent, "icon": f"/{agent}.png"})
+    def test_match_contains_two_team_scoreboard_and_rounds(self, _agent, _map):
+        parsed = vc._parse_match(self._details(), "p1")
+        self.assertEqual([13, 7], [team["rounds_won"] for team in parsed["teams"]])
+        self.assertEqual("Blue", parsed["round_results"][0]["winner"])
+        self.assertEqual("p1", parsed["roster"][0]["puuid"])
+        self.assertEqual(160, parsed["roster"][0]["acs"])
+        self.assertEqual(480, parsed["roster"][0]["damage"])
+        self.assertEqual("", parsed["roster"][0]["riot_id"])
+
+    def test_puuid_placeholders_resolve_to_full_riot_ids(self):
+        match = {"roster": [
+            {"puuid": "p1", "riot_id": "", "name": ""},
+            {"puuid": "p2", "riot_id": "", "name": ""},
+        ]}
+
+        class _Names:
+            @staticmethod
+            def resolve_names(_puuids):
+                return {"p1": "PlayerOne#NA1", "p2": "PlayerTwo#NA2"}
+
+        enriched = vc._enrich_roster_names(_Names(), match)
+        self.assertEqual("PlayerOne#NA1", enriched["roster"][0]["riot_id"])
+        self.assertEqual("PlayerTwo#NA2", enriched["roster"][1]["name"])
 
 
 class RegionCacheTests(unittest.TestCase):

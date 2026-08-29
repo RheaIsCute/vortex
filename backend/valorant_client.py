@@ -1863,42 +1863,91 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         placement = ranked_scores.index(score) + 1 if score in ranked_scores else 0
         result = "Win" if placement == 1 else "Loss"
 
-    # Hit locations and damage per round for that specific match
-    head = body = leg = total_damage = 0
+    # Hit locations and damage per round for every participant. Keeping this
+    # per-player lets the detail modal behave like an actual scoreboard rather
+    # than showing only the selected account's four headline stats.
+    combat_by_player: Dict[str, Dict[str, int]] = {}
+    round_timeline: List[Dict[str, Any]] = []
     for rnd in played_rounds if played_rounds else round_results:
+        round_timeline.append({
+            "round": len(round_timeline) + 1,
+            "winner": rnd.get("winningTeam") or "",
+            "result": rnd.get("roundResult") or rnd.get("roundResultCode") or "",
+        })
         for ps in rnd.get("playerStats") or []:
-            if ps.get("subject") != puuid:
-                continue
+            subject = ps.get("subject") or ps.get("Subject") or ""
+            totals = combat_by_player.setdefault(
+                subject, {"headshots": 0, "bodyshots": 0, "legshots": 0, "damage": 0}
+            )
             for dmg in ps.get("damage") or []:
-                head += int(dmg.get("headshots", 0) or 0)
-                body += int(dmg.get("bodyshots", 0) or 0)
-                leg += int(dmg.get("legshots", 0) or 0)
-                total_damage += int(dmg.get("damage", 0) or 0)
+                totals["headshots"] += int(dmg.get("headshots", 0) or 0)
+                totals["bodyshots"] += int(dmg.get("bodyshots", 0) or 0)
+                totals["legshots"] += int(dmg.get("legshots", 0) or 0)
+                totals["damage"] += int(dmg.get("damage", 0) or 0)
+
+    my_combat = combat_by_player.get(
+        puuid, {"headshots": 0, "bodyshots": 0, "legshots": 0, "damage": 0}
+    )
+    head = my_combat["headshots"]
+    body = my_combat["bodyshots"]
+    leg = my_combat["legshots"]
+    total_damage = my_combat["damage"]
 
     shots = head + body + leg
     agent = agent_by_id(me.get("characterId") or me.get("CharacterId") or "")
     adr = round(total_damage / max(1, rounds)) if rounds else 0
     hs_pct = round(head / shots * 100, 1) if shots else 0.0
 
-    # Names are resolved by the server before dashboard rendering when
-    # possible.  A PUUID fallback is still useful for the profile lookup UI.
+    # Match-details identifies participants by PUUID. The name-service pass in
+    # _enrich_roster_names replaces these placeholders with Name#TAG before
+    # the payload reaches the UI; the PUUID stays as a click-through fallback.
     roster = []
     for participant in players:
         participant_stats = participant.get("stats") or participant.get("Stats") or {}
         participant_id = participant.get("subject") or participant.get("Subject") or ""
         participant_agent = agent_by_id(participant.get("characterId") or participant.get("CharacterId") or "")
-        game_name = participant.get("gameName") or participant.get("name") or participant_id
+        game_name = participant.get("gameName") or participant.get("name") or ""
         tag_line = participant.get("tagLine") or participant.get("tag") or ""
         riot_id = f"{game_name}#{tag_line}" if tag_line and "#" not in game_name else game_name
+        participant_rounds = max(1, int(participant_stats.get("roundsPlayed", 0) or rounds))
+        participant_score = int(participant_stats.get("score", 0) or 0)
+        participant_combat = combat_by_player.get(
+            participant_id, {"headshots": 0, "bodyshots": 0, "legshots": 0, "damage": 0}
+        )
+        participant_shots = (
+            participant_combat["headshots"]
+            + participant_combat["bodyshots"]
+            + participant_combat["legshots"]
+        )
         roster.append({
+            "puuid": participant_id,
             "riot_id": riot_id,
             "name": game_name,
             "team": participant.get("teamId") or participant.get("TeamId") or "",
+            "is_self": participant_id == puuid,
             "agent": participant_agent.get("name", ""),
             "agent_icon": participant_agent.get("icon", ""),
             "kills": int(participant_stats.get("kills", 0) or 0),
             "deaths": int(participant_stats.get("deaths", 0) or 0),
             "assists": int(participant_stats.get("assists", 0) or 0),
+            "score": participant_score,
+            "acs": round(participant_score / participant_rounds),
+            "damage": participant_combat["damage"],
+            "adr": round(participant_combat["damage"] / participant_rounds),
+            "hs_pct": round(participant_combat["headshots"] / participant_shots * 100, 1)
+                      if participant_shots else 0.0,
+        })
+
+    team_summaries = []
+    for team in teams:
+        summary_id = team.get("teamId") or team.get("TeamId") or ""
+        points = team.get("numPoints")
+        if points is None:
+            points = team.get("roundsWon", 0)
+        team_summaries.append({
+            "team": summary_id,
+            "rounds_won": int(points or 0),
+            "won": bool(team.get("won")),
         })
 
     return {
@@ -1931,8 +1980,29 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         "rounds": rounds,
         "started_at": int(info.get("gameStartMillis", 0) or 0),
         "ranked": bool(info.get("isRanked", False)),
+        "teams": team_summaries,
+        "round_results": round_timeline,
         "roster": roster,
     }
+
+
+def _enrich_roster_names(client: "ValorantLiveClient", match: Dict[str, Any]) -> Dict[str, Any]:
+    """Replace match-detail PUUID placeholders with Riot's current Name#TAG."""
+    roster = match.get("roster") or []
+    unresolved = [
+        p.get("puuid", "") for p in roster
+        if p.get("puuid") and "#" not in (p.get("riot_id") or "")
+    ]
+    if not unresolved:
+        return match
+    names = client.resolve_names(unresolved)
+    for player in roster:
+        riot_id = names.get(player.get("puuid", ""), "")
+        if not riot_id:
+            continue
+        player["riot_id"] = riot_id
+        player["name"] = riot_id
+    return match
 
 
 def _cached_match(client: "ValorantLiveClient", match_id: str,
@@ -1945,13 +2015,15 @@ def _cached_match(client: "ValorantLiveClient", match_id: str,
     live scoreline at whatever it was the first time it was read.
     """
     if use_cache and match_id in _MATCH_CACHE:
-        return _MATCH_CACHE[match_id]
+        return _enrich_roster_names(client, _MATCH_CACHE[match_id])
 
     details = client.match_details(match_id, use_cache=use_cache)
     if not details:
         return None
 
     parsed = _parse_match(details, client.puuid)
+    if parsed:
+        parsed = _enrich_roster_names(client, parsed)
     if parsed and use_cache:
         if len(_MATCH_CACHE) > _MATCH_CACHE_MAX:
             _MATCH_CACHE.clear()

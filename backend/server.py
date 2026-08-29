@@ -93,7 +93,8 @@ class CopyRequest(BaseModel):
 
 
 class PlayerLookup(BaseModel):
-    riot_id: str
+    riot_id: Optional[str] = ""
+    puuid: Optional[str] = ""
     region: Optional[str] = "NA"
 
 
@@ -801,7 +802,15 @@ async def get_account_matches(account_id: int):
         raise HTTPException(status_code=404, detail="Account not found")
 
     matches = account.get("match_history", [])
-    if not matches and account["display_name"]:
+    needs_scoreboard_upgrade = any(
+        (match.get("roster") and not match.get("teams"))
+        or any(
+            player.get("puuid") and "#" not in (player.get("riot_id") or "")
+            for player in (match.get("roster") or [])
+        )
+        for match in matches
+    )
+    if (not matches or needs_scoreboard_upgrade) and account["display_name"]:
         settings = db.get_settings()
         scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
         stats = await scraper.fetch_account_stats(account["display_name"], account["region"])
@@ -820,15 +829,61 @@ async def get_account_matches(account_id: int):
 
 @app.post("/api/players/lookup")
 async def lookup_player_history(request: PlayerLookup):
-    """Look up a public Riot ID so match participants can be explored too."""
+    """Look up a match participant by Riot ID, with PUUID as a local fallback."""
     riot_id = (request.riot_id or "").strip()
-    if "#" not in riot_id:
-        raise HTTPException(status_code=400, detail="Enter a Riot ID in Name#TAG format")
+    puuid = (request.puuid or "").strip()
 
-    settings = db.get_settings()
-    scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
-    profile = await scraper.fetch_account_stats(riot_id, request.region or "NA")
-    return {"success": True, "riot_id": riot_id, "profile": profile}
+    # Riot match-details contains PUUIDs, not display names. Resolve the real
+    # Name#TAG while a Riot session is available so clicking a saved match row
+    # does not dead-end on "need Riot ID".
+    client = None
+    if "#" not in riot_id and puuid:
+        try:
+            client = await asyncio.to_thread(_connected_client)
+            resolved = await asyncio.to_thread(client.resolve_names, [puuid])
+            riot_id = resolved.get(puuid, "") or riot_id
+        except valorant_client.LiveClientError:
+            client = None
+
+    if "#" in riot_id:
+        settings = db.get_settings()
+        scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
+        profile = await scraper.fetch_account_stats(riot_id, request.region or "NA")
+        return {"success": True, "riot_id": riot_id, "puuid": puuid, "profile": profile}
+
+    # Streamer mode can prevent Riot from revealing a Name#TAG. The local
+    # match session can still provide rank and recent combat totals by PUUID,
+    # so the row remains useful and clickable instead of throwing an error.
+    if puuid and client is not None:
+        mmr = await asyncio.to_thread(client.player_mmr, puuid)
+        parsed_mmr = valorant_client.parse_player_mmr(mmr)
+        combat = await asyncio.to_thread(client.player_combat_summary, puuid, 5)
+        profile = {
+            "rank_tier": parsed_mmr.get("tier_label", "Unranked"),
+            "rank_division": "",
+            "rank_icon_url": parsed_mmr.get("tier_icon", ""),
+            "peak_rank_tier": parsed_mmr.get("peak_tier_label", "Unranked"),
+            "peak_rank_division": "",
+            "peak_rank_icon_url": parsed_mmr.get("peak_tier_icon", ""),
+            "lp": parsed_mmr.get("rr", 0),
+            "level": 0,
+            "winrate": combat.get("winrate_last5", parsed_mmr.get("winrate", 0)),
+            "games_played": combat.get("last5_games", parsed_mmr.get("games", 0)),
+            "combat": combat,
+            "match_history": [],
+        }
+        return {
+            "success": True,
+            "riot_id": riot_id or "Hidden player",
+            "puuid": puuid,
+            "profile": profile,
+            "identity_hidden": True,
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail="This match has no resolvable Riot ID or player identifier yet. Refresh its history and try again.",
+    )
 
 
 @app.get("/api/sync-active-account")

@@ -49,6 +49,7 @@ OVERLAY_HEIGHT = 640
 OVERLAY_MARGIN = 24
 OVERLAY_TITLE = "Vortex Quick Panel"
 WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
 
 
 def find_available_port(default_port: int = 8765) -> int:
@@ -167,7 +168,7 @@ def _make_overlay_controller(overlay_window, main_window):
             # NOACTIVATE kept VALORANT focused and trapped its cursor. Opening
             # the quick panel is an intentional focus change, so it must be a
             # normal interactive window for buttons and inputs to work.
-            ex_style = (ex_style | WS_EX_TOOLWINDOW) & ~0x08000000
+            ex_style = (ex_style | WS_EX_TOOLWINDOW) & ~0x08000000 & ~WS_EX_APPWINDOW
             win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
             win32gui.SetWindowPos(
                 hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
@@ -185,23 +186,47 @@ def _make_overlay_controller(overlay_window, main_window):
 
     threading.Thread(target=prepare_native_window_loop, daemon=True).start()
 
+    def focus_overlay(hwnd):
+        """Focus only the panel, without activating the shell/taskbar."""
+        user32 = ctypes.windll.user32
+        current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+        foreground = user32.GetForegroundWindow()
+        foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+        overlay_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        attached = []
+        try:
+            # The hotkey callback has its own Win32 message thread. Attach it
+            # briefly to both the game's foreground queue and WebView's UI
+            # queue so Windows permits a direct focus transfer to the panel.
+            for thread_id in {foreground_thread, overlay_thread}:
+                if thread_id and thread_id != current_thread:
+                    if user32.AttachThreadInput(current_thread, thread_id, True):
+                        attached.append(thread_id)
+            user32.AllowSetForegroundWindow(-1)
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+            win32gui.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.SetActiveWindow(hwnd)
+            user32.SetFocus(hwnd)
+        finally:
+            for thread_id in reversed(attached):
+                user32.AttachThreadInput(current_thread, thread_id, False)
+
     def showOverlay():
         state["visible"] = True
         try:
             hwnd = prepare_native_window()
             if hwnd:
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                win32gui.SetWindowPos(
-                    hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE,
-                )
-                win32gui.SetForegroundWindow(hwnd)
+                focus_overlay(hwnd)
             else:
                 overlay_window.show()
                 hwnd = prepare_native_window()
                 if hwnd:
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                    win32gui.SetForegroundWindow(hwnd)
+                    focus_overlay(hwnd)
         except Exception:
             pass
 

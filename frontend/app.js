@@ -1941,6 +1941,8 @@ function profileStatsHtml(profile) {
     const current = [profile.rank_tier, profile.rank_division].filter(Boolean).join(" ") || "Unranked";
     const peak = [profile.peak_rank_tier, profile.peak_rank_division].filter(Boolean).join(" ") || "No recorded peak";
     const matches = profile.match_history || [];
+    const combat = profile.combat || {};
+    const combatAvailable = combat.matches_analyzed || combat.last5_games;
     return `
         <div class="profile-summary">
             <div><span>Current rank</span><strong>${escapeHtml(current)}${profile.lp ? ` · ${profile.lp} RR` : ""}</strong></div>
@@ -1948,6 +1950,13 @@ function profileStatsHtml(profile) {
             <div><span>Level</span><strong>${profile.level || "—"}</strong></div>
             <div><span>Recent win rate</span><strong>${profile.winrate || 0}%</strong></div>
         </div>
+        ${combatAvailable ? `<h4 class="detail-section-title"><i class="fa-solid fa-chart-simple"></i> Recent performance</h4>
+        <div class="detail-stat-grid">
+            <div><span>K/D ratio</span><strong>${combat.kd ?? 0}</strong></div>
+            <div><span>K / D / A</span><strong>${combat.kills ?? 0} / ${combat.deaths ?? 0} / ${combat.assists ?? 0}</strong></div>
+            <div><span>Headshots</span><strong>${combat.hs_pct ?? 0}%</strong></div>
+            <div><span>ADR / ACS</span><strong>${combat.adr ?? 0} / ${combat.acs ?? 0}</strong></div>
+        </div>` : ""}
         <h4 class="detail-section-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent matches</h4>
         <div class="detail-history">${matches.length ? matches.map((m, i) => `
             <button type="button" class="detail-history-row ${m.outcome === "VICTORY" ? "is-win" : "is-loss"}" onclick="openMatchDetail(${i}, 'profile')">
@@ -1956,27 +1965,70 @@ function profileStatsHtml(profile) {
             </button>`).join("") : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}</div>`;
 }
 
-async function openPlayerProfile(riotId) {
-    if (!riotId || !riotId.includes("#")) {
-        showToast("A full Riot ID (Name#TAG) is needed to check a player.", "warning");
+async function openPlayerProfile(riotId, puuid = "") {
+    if ((!riotId || !riotId.includes("#")) && !puuid) {
+        showToast("This player has not resolved yet. Refresh the match and try again.", "warning");
         return;
     }
-    DOM.detailModalTitle.textContent = riotId;
-    DOM.detailModalSub.textContent = "Loading public profile and match history…";
+    DOM.detailModalTitle.textContent = riotId && riotId.includes("#") ? riotId : "Loading player…";
+    DOM.detailModalSub.textContent = "Loading profile and match history…";
     DOM.matchDetailContent.innerHTML = '<div class="no-matches-msg"><i class="fa-solid fa-spinner rotating"></i> Looking up player data…</div>';
     openModal(DOM.modalMatchDetail);
     try {
-        const response = await fetch("/api/players/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ riot_id: riotId }) });
+        const response = await fetch("/api/players/lookup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ riot_id: riotId || "", puuid: puuid || "" })
+        });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "Lookup failed");
         state.profileMatches = data.profile.match_history || [];
         DOM.detailModalTitle.textContent = data.riot_id;
-        DOM.detailModalSub.textContent = "Public profile · click a match for its roster";
+        DOM.detailModalSub.textContent = data.identity_hidden
+            ? "Identity hidden · live-session rank and combat data"
+            : "Player profile · click a match for its full scoreboard";
         DOM.matchDetailContent.innerHTML = profileStatsHtml(data.profile);
     } catch (error) {
         DOM.detailModalSub.textContent = "Player lookup unavailable";
         DOM.matchDetailContent.innerHTML = `<div class="no-matches-msg">${escapeHtml(error.message || "Could not load this player.")}</div>`;
     }
+}
+
+function matchTeamScore(m, teamId, teamIndex) {
+    const summary = (m.teams || []).find(t => String(t.team || "").toLowerCase() === String(teamId || "").toLowerCase());
+    if (summary) return Number(summary.rounds_won || 0);
+    const selfTeam = (m.roster || []).find(p => p.is_self)?.team;
+    if (selfTeam && String(selfTeam).toLowerCase() === String(teamId).toLowerCase()) return Number(m.rounds_won || 0);
+    if (selfTeam) return Number(m.rounds_lost || 0);
+    return teamIndex === 0 ? Number(m.rounds_won || 0) : Number(m.rounds_lost || 0);
+}
+
+function matchTeamHtml(m, teamId, teamIndex) {
+    const players = (m.roster || [])
+        .filter(p => String(p.team || "Unassigned").toLowerCase() === String(teamId).toLowerCase())
+        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    const summary = (m.teams || []).find(t => String(t.team || "").toLowerCase() === String(teamId).toLowerCase());
+    const rounds = matchTeamScore(m, teamId, teamIndex);
+    const teamName = /blue/i.test(teamId) ? "Blue Team" : /red/i.test(teamId) ? "Red Team" : `${teamId || `Team ${teamIndex + 1}`}`;
+    const result = summary ? (summary.won ? "WIN" : "LOSS") : "TEAM";
+    return `
+        <section class="detail-team ${summary?.won ? "is-winner" : ""}">
+            <div class="detail-team-head">
+                <span><i class="fa-solid fa-people-group"></i> ${escapeHtml(teamName)}</span>
+                <strong>${rounds} rounds <em>${result}</em></strong>
+            </div>
+            <div class="detail-score-head"><span>Agent / Riot ID</span><span>K / D / A</span><span>ACS</span><span>Score</span><span>ADR</span><span>HS%</span></div>
+            <div class="detail-score-body">${players.map(p => {
+                const riotId = p.riot_id && p.riot_id.includes("#") ? p.riot_id : "Riot ID resolving…";
+                const clickId = encodeURIComponent(p.riot_id || "");
+                const clickPuuid = encodeURIComponent(p.puuid || "");
+                return `<button type="button" class="detail-score-player ${p.is_self ? "is-self" : ""}" onclick="openPlayerProfile(decodeURIComponent('${clickId}'), decodeURIComponent('${clickPuuid}'))">
+                    <span class="detail-score-identity">${p.agent_icon ? `<img src="${p.agent_icon}" alt="">` : '<i class="fa-solid fa-user"></i>'}<span><strong>${escapeHtml(riotId)}</strong><small>${escapeHtml(p.agent || "Agent")}</small></span></span>
+                    <b>${p.kills || 0} / ${p.deaths || 0} / ${p.assists || 0}</b>
+                    <b>${p.acs ?? 0}</b><b>${p.score ?? 0}</b><b>${p.adr ?? 0}</b><b>${p.hs_pct ?? 0}%</b>
+                </button>`;
+            }).join("")}</div>
+        </section>`;
 }
 
 function openMatchDetail(index, source) {
@@ -1985,6 +2037,10 @@ function openMatchDetail(index, source) {
     if (!m) return;
     const outcome = (m.outcome || m.result || "Match").toUpperCase();
     const roster = m.roster || [];
+    const teamIds = [...new Set([
+        ...(m.teams || []).map(t => t.team).filter(Boolean),
+        ...roster.map(p => p.team || "Unassigned")
+    ])];
     DOM.detailModalTitle.textContent = `${m.map || "Unknown map"} · ${outcome}`;
     DOM.detailModalSub.textContent = `${m.mode || "Match"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${m.game_date || "Recent"}`;
     DOM.matchDetailContent.innerHTML = `
@@ -1994,13 +2050,10 @@ function openMatchDetail(index, source) {
             <div><span>Headshots</span><strong>${m.hs_pct ?? m.hs ?? 0}%</strong></div>
             <div><span>${m.adr !== undefined ? "ADR" : "Score"}</span><strong>${m.adr ?? m.score ?? 0}</strong></div>
         </div>
-        <h4 class="detail-section-title"><i class="fa-solid fa-users"></i> Player roster <small>Click a player to check their data</small></h4>
-        <div class="detail-roster">${roster.length ? roster.map(p => `
-            <button type="button" class="detail-player" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.riot_id || "")}'))">
-                ${p.agent_icon ? `<img src="${p.agent_icon}" alt="">` : '<i class="fa-solid fa-user"></i>'}
-                <span><strong>${escapeHtml(p.name || p.riot_id || "Unknown")}</strong><small>${escapeHtml(p.agent || "Agent")}</small></span>
-                <b>${p.kills || 0}/${p.deaths || 0}/${p.assists || 0}</b>
-            </button>`).join("") : '<p class="no-matches-msg">Roster data will appear after this history is refreshed.</p>'}</div>`;
+        <h4 class="detail-section-title"><i class="fa-solid fa-table-list"></i> Full scoreboard <small>Click any player to view their profile and match history</small></h4>
+        <div class="detail-scoreboard">${roster.length ? teamIds.map((team, i) => matchTeamHtml(m, team, i)).join("") : '<p class="no-matches-msg">Scoreboard data will appear after this history is refreshed.</p>'}</div>
+        ${(m.round_results || []).length ? `<h4 class="detail-section-title"><i class="fa-solid fa-timeline"></i> Round results</h4>
+        <div class="detail-rounds">${m.round_results.map(r => `<span class="${/blue/i.test(r.winner) ? "is-blue" : "is-red"}" title="${escapeHtml(r.result || "Round")}">${r.round}</span>`).join("")}</div>` : ""}`;
     openModal(DOM.modalMatchDetail);
 }
 
@@ -2616,7 +2669,7 @@ function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
-    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "SHIFT+5";
+    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "CTRL+SHIFT+F8";
     renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
@@ -2883,7 +2936,7 @@ async function saveSettings() {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
-            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "SHIFT+5").trim().toUpperCase()
+            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "CTRL+SHIFT+F8").trim().toUpperCase()
         }
     };
 
