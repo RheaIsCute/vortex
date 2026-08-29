@@ -244,6 +244,25 @@ class StatScraper:
                 mode = metadata.get("mode", "Competitive")
                 game_start = metadata.get("game_start_patched", "") or metadata.get("game_start", "")
 
+                # Keep a compact roster with the saved history. It makes each
+                # match expandable without persisting the entire raw response.
+                roster = []
+                for participant in players:
+                    participant_stats = participant.get("stats", {}) or {}
+                    participant_agent = participant.get("assets", {}).get("agent", {}) or {}
+                    participant_name = participant.get("name", "") or "Unknown"
+                    participant_tag = participant.get("tag", "") or ""
+                    roster.append({
+                        "riot_id": f"{participant_name}#{participant_tag}" if participant_tag else participant_name,
+                        "name": participant_name,
+                        "team": participant.get("team", ""),
+                        "agent": participant.get("character", ""),
+                        "agent_icon": participant_agent.get("small", "") or participant_agent.get("bust", ""),
+                        "kills": participant_stats.get("kills", 0),
+                        "deaths": participant_stats.get("deaths", 0),
+                        "assists": participant_stats.get("assists", 0),
+                    })
+
                 matches.append({
                     "match_id": metadata.get("matchid", ""),
                     "map": map_name,
@@ -259,7 +278,8 @@ class StatScraper:
                     "kdr": kdr,
                     "score": score,
                     "hs_pct": hs_pct,
-                    "game_date": game_start
+                    "game_date": game_start,
+                    "roster": roster
                 })
             except Exception:
                 continue

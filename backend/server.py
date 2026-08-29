@@ -91,6 +91,11 @@ class CopyRequest(BaseModel):
     text: str
 
 
+class PlayerLookup(BaseModel):
+    riot_id: str
+    region: Optional[str] = "NA"
+
+
 class SettingsUpdate(BaseModel):
     settings: Dict[str, Any]
 
@@ -810,6 +815,19 @@ async def get_account_matches(account_id: int):
         "display_name": account.get("display_name", "") if account else "",
         "matches": matches
     }
+
+
+@app.post("/api/players/lookup")
+async def lookup_player_history(request: PlayerLookup):
+    """Look up a public Riot ID so match participants can be explored too."""
+    riot_id = (request.riot_id or "").strip()
+    if "#" not in riot_id:
+        raise HTTPException(status_code=400, detail="Enter a Riot ID in Name#TAG format")
+
+    settings = db.get_settings()
+    scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
+    profile = await scraper.fetch_account_stats(riot_id, request.region or "NA")
+    return {"success": True, "riot_id": riot_id, "profile": profile}
 
 
 @app.get("/api/sync-active-account")

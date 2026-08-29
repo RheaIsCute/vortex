@@ -169,6 +169,13 @@ const DOM = {
     matchMetaWinrate: document.getElementById("match-meta-winrate"),
     matchesListContainer: document.getElementById("matches-list-container"),
     btnRefreshMatches: document.getElementById("btn-refresh-matches"),
+    playerLookupForm: document.getElementById("player-lookup-form"),
+    playerLookupInput: document.getElementById("player-lookup-input"),
+    modalMatchDetail: document.getElementById("modal-match-detail"),
+    modalMatchDetailClose: document.getElementById("modal-match-detail-close"),
+    detailModalTitle: document.getElementById("detail-modal-title"),
+    detailModalSub: document.getElementById("detail-modal-sub"),
+    matchDetailContent: document.getElementById("match-detail-content"),
 
     // Settings Modal
     modalSettings: document.getElementById("modal-settings"),
@@ -682,6 +689,13 @@ function initEventListeners() {
             openMatchesModal(state.activeMatchAccId);
         }
     });
+    if (DOM.playerLookupForm) DOM.playerLookupForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const riotId = DOM.playerLookupInput.value.trim();
+        if (!riotId) return;
+        await openPlayerProfile(riotId);
+    });
+    if (DOM.modalMatchDetailClose) DOM.modalMatchDetailClose.addEventListener("click", () => closeModal(DOM.modalMatchDetail));
 
     DOM.btnOpenSettings.addEventListener("click", openSettingsModal);
     DOM.modalSettingsClose.addEventListener("click", () => closeModal(DOM.modalSettings));
@@ -1856,6 +1870,7 @@ async function openMatchesModal(id) {
         const res = await fetch(`/api/accounts/${id}/matches`);
         const data = await res.json();
         const matches = data.matches || [];
+        state.currentAccountMatches = matches;
         renderMatchHistoryList(matches);
     } catch (err) {
         DOM.matchesListContainer.innerHTML = '<div class="no-matches-msg">Failed to load match history.</div>';
@@ -1880,7 +1895,7 @@ function renderMatchHistoryList(matches) {
         const agentIcon = m.agent_icon || "https://media.valorant-api.com/agents";
 
         return `
-            <div class="match-card ${outcomeClass}" style="--i:${i}">
+            <button class="match-card ${outcomeClass}" style="--i:${i}" type="button" onclick="openMatchDetail(${i}, 'account')" title="Open full match details">
                 <!-- Agent Section -->
                 <div class="match-agent-section">
                     <img src="${agentIcon}" alt="${m.agent || 'Agent'}" class="match-agent-avatar" onerror="this.src='https://media.valorant-api.com/agents';">
@@ -1917,9 +1932,76 @@ function renderMatchHistoryList(matches) {
                         <span class="stat-box-val">${m.hs_pct || 0}%</span>
                     </div>
                 </div>
-            </div>
+            </button>
         `;
     }).join("");
+}
+
+function profileStatsHtml(profile) {
+    const current = [profile.rank_tier, profile.rank_division].filter(Boolean).join(" ") || "Unranked";
+    const peak = [profile.peak_rank_tier, profile.peak_rank_division].filter(Boolean).join(" ") || "No recorded peak";
+    const matches = profile.match_history || [];
+    return `
+        <div class="profile-summary">
+            <div><span>Current rank</span><strong>${escapeHtml(current)}${profile.lp ? ` · ${profile.lp} RR` : ""}</strong></div>
+            <div><span>Peak rank</span><strong>${escapeHtml(peak)}</strong></div>
+            <div><span>Level</span><strong>${profile.level || "—"}</strong></div>
+            <div><span>Recent win rate</span><strong>${profile.winrate || 0}%</strong></div>
+        </div>
+        <h4 class="detail-section-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent matches</h4>
+        <div class="detail-history">${matches.length ? matches.map((m, i) => `
+            <button type="button" class="detail-history-row ${m.outcome === "VICTORY" ? "is-win" : "is-loss"}" onclick="openMatchDetail(${i}, 'profile')">
+                <span>${escapeHtml(m.outcome || "MATCH")}</span><strong>${escapeHtml(m.map || "Unknown map")}</strong>
+                <small>${escapeHtml(m.agent || "Agent")} · ${m.kills || 0}/${m.deaths || 0}/${m.assists || 0}</small>
+            </button>`).join("") : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}</div>`;
+}
+
+async function openPlayerProfile(riotId) {
+    if (!riotId || !riotId.includes("#")) {
+        showToast("A full Riot ID (Name#TAG) is needed to check a player.", "warning");
+        return;
+    }
+    DOM.detailModalTitle.textContent = riotId;
+    DOM.detailModalSub.textContent = "Loading public profile and match history…";
+    DOM.matchDetailContent.innerHTML = '<div class="no-matches-msg"><i class="fa-solid fa-spinner rotating"></i> Looking up player data…</div>';
+    openModal(DOM.modalMatchDetail);
+    try {
+        const response = await fetch("/api/players/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ riot_id: riotId }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Lookup failed");
+        state.profileMatches = data.profile.match_history || [];
+        DOM.detailModalTitle.textContent = data.riot_id;
+        DOM.detailModalSub.textContent = "Public profile · click a match for its roster";
+        DOM.matchDetailContent.innerHTML = profileStatsHtml(data.profile);
+    } catch (error) {
+        DOM.detailModalSub.textContent = "Player lookup unavailable";
+        DOM.matchDetailContent.innerHTML = `<div class="no-matches-msg">${escapeHtml(error.message || "Could not load this player.")}</div>`;
+    }
+}
+
+function openMatchDetail(index, source) {
+    const matches = source === "account" ? state.currentAccountMatches : source === "profile" ? state.profileMatches : state.dashboardMatches;
+    const m = matches && matches[index];
+    if (!m) return;
+    const outcome = (m.outcome || m.result || "Match").toUpperCase();
+    const roster = m.roster || [];
+    DOM.detailModalTitle.textContent = `${m.map || "Unknown map"} · ${outcome}`;
+    DOM.detailModalSub.textContent = `${m.mode || "Match"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${m.game_date || "Recent"}`;
+    DOM.matchDetailContent.innerHTML = `
+        <div class="detail-stat-grid">
+            <div><span>K / D / A</span><strong>${m.kills || 0} / ${m.deaths || 0} / ${m.assists || 0}</strong></div>
+            <div><span>K/D ratio</span><strong>${m.kdr ?? m.kd ?? 0}</strong></div>
+            <div><span>Headshots</span><strong>${m.hs_pct ?? m.hs ?? 0}%</strong></div>
+            <div><span>${m.adr !== undefined ? "ADR" : "Score"}</span><strong>${m.adr ?? m.score ?? 0}</strong></div>
+        </div>
+        <h4 class="detail-section-title"><i class="fa-solid fa-users"></i> Player roster <small>Click a player to check their data</small></h4>
+        <div class="detail-roster">${roster.length ? roster.map(p => `
+            <button type="button" class="detail-player" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.riot_id || "")}'))">
+                ${p.agent_icon ? `<img src="${p.agent_icon}" alt="">` : '<i class="fa-solid fa-user"></i>'}
+                <span><strong>${escapeHtml(p.name || p.riot_id || "Unknown")}</strong><small>${escapeHtml(p.agent || "Agent")}</small></span>
+                <b>${p.kills || 0}/${p.deaths || 0}/${p.assists || 0}</b>
+            </button>`).join("") : '<p class="no-matches-msg">Roster data will appear after this history is refreshed.</p>'}</div>`;
+    openModal(DOM.modalMatchDetail);
 }
 
 // ==========================================================================
@@ -4170,7 +4252,7 @@ function renderRoster(el, players) {
             : "";
 
         return `
-            <div class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}">
+            <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'))" title="Check this player's match history">
                 <div class="dash-player-lead">
                     ${p.agent_icon
                         ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
@@ -4204,7 +4286,7 @@ function renderRoster(el, players) {
                     <img src="${tierIcon}" alt="${escapeHtml(tierLabel)}" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
                     <span class="dash-player-rr">${hasRank && p.rr ? `${p.rr} RR` : (hasRank ? "" : "Unranked")}</span>
                 </div>
-            </div>
+            </button>
         `;
     }).join("");
 }
@@ -4770,13 +4852,13 @@ function renderPlayerStats() {
         <div class="stat-block">
             <h5 class="stat-block-title"><i class="fa-solid fa-clock-rotate-left"></i> Match History & Performance</h5>
             <div class="stat-matches">
-                ${s.recent.map(m => {
+                ${s.recent.map((m, i) => {
                     const isWin = m.result === "Win";
                     const isLoss = m.result === "Loss";
                     const outcomeText = isWin ? "VICTORY" : (isLoss ? "DEFEAT" : "DRAW");
                     const scoreText = m.placement ? `#${m.placement}` : `${m.rounds_won} – ${m.rounds_lost}`;
                     return `
-                    <div class="stat-match ${isWin ? "is-win" : (isLoss ? "is-loss" : "")}">
+                    <button type="button" class="stat-match ${isWin ? "is-win" : (isLoss ? "is-loss" : "")}" onclick="openMatchDetail(${i}, 'dashboard')" title="Open full match details">
                         <span class="stat-match-flag"></span>
                         <div class="stat-match-agent-wrap">
                             <img src="${m.agent_icon}" alt="${escapeHtml(m.agent)}" class="stat-match-agent-img" onerror="this.style.visibility='hidden';">
@@ -4803,11 +4885,12 @@ function renderPlayerStats() {
                                 ${m.kd} K/D
                             </div>
                         </div>
-                    </div>
+                    </button>
                 `}).join("")}
             </div>
         </div>` : ""}
     `;
+    state.dashboardMatches = s.recent || [];
 }
 
 function winrateClass(wr) {

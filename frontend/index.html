@@ -594,9 +594,26 @@
                     </button>
                 </div>
 
+                <form class="player-lookup" id="player-lookup-form">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input id="player-lookup-input" autocomplete="off" placeholder="Check another player: Name#TAG">
+                    <button class="btn btn-secondary btn-sm" type="submit">View player</button>
+                </form>
+
                 <!-- Matches List Container -->
                 <div class="matches-list" id="matches-list-container"></div>
             </div>
+        </div>
+    </div>
+
+    <!-- MATCH DETAIL / PLAYER PROFILE MODAL -->
+    <div class="modal-overlay" id="modal-match-detail">
+        <div class="modal-card modal-detail-card">
+            <div class="modal-header">
+                <div class="modal-title-wrap"><div class="modal-icon-badge"><i class="fa-solid fa-crosshairs"></i></div><div><h2 id="detail-modal-title">Match details</h2><p class="modal-sub" id="detail-modal-sub">Performance and player roster</p></div></div>
+                <button class="modal-close" id="modal-match-detail-close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="match-detail-content" id="match-detail-content"></div>
         </div>
     </div>
 

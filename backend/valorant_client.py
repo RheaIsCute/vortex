@@ -1819,6 +1819,27 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
     adr = round(total_damage / max(1, rounds)) if rounds else 0
     hs_pct = round(head / shots * 100, 1) if shots else 0.0
 
+    # Names are resolved by the server before dashboard rendering when
+    # possible.  A PUUID fallback is still useful for the profile lookup UI.
+    roster = []
+    for participant in players:
+        participant_stats = participant.get("stats") or participant.get("Stats") or {}
+        participant_id = participant.get("subject") or participant.get("Subject") or ""
+        participant_agent = agent_by_id(participant.get("characterId") or participant.get("CharacterId") or "")
+        game_name = participant.get("gameName") or participant.get("name") or participant_id
+        tag_line = participant.get("tagLine") or participant.get("tag") or ""
+        riot_id = f"{game_name}#{tag_line}" if tag_line and "#" not in game_name else game_name
+        roster.append({
+            "riot_id": riot_id,
+            "name": game_name,
+            "team": participant.get("teamId") or participant.get("TeamId") or "",
+            "agent": participant_agent.get("name", ""),
+            "agent_icon": participant_agent.get("icon", ""),
+            "kills": int(participant_stats.get("kills", 0) or 0),
+            "deaths": int(participant_stats.get("deaths", 0) or 0),
+            "assists": int(participant_stats.get("assists", 0) or 0),
+        })
+
     return {
         "match_id": info.get("matchId", ""),
         "map": resolve_map(info.get("mapId", "")).get("name", ""),
@@ -1849,6 +1870,7 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         "rounds": rounds,
         "started_at": int(info.get("gameStartMillis", 0) or 0),
         "ranked": bool(info.get("isRanked", False)),
+        "roster": roster,
     }
 
 
