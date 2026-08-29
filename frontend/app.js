@@ -179,6 +179,7 @@ const DOM = {
     settingsApiKey: document.getElementById("settings-api-key"),
     btnAutoDetectClient: document.getElementById("btn-auto-detect-client"),
     settingsAppVersion: document.getElementById("settings-app-version"),
+    appVersionBadge: document.getElementById("app-version-badge"),
     btnCheckUpdate: document.getElementById("btn-check-update"),
     settingsLogPath: document.getElementById("settings-log-path"),
     btnOpenLog: document.getElementById("btn-open-log"),
@@ -433,6 +434,9 @@ async function loadAppVersion() {
         if (DOM.settingsAppVersion && state.appVersion) {
             DOM.settingsAppVersion.value = `v${state.appVersion}`;
         }
+        if (DOM.appVersionBadge && state.appVersion) {
+            DOM.appVersionBadge.textContent = `v${state.appVersion}`;
+        }
     } catch (err) {
         // Non-critical
     }
@@ -471,9 +475,29 @@ async function checkForUpdate(manual) {
         if (DOM.updateStatusText) {
             DOM.updateStatusText.textContent = `v${data.latest_version} is available.`;
         }
+        // The packaged desktop app owns its updater. Browser mode should only
+        // advertise the release and never try to download an installer.
+        if (!manual) scheduleDesktopAutoUpdate();
     } else if (manual) {
         showToast("You're on the latest version!", "success");
         if (DOM.updateStatusText) DOM.updateStatusText.textContent = "You're on the latest version.";
+    }
+}
+
+let autoUpdateTimer = null;
+function scheduleDesktopAutoUpdate() {
+    if (autoUpdateTimer !== null || !state.pendingUpdate) return;
+    const start = () => {
+        if (autoUpdateTimer !== null || !state.pendingUpdate) return;
+        if (!(window.pywebview && window.pywebview.api)) return;
+        autoUpdateTimer = setTimeout(() => {
+            autoUpdateTimer = null;
+            installPendingUpdate();
+        }, 1200);
+    };
+    start();
+    if (!(window.pywebview && window.pywebview.api)) {
+        window.addEventListener("pywebviewready", start, { once: true });
     }
 }
 
