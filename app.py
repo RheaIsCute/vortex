@@ -48,9 +48,7 @@ OVERLAY_WIDTH = 430
 OVERLAY_HEIGHT = 640
 OVERLAY_MARGIN = 24
 OVERLAY_TITLE = "Vortex Quick Panel"
-WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
-SW_SHOWNOACTIVATE = 4
 
 
 def find_available_port(default_port: int = 8765) -> int:
@@ -159,17 +157,21 @@ def _make_overlay_controller(overlay_window, main_window):
     state = {"visible": False, "hwnd": 0}
 
     def prepare_native_window():
-        """Keep the overlay above apps without ever becoming the active app."""
+        """Keep the panel topmost while allowing it to receive mouse input."""
         hwnd = state["hwnd"] or win32gui.FindWindow(None, OVERLAY_TITLE)
         if not hwnd:
             return 0
         state["hwnd"] = hwnd
         try:
             ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+            # NOACTIVATE kept VALORANT focused and trapped its cursor. Opening
+            # the quick panel is an intentional focus change, so it must be a
+            # normal interactive window for buttons and inputs to work.
+            ex_style = (ex_style | WS_EX_TOOLWINDOW) & ~0x08000000
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
             win32gui.SetWindowPos(
                 hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_FRAMECHANGED,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_FRAMECHANGED,
             )
         except Exception:
             return 0
@@ -185,22 +187,21 @@ def _make_overlay_controller(overlay_window, main_window):
 
     def showOverlay():
         state["visible"] = True
-        foreground = win32gui.GetForegroundWindow()
         try:
             hwnd = prepare_native_window()
             if hwnd:
-                win32gui.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 win32gui.SetWindowPos(
                     hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE,
                 )
+                win32gui.SetForegroundWindow(hwnd)
             else:
                 overlay_window.show()
                 hwnd = prepare_native_window()
                 if hwnd:
-                    win32gui.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-            if foreground and win32gui.GetForegroundWindow() != foreground:
-                win32gui.SetForegroundWindow(foreground)
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    win32gui.SetForegroundWindow(hwnd)
         except Exception:
             pass
 

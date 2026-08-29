@@ -25,6 +25,7 @@ from backend.client_launcher import ClientLauncher
 from backend import client_launcher
 from backend import valorant_client
 from backend import game_config
+from backend.live_combat import LiveCombatTracker
 from backend.version import APP_VERSION
 from backend import updater
 
@@ -1153,6 +1154,7 @@ _LIVE_SNAPSHOT_TTL = 1.2
 _PENDING_AUTO_ADD: Dict[str, Any] = {}
 _LIVE_SNAPSHOT_LOCK = threading.Lock()
 _LIVE_OWNER_PUUID = ""
+_LIVE_COMBAT = LiveCombatTracker()
 
 # Roster names don't change inside a match, so they're resolved once per match.
 _NAME_CACHE: Dict[str, Dict[str, str]] = {}
@@ -1491,7 +1493,9 @@ _LIVE_PROBE: Dict[str, Any] = {"match_id": "", "next_at": 0.0, "data": None, "at
 # How often the in-progress match is re-read. Modes that answer mid-match
 # (deathmatch, custom, practice) update at this cadence; modes that don't
 # answer until the end just miss this often, which is cheap.
-_LIVE_PROBE_INTERVAL = 6.0
+# If Riot is publishing a partial in-progress match, pick it up nearly
+# immediately. The call is skipped unless a dashboard snapshot needs it.
+_LIVE_PROBE_INTERVAL = 1.25
 
 # The match that just finished, resolved after the fact. Details take a few
 # seconds to appear, so the lookup is retried on a backoff before giving up.
@@ -1682,6 +1686,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
     progress = progress or {}
     rounds_played = int(progress.get("rounds_played", -1) or 0) if progress else -1
     live = _live_probe(client, match_id, rounds_played) if match_id else None
+    log_live = _LIVE_COMBAT.snapshot(match_id) if match_id else {"available": False}
 
     # What the round ledger alone can tell us about this match. This part is
     # live every poll, with no dependency on Riot publishing match details.
@@ -1711,6 +1716,8 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "legshots": 0,
         "shots": 0,
         "damage": 0,
+        "source": "unavailable",
+        "headshot_kill_pct": None,
         # Round-derived - live every poll, whatever Riot is or isn't publishing.
         "rounds_played": played,
         "rounds_won": rounds_won,
@@ -1721,6 +1728,34 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "attack_record": {"won": attack_won, "played": attack_played},
         "defense_record": {"won": defense_won, "played": defense_played},
     }
+
+    # The local game log updates as events happen, filling the gap before
+    # Riot makes an exact match-details response available. It only reports
+    # what it can observe: kills/deaths and headshot *kills*.
+    if log_live.get("available"):
+        kills = int(log_live.get("kills", 0) or 0)
+        deaths = int(log_live.get("deaths", 0) or 0)
+        headshot_kills = int(log_live.get("headshot_kills", 0) or 0)
+        current.update({
+            "available": True,
+            "source": "game_log",
+            "reason": "Live event feed from the local VALORANT game log.",
+            "kills": kills,
+            "deaths": deaths,
+            "assists": None,
+            "kda_line": f"{kills}/{deaths}/—",
+            "kd": round(kills / max(1, deaths), 2),
+            "kda": None,
+            "hs_pct": None,
+            "headshot_kill_pct": log_live.get("headshot_kill_pct", 0.0),
+            "adr": None,
+            "acs": None,
+            "headshots": 0,
+            "bodyshots": 0,
+            "legshots": 0,
+            "shots": 0,
+            "damage": 0,
+        })
 
     if live:
         kills = int(live.get("kills", 0) or 0)
@@ -1734,6 +1769,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
 
         current.update({
             "available": True,
+            "source": "riot",
             "reason": "",
             "kills": kills,
             "deaths": deaths,
@@ -1742,6 +1778,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "kd": round(kills / max(1, deaths), 2),
             "kda": round((kills + assists) / max(1, deaths), 2),
             "hs_pct": round(head / shots * 100, 1) if shots else 0.0,
+            "headshot_kill_pct": None,
             "adr": live.get("adr", 0),
             "acs": live.get("acs", 0),
             "headshots": head,

@@ -3984,6 +3984,7 @@ function renderMeCard(match) {
     const recent = me.recent || {};
     const hasCombat = !!cur.available;
     const inMatch = match.phase === "in_match";
+    const liveEventsOnly = cur.source === "game_log";
 
     const num = (v, digits) => (v === null || v === undefined)
         ? "--"
@@ -3996,7 +3997,7 @@ function renderMeCard(match) {
     const combatTiles = [
         { k: "K / D / A", v: cur.kda_line || "--", c: hasCombat ? "is-kda" : "is-pending" },
         { k: "K/D", v: num(cur.kd, 2), c: goodBad(cur.kd, 1) },
-        { k: "Headshot %", v: pct(cur.hs_pct), c: hasCombat ? "is-hs" : "is-pending" },
+        { k: liveEventsOnly ? "HS Kills" : "Headshot %", v: liveEventsOnly ? pct(cur.headshot_kill_pct) : pct(cur.hs_pct), c: hasCombat ? "is-hs" : "is-pending" },
         { k: "ADR", v: num(cur.adr), c: hasCombat ? "is-adr" : "is-pending" },
         { k: "ACS", v: num(cur.acs), c: hasCombat ? "is-acs" : "is-pending" }
     ];
@@ -4062,12 +4063,16 @@ function renderMeCard(match) {
         ? '<img src="' + me.tier_icon + '" class="dash-me-rank" alt="" onerror="this.style.display=\'none\';">'
         : "";
 
-    const pendingHtml = hasCombat ? "" :
+    const pendingHtml = liveEventsOnly ?
+        '<div class="dash-me-pending is-live-feed">' +
+            '<i class="fa-solid fa-satellite-dish"></i>' +
+            '<span>Live event feed: K/D updates the moment events reach your local game log. “HS Kills” is headshot kills per kill; Riot still supplies exact shot accuracy, ADR and ACS when available.</span>' +
+        '</div>' : (hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
             '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
             ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS fill in the moment Riot publishes them.</span>' +
-        '</div>';
+        '</div>');
 
     const hitHtml = (hasCombat && shots)
         ? '<div class="dash-hs-bar" title="' + cur.headshots + ' head &middot; ' + cur.bodyshots +
