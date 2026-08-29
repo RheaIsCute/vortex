@@ -44,8 +44,8 @@ from backend.overlay_hotkey import OverlayHotkey
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 
-OVERLAY_WIDTH = 400
-OVERLAY_HEIGHT = 600
+OVERLAY_WIDTH = 430
+OVERLAY_HEIGHT = 640
 OVERLAY_MARGIN = 24
 
 
@@ -129,7 +129,7 @@ def _create_overlay_window():
         width=OVERLAY_WIDTH,
         height=OVERLAY_HEIGHT,
         x=x, y=y,
-        min_size=(360, 480),
+        min_size=(390, 520),
         background_color="#06040b",
         frameless=True,
         easy_drag=True,

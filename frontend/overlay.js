@@ -335,8 +335,8 @@
                 nameRow.appendChild(active);
             }
 
-            const meta = document.createElement("div");
-            meta.className = "account-meta";
+            const rankRow = document.createElement("div");
+            rankRow.className = "account-rank-row";
 
             const rankImg = document.createElement("img");
             rankImg.className = "account-rank-icon";
@@ -347,32 +347,37 @@
                 rankImg.onerror = null;
                 rankImg.src = DEFAULT_TIER_ICON;
             }, { once: true });
-            meta.appendChild(rankImg);
+            rankRow.appendChild(rankImg);
 
             const rank = document.createElement("span");
+            rank.className = "account-rank-text";
             rank.textContent = accountRankDetail(account);
-            meta.appendChild(rank);
+            rankRow.appendChild(rank);
+
+            const meta = document.createElement("div");
+            meta.className = "account-meta";
 
             const tagText = cleanText(account.tag);
             if (tagText) {
-                const dot = document.createElement("i");
-                dot.setAttribute("aria-hidden", "true");
                 const tag = document.createElement("span");
                 tag.textContent = tagText;
-                meta.append(dot, tag);
+                meta.appendChild(tag);
             }
 
             const username = cleanText(account.username);
             if (username && username.toLowerCase() !== accountLabel(account).toLowerCase()) {
-                const dot = document.createElement("i");
-                dot.setAttribute("aria-hidden", "true");
+                if (tagText) {
+                    const dot = document.createElement("i");
+                    dot.setAttribute("aria-hidden", "true");
+                    meta.appendChild(dot);
+                }
                 const login = document.createElement("span");
                 login.textContent = username;
                 login.title = username;
-                meta.append(dot, login);
+                meta.appendChild(login);
             }
 
-            info.append(nameRow, meta);
+            info.append(nameRow, rankRow, meta);
 
             const action = document.createElement("button");
             action.type = "button";
