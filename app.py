@@ -47,6 +47,10 @@ ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 OVERLAY_WIDTH = 430
 OVERLAY_HEIGHT = 640
 OVERLAY_MARGIN = 24
+OVERLAY_TITLE = "Vortex Quick Panel"
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOOLWINDOW = 0x00000080
+SW_SHOWNOACTIVATE = 4
 
 
 def find_available_port(default_port: int = 8765) -> int:
@@ -124,7 +128,7 @@ def _create_overlay_window():
     """
     x, y = _overlay_start_position()
     return webview.create_window(
-        title="Vortex Quick Panel",
+        title=OVERLAY_TITLE,
         url=f"{URL}/static/overlay.html",
         width=OVERLAY_WIDTH,
         height=OVERLAY_HEIGHT,
@@ -152,12 +156,51 @@ def _make_overlay_controller(overlay_window, main_window):
     dismissed by pressing the hotkey again. Routing all three through the
     same state here is what keeps them in sync.
     """
-    state = {"visible": False}
+    state = {"visible": False, "hwnd": 0}
+
+    def prepare_native_window():
+        """Keep the overlay above apps without ever becoming the active app."""
+        hwnd = state["hwnd"] or win32gui.FindWindow(None, OVERLAY_TITLE)
+        if not hwnd:
+            return 0
+        state["hwnd"] = hwnd
+        try:
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_FRAMECHANGED,
+            )
+        except Exception:
+            return 0
+        return hwnd
+
+    def prepare_native_window_loop():
+        for _ in range(80):
+            if prepare_native_window():
+                return
+            time.sleep(0.1)
+
+    threading.Thread(target=prepare_native_window_loop, daemon=True).start()
 
     def showOverlay():
         state["visible"] = True
+        foreground = win32gui.GetForegroundWindow()
         try:
-            overlay_window.show()
+            hwnd = prepare_native_window()
+            if hwnd:
+                win32gui.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+                win32gui.SetWindowPos(
+                    hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+                )
+            else:
+                overlay_window.show()
+                hwnd = prepare_native_window()
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+            if foreground and win32gui.GetForegroundWindow() != foreground:
+                win32gui.SetForegroundWindow(foreground)
         except Exception:
             pass
 

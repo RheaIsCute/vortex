@@ -84,15 +84,15 @@ input {
     min-width: 420px;
     min-height: 600px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 18px;
     /* The backdrop every glass surface below blurs and refracts - richer
        and more colorful than a flat panel needs, on purpose. */
     background:
         radial-gradient(circle at 8% -8%, rgba(172, 102, 255, 0.4), transparent 38%),
         radial-gradient(circle at 105% 8%, rgba(94, 200, 255, 0.22), transparent 32%),
         radial-gradient(circle at 30% 115%, rgba(255, 106, 173, 0.16), transparent 40%),
-        linear-gradient(165deg, rgba(19, 16, 32, 0.99), rgba(7, 6, 13, 0.995));
+        linear-gradient(165deg, rgba(13, 12, 23, 0.91), rgba(5, 5, 10, 0.94));
     box-shadow: var(--shadow);
 }
 
@@ -445,6 +445,41 @@ input {
     margin-top: 10px;
 }
 
+.panel-toolbar {
+    display: grid;
+    gap: 8px;
+}
+
+.filter-strip {
+    display: flex;
+    padding: 0 1px 2px;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.filter-strip::-webkit-scrollbar { display: none; }
+
+.filter-chip {
+    flex: 0 0 auto;
+    min-height: 27px;
+    padding: 0 10px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.035);
+    color: var(--dim);
+    font-size: 10px;
+    font-weight: 750;
+    cursor: pointer;
+}
+
+.filter-chip:hover { color: var(--text); border-color: rgba(196, 155, 255, 0.25); }
+.filter-chip.is-active {
+    border-color: rgba(196, 155, 255, 0.34);
+    background: rgba(159, 98, 255, 0.18);
+    color: #eadcff;
+}
+
 .tab-panel {
     display: flex;
     width: 100%;
@@ -594,8 +629,8 @@ input {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    min-height: 64px;
-    padding: 9px 10px;
+    min-height: 72px;
+    padding: 8px 9px 8px 8px;
     gap: 11px;
     border: 1px solid var(--glass-border);
     border-radius: 13px;
@@ -621,25 +656,17 @@ input {
     background: linear-gradient(100deg, rgba(255, 114, 136, 0.15), rgba(255, 255, 255, 0.04));
 }
 
-.account-avatar {
+.account-rank-badge {
     display: grid;
-    width: 40px;
-    height: 40px;
+    width: 52px;
+    height: 52px;
     place-items: center;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
-    background: linear-gradient(145deg, rgba(158, 97, 255, 0.32), rgba(71, 38, 119, 0.18));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
-    color: #e7d9ff;
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0.03em;
+    border: 1px solid rgba(196, 155, 255, 0.14);
+    border-radius: 14px;
+    background: radial-gradient(circle, rgba(159, 98, 255, 0.15), rgba(255,255,255,0.025) 68%);
 }
 
-.account-avatar.tone-1 { background: linear-gradient(145deg, rgba(62, 188, 255, 0.2), rgba(30, 77, 125, 0.13)); color: #a9e5ff; }
-.account-avatar.tone-2 { background: linear-gradient(145deg, rgba(72, 224, 159, 0.18), rgba(26, 103, 75, 0.12)); color: #a5f4d1; }
-.account-avatar.tone-3 { background: linear-gradient(145deg, rgba(255, 153, 95, 0.2), rgba(122, 64, 27, 0.12)); color: #ffd0ad; }
-.account-avatar.tone-4 { background: linear-gradient(145deg, rgba(255, 103, 162, 0.19), rgba(113, 36, 72, 0.12)); color: #ffc0d8; }
+.account-rank-badge img { width: 45px; height: 45px; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0,0,0,.42)); }
 
 .account-info {
     min-width: 0;
@@ -654,8 +681,9 @@ input {
 
 .account-name {
     overflow: hidden;
-    font-size: 13px;
-    font-weight: 700;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -678,22 +706,15 @@ input {
     display: flex;
     align-items: center;
     min-width: 0;
-    margin-top: 4px;
+    margin-top: 2px;
     gap: 6px;
-}
-
-.account-rank-icon {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 auto;
-    object-fit: contain;
 }
 
 .account-rank-text {
     overflow: hidden;
-    color: #d9cfec;
-    font-size: 11.5px;
-    font-weight: 600;
+    color: #f5efff;
+    font-size: 14px;
+    font-weight: 780;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -784,7 +805,7 @@ input {
 .skeleton-row {
     display: grid;
     height: 64px;
-    grid-template-columns: 40px 1fr 84px;
+    grid-template-columns: 52px 1fr 84px;
     align-items: center;
     padding: 9px 10px;
     gap: 11px;

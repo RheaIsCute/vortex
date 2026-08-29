@@ -19,6 +19,7 @@
         accountCount: document.getElementById("account-count"),
         crosshairCount: document.getElementById("crosshair-count"),
         accountSearch: document.getElementById("account-search"),
+        accountFilters: document.getElementById("account-filters"),
         accountList: document.getElementById("account-list"),
         accountsEmpty: document.getElementById("accounts-empty"),
         accountsEmptyDetail: document.getElementById("accounts-empty-detail"),
@@ -46,6 +47,7 @@
         pendingConfirm: null,
         confirmTimer: null,
         activeTab: "accounts",
+        accountFilter: "all",
         launchGame: readLaunchPreference(),
         crosshairsLoaded: false
     };
@@ -82,15 +84,6 @@
 
     function accountLabel(account) {
         return cleanText(account.display_name, cleanText(account.username, "Unnamed account"));
-    }
-
-    function accountInitials(account) {
-        const source = accountLabel(account).split("#", 1)[0].trim();
-        const pieces = source.split(/\s+/).filter(Boolean);
-        if (pieces.length > 1) {
-            return (pieces[0][0] + pieces[pieces.length - 1][0]).toUpperCase();
-        }
-        return source.slice(0, 2).toUpperCase() || "VX";
     }
 
     const DEFAULT_TIER_ICON = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
@@ -274,8 +267,12 @@
             if (favoriteDiff) return favoriteDiff;
             return accountLabel(a).localeCompare(accountLabel(b), undefined, { sensitivity: "base" });
         });
-        if (!query) return accounts;
         return accounts.filter(account => {
+            const rank = accountRank(account).toLowerCase();
+            if (model.accountFilter === "favorites" && !account.favorite) return false;
+            if (model.accountFilter === "ranked" && rank.includes("unranked")) return false;
+            if (model.accountFilter === "unranked" && !rank.includes("unranked")) return false;
+            if (!query) return true;
             const haystack = [account.display_name, account.username, account.tag, account.rank_label, account.rank_tier]
                 .map(value => cleanText(value).toLowerCase())
                 .join(" ");
@@ -304,9 +301,17 @@
             if (isPending) row.classList.add("is-pending");
 
             const avatar = document.createElement("span");
-            avatar.className = `account-avatar tone-${Math.abs(id || index) % 5}`;
-            avatar.textContent = accountInitials(account);
-            avatar.setAttribute("aria-hidden", "true");
+            avatar.className = "account-rank-badge";
+            avatar.title = accountRankDetail(account);
+            const badgeIcon = document.createElement("img");
+            badgeIcon.src = accountRankIcon(account);
+            badgeIcon.alt = accountRank(account);
+            badgeIcon.loading = "lazy";
+            badgeIcon.addEventListener("error", () => {
+                badgeIcon.onerror = null;
+                badgeIcon.src = DEFAULT_TIER_ICON;
+            }, { once: true });
+            avatar.appendChild(badgeIcon);
 
             const info = document.createElement("div");
             info.className = "account-info";
@@ -337,17 +342,6 @@
 
             const rankRow = document.createElement("div");
             rankRow.className = "account-rank-row";
-
-            const rankImg = document.createElement("img");
-            rankImg.className = "account-rank-icon";
-            rankImg.src = accountRankIcon(account);
-            rankImg.alt = "";
-            rankImg.loading = "lazy";
-            rankImg.addEventListener("error", () => {
-                rankImg.onerror = null;
-                rankImg.src = DEFAULT_TIER_ICON;
-            }, { once: true });
-            rankRow.appendChild(rankImg);
 
             const rank = document.createElement("span");
             rank.className = "account-rank-text";
@@ -663,6 +657,16 @@ function setActiveTab(tabName, focus = false) {
         });
 
         view.accountSearch.addEventListener("input", renderAccounts);
+
+        view.accountFilters.addEventListener("click", event => {
+            const button = event.target.closest("[data-filter]");
+            if (!button) return;
+            model.accountFilter = button.dataset.filter || "all";
+            view.accountFilters.querySelectorAll("[data-filter]").forEach(chip => {
+                chip.classList.toggle("is-active", chip === button);
+            });
+            renderAccounts();
+        });
         view.launchGame.checked = model.launchGame;
         view.launchGame.addEventListener("change", () => {
             model.launchGame = Boolean(view.launchGame.checked);

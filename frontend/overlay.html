@@ -78,9 +78,15 @@
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M10.5 4a6.5 6.5 0 1 0 3.98 11.64l3.94 3.94a.82.82 0 0 0 1.16-1.16l-3.94-3.94A6.5 6.5 0 0 0 10.5 4Zm-4.9 6.5a4.9 4.9 0 1 1 9.8 0 4.9 4.9 0 0 1-9.8 0Z"/>
                         </svg>
-                        <input id="account-search" type="search" autocomplete="off" spellcheck="false" placeholder="Find an account">
+                        <input id="account-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search rank or account">
                         <span class="key-hint">/</span>
                     </label>
+                    <div class="filter-strip" id="account-filters" aria-label="Filter accounts">
+                        <button class="filter-chip is-active" type="button" data-filter="all">All</button>
+                        <button class="filter-chip" type="button" data-filter="favorites">Favorites</button>
+                        <button class="filter-chip" type="button" data-filter="ranked">Ranked</button>
+                        <button class="filter-chip" type="button" data-filter="unranked">Unranked</button>
+                    </div>
                 </div>
 
                 <div class="game-warning" id="game-warning" role="alert" hidden>
