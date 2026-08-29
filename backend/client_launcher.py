@@ -674,8 +674,17 @@ class ClientLauncher:
                 except Exception:
                     pass
 
-                # 3. Directly Submit Login from password field with Enter
-                time.sleep(0.10)
+                # 3. Submit Login:
+                # First attempt direct Enter in password field
+                pyautogui.press('enter')
+                time.sleep(0.15)
+
+                # Tab forward to the red circular Submit button (7 tabs past social icons & checkbox)
+                for _ in range(7):
+                    pyautogui.press('tab')
+                    time.sleep(0.04)
+
+                time.sleep(0.06)
                 pyautogui.press('enter')
 
                 _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
