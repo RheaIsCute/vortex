@@ -183,6 +183,9 @@ const DOM = {
     settingsLogPath: document.getElementById("settings-log-path"),
     btnOpenLog: document.getElementById("btn-open-log"),
     settingsForceBorderless: document.getElementById("settings-force-borderless"),
+    settingsStaySignedIn: document.getElementById("settings-stay-signed-in"),
+    settingsAutoLaunch: document.getElementById("settings-auto-launch"),
+    btnBorderlessAll: document.getElementById("btn-borderless-all"),
     settingsProfileAccount: document.getElementById("settings-profile-account"),
     settingsProfileAutoapply: document.getElementById("settings-profile-autoapply"),
     settingsCopyTarget: document.getElementById("settings-copy-target"),
@@ -585,6 +588,7 @@ function initEventListeners() {
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
     if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
     if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
+    if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
     // Picking a different profile changes what a copy would carry, so the
     // description under the picker has to follow the selection.
     if (DOM.settingsProfileAccount) {
@@ -2375,6 +2379,8 @@ async function loadGameConfigSettings() {
         state.gameConfig = data;
 
         if (DOM.settingsForceBorderless) DOM.settingsForceBorderless.checked = !!data.force_borderless;
+        if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = !!data.stay_signed_in;
+        if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = !!data.auto_launch_after_login;
         if (DOM.settingsProfileAutoapply) DOM.settingsProfileAutoapply.checked = !!data.autoapply;
 
         const accounts = data.accounts || [];
@@ -2442,6 +2448,32 @@ async function onProfileAccountChange() {
         // A failed save just means the summary stays as it was.
     }
     loadGameConfigSettings();
+}
+
+/** Forces windowed borderless on every account that has settings on this PC. */
+async function applyBorderlessToAll() {
+    const btn = DOM.btnBorderlessAll;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Applying...`;
+    }
+    try {
+        const res = await fetch("/api/game-config/force-borderless", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ all_accounts: true })
+        });
+        const data = await res.json();
+        showToast(data.message || (data.success ? "Applied." : "Couldn't apply."),
+                  data.success ? "success" : "error");
+    } catch (err) {
+        showToast("Failed to reach the app's backend.", "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> Set every account to borderless now`;
+        }
+    }
 }
 
 /** Copies the profile's whole setup onto every account that can take it. */
@@ -2592,6 +2624,8 @@ async function saveSettings() {
 
     const gameConfigPayload = {
         force_borderless: !!DOM.settingsForceBorderless?.checked,
+        stay_signed_in: !!DOM.settingsStaySignedIn?.checked,
+        auto_launch_after_login: !!DOM.settingsAutoLaunch?.checked,
         autoapply: !!DOM.settingsProfileAutoapply?.checked,
         profile_account_id: parseInt(DOM.settingsProfileAccount?.value || "", 10) || 0
     };

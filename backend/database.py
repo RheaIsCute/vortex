@@ -179,7 +179,13 @@ class Database:
                 ("riot_client_path", r"C:\Riot Games\Riot Client\RiotClientServices.exe"),
                 ("riot_api_key", "HDEV-259b6c27-0a83-4445-9f36-f66a3147f24c"),
                 ("theme", "blue"),
-                ("auto_minimize_on_launch", "true")
+                ("auto_minimize_on_launch", "true"),
+                # Tick Riot's "Stay signed in" during automated logins, so a
+                # relaunch of the Riot Client doesn't ask for the password again.
+                ("stay_signed_in", "1"),
+                # Start VALORANT by itself once a plain Login lands. Off by
+                # default - Login and Play stay distinct actions unless asked.
+                ("auto_launch_after_login", "0")
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

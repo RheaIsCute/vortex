@@ -687,6 +687,32 @@
                 </div>
 
                 <div class="form-group">
+                    <label><i class="fa-solid fa-right-to-bracket"></i> Login Behaviour</label>
+
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-stay-signed-in">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Tick "Stay signed in" when logging in</strong>
+                            <span>Ticks Riot's own checkbox during the automated login, so reopening the Riot Client doesn't ask for the password again.</span>
+                        </div>
+                    </div>
+
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-auto-launch">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Start VALORANT right after logging in</strong>
+                            <span>Makes the Login button behave like Play - the game starts by itself as soon as the login lands.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label><i class="fa-solid fa-display"></i> Launch Display Mode</label>
                     <div class="switch-row">
                         <label class="switch">
@@ -695,9 +721,12 @@
                         </label>
                         <div class="switch-row-text">
                             <strong>Always launch in windowed borderless</strong>
-                            <span>Forces Display Mode before every launch, per account. Riot has to have seen an account on this PC once before this can apply to it.</span>
+                            <span>Forces Display Mode on every login and every launch, per account. An account has to have played on this PC once before this can apply to it.</span>
                         </div>
                     </div>
+                    <button type="button" class="btn btn-secondary btn-sm btn-borderless-all" id="btn-borderless-all">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Set every account to borderless now
+                    </button>
                 </div>
 
                 <div class="form-group">

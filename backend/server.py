@@ -143,6 +143,16 @@ def note_account_login(account_id: int) -> None:
     _ACTIVE_SESSION["account_id"] = account_id
 
 
+def _stay_signed_in_pref() -> bool:
+    """Whether automated logins should tick Riot's "Stay signed in"."""
+    return db.get_settings().get("stay_signed_in", "1") != "0"
+
+
+def _auto_launch_pref() -> bool:
+    """Whether a plain Login should start VALORANT once it lands."""
+    return db.get_settings().get("auto_launch_after_login", "0") == "1"
+
+
 def apply_account_update(account_id: int, update_payload: dict) -> bool:
     """
     Persists a live-info update for an account, then moves it into the
@@ -217,6 +227,28 @@ async def background_auto_detect_and_link(account_id: int):
             if apply_account_update(account_id, update_payload):
                 break
 
+            # Whether "Stay signed in" actually took. Riot only writes the
+            # persisted-login blob once auth completes, so this is the first
+            # moment it can be checked - and the only way to know, since the
+            # checkbox itself can't be read back.
+            if _stay_signed_in_pref():
+                persisted = await asyncio.to_thread(client_launcher.is_session_persisted)
+                client_launcher.LOGIN_PROGRESS["stay_signed_in"] = persisted
+                client_launcher.login_logger.info(
+                    "[%s] stay-signed-in after login: %s", target_username, persisted
+                )
+
+            # Force borderless now rather than only on a Vortex-initiated
+            # launch, so the setting still holds if the game gets started from
+            # the Riot Client's own Play button.
+            session_puuid = (info.get("puuid") or "").strip() or                 await asyncio.to_thread(_current_puuid)
+            await _apply_launch_prefs(session_puuid)
+
+            # Start the game straight away when the user has asked for it, so
+            # Login behaves like Play without needing the second click.
+            if _auto_launch_pref():
+                asyncio.create_task(_launch_game_for_current_session())
+
             # Also fetch match history in background if playable
             detected_id = info.get("display_name")
             detected_region = info.get("region", "NA")
@@ -284,7 +316,8 @@ async def run_batch_account_check():
             launcher.login_account,
             acc["username"],
             acc["password"],
-            custom_path if custom_path else None
+            custom_path if custom_path else None,
+            _stay_signed_in_pref()
         )
 
         # 2. Rate-limit aware wait & poll loop (up to 7.0s) strictly for this account's username
@@ -446,7 +479,8 @@ async def recheck_banned_account(account_id: int):
         launcher.login_account,
         acc["username"],
         acc["password"],
-        custom_path if custom_path else None
+        custom_path if custom_path else None,
+        _stay_signed_in_pref()
     )
 
     detected_info = None
@@ -867,7 +901,8 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks):
         launcher.login_account,
         account["username"],
         account["password"],
-        custom_path if custom_path else None
+        custom_path if custom_path else None,
+        _stay_signed_in_pref()
     )
 
     # Automatically watch, sync Level, Region, Rank, Peak Rank, and link Riot ID
@@ -1094,6 +1129,8 @@ class GameConfigSettingsRequest(BaseModel):
     force_borderless: Optional[bool] = None
     autoapply: Optional[bool] = None
     profile_account_id: Optional[int] = None  # 0 clears it
+    stay_signed_in: Optional[bool] = None
+    auto_launch_after_login: Optional[bool] = None
 
 
 class GameConfigCopyRequest(BaseModel):
@@ -1111,6 +1148,7 @@ class GameConfigCopyAllRequest(BaseModel):
 
 class GameConfigBorderlessRequest(BaseModel):
     account_id: Optional[int] = None  # omitted = whoever's signed in now
+    all_accounts: bool = False        # set every account that has config here
 
 
 # Matchmaking start time. The party payload carries one, but it's only
@@ -2384,6 +2422,8 @@ async def get_game_config_settings():
     return {
         "force_borderless": settings.get("force_borderless", "1") != "0",
         "autoapply": settings.get("settings_autoapply", "0") == "1",
+        "stay_signed_in": settings.get("stay_signed_in", "1") != "0",
+        "auto_launch_after_login": settings.get("auto_launch_after_login", "0") == "1",
         "profile_account_id": int(profile_id) if profile_id.isdigit() else None,
         "accounts": account_status,
         "ready_count": sum(1 for a in account_status if a["has_config"]),
@@ -2401,6 +2441,10 @@ async def update_game_config_settings(req: GameConfigSettingsRequest):
         updates["settings_autoapply"] = "1" if req.autoapply else "0"
     if req.profile_account_id is not None:
         updates["settings_profile_account_id"] = str(req.profile_account_id) if req.profile_account_id else ""
+    if req.stay_signed_in is not None:
+        updates["stay_signed_in"] = "1" if req.stay_signed_in else "0"
+    if req.auto_launch_after_login is not None:
+        updates["auto_launch_after_login"] = "1" if req.auto_launch_after_login else "0"
     if updates:
         db.update_settings(updates)
     return await get_game_config_settings()
@@ -2497,6 +2541,28 @@ async def copy_game_config_to_all(req: GameConfigCopyAllRequest):
 @app.post("/api/game-config/force-borderless")
 async def force_borderless_now(req: GameConfigBorderlessRequest):
     """Applies windowed-borderless immediately, without waiting for the next launch."""
+    if req.all_accounts:
+        def run_all() -> Dict[str, Any]:
+            done, skipped = [], []
+            for acc in db.get_all_accounts():
+                name = acc.get("display_name") or acc.get("username", "")
+                pu = (acc.get("puuid") or "").strip()
+                if not pu or game_config.force_borderless(pu) is not True:
+                    skipped.append(name)
+                else:
+                    done.append(name)
+            return {"done": done, "skipped": skipped}
+
+        res = await asyncio.to_thread(run_all)
+        done, skipped = res["done"], res["skipped"]
+        if not done:
+            return {"success": False, "message":
+                    "No account has VALORANT settings on this PC yet, so there's nothing to set."}
+        msg = f"Set {len(done)} account{'s' if len(done) != 1 else ''} to windowed borderless."
+        if skipped:
+            msg += f" {len(skipped)} skipped (never played on this PC)."
+        return {"success": True, "message": msg, "done": done, "skipped": skipped}
+
     if req.account_id:
         acc = db.get_account_by_id(req.account_id)
         if not acc or not acc.get("puuid"):
@@ -2671,6 +2737,33 @@ async def live_launch_state():
     return valorant_client.launch_state()
 
 
+async def _launch_game_for_current_session() -> None:
+    """
+    Starts VALORANT for whoever just signed in, applying the launch
+    preferences (forced borderless, settings profile) first.
+
+    Used by "start the game after a plain Login". Never raises - it runs
+    detached from any request, so a failure here must not take down the
+    login flow that scheduled it.
+    """
+    try:
+        if await asyncio.to_thread(launcher.is_valorant_running):
+            return
+
+        # The Riot Client needs a moment after auth before it will accept a
+        # launch request for the new session.
+        await asyncio.sleep(1.5)
+
+        puuid = await asyncio.to_thread(_current_puuid)
+        await _apply_launch_prefs(puuid)
+
+        settings = db.get_settings()
+        client_path = settings.get("riot_client_path", "") or             await asyncio.to_thread(launcher.detect_riot_client_path)
+        await asyncio.to_thread(valorant_client.launch_valorant, client_path)
+    except Exception:
+        client_launcher.login_logger.exception("auto-launch after login failed")
+
+
 async def background_login_then_play(account_id: int):
     """
     Waits for a freshly started login to land, then launches VALORANT for it.
@@ -2735,7 +2828,8 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
 
     # Different account signed in (or none) - log in first, then launch.
     result = await asyncio.to_thread(
-        launcher.login_account, account["username"], account["password"], client_path or None
+        launcher.login_account, account["username"], account["password"], client_path or None,
+        _stay_signed_in_pref()
     )
     background_tasks.add_task(background_login_then_play, account_id)
     return {
@@ -2764,7 +2858,7 @@ async def check_single_account(account_id: int):
     custom_path = settings.get("riot_client_path", "")
 
     await asyncio.to_thread(launcher.login_account, account["username"], account["password"],
-                            custom_path if custom_path else None)
+                            custom_path if custom_path else None, _stay_signed_in_pref())
 
     detected_info = None
     for _ in range(40):

@@ -151,6 +151,58 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
     level = logging.ERROR if stage == "error" else logging.INFO
     login_logger.log(level, "[%s] stage=%s msg=%s", LOGIN_PROGRESS.get("username", ""), stage, message)
 
+# Riot writes the persisted-login blob here when "Stay signed in" was ticked.
+# `riot-login.persist` stays null when it wasn't - which is the only way to
+# tell after the fact whether the checkbox actually took.
+PRIVATE_SETTINGS_PATH = os.path.join(
+    os.getenv("LOCALAPPDATA") or os.path.expanduser("~"),
+    "Riot Games", "Riot Client", "Data", "RiotGamesPrivateSettings.yaml"
+)
+
+
+def is_session_persisted() -> Optional[bool]:
+    """
+    True when Riot has a persisted login stored ("Stay signed in" is on),
+    False when it doesn't, None when the file can't be read.
+
+    Deliberately a dumb line scan rather than a YAML parse: the file holds
+    auth cookies, this only ever needs to know whether one key is null, and
+    adding a YAML dependency to read one boolean isn't worth it.
+    """
+    try:
+        with open(PRIVATE_SETTINGS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+
+    in_section = False
+    for i, raw in enumerate(lines):
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        stripped = raw.strip()
+        if indent == 0:
+            in_section = stripped.startswith("riot-login:")
+            continue
+        if not (in_section and stripped.startswith("persist:")):
+            continue
+
+        inline = stripped.split(":", 1)[1].strip().lower()
+        if inline:
+            return inline not in ("null", "~", "{}", "[]")
+
+        # "persist:" with nothing after it is a block header, not an empty
+        # value - the session is stored in the indented lines below it. Reading
+        # the empty inline value as "off" would make every login re-tick the
+        # checkbox and so untick one that was already on.
+        for nxt in lines[i + 1:]:
+            if not nxt.strip():
+                continue
+            return (len(nxt) - len(nxt.lstrip())) > indent
+        return False
+    return False
+
+
 DEFAULT_VALORANT_PATHS = [
     r"C:\Riot Games\Riot Client\RiotClientServices.exe",
     r"D:\Riot Games\Riot Client\RiotClientServices.exe",
@@ -579,7 +631,8 @@ class ClientLauncher:
             return False
 
     @classmethod
-    def auto_fill_credentials(cls, username: str, password: str, cold_start: bool = False):
+    def auto_fill_credentials(cls, username: str, password: str, cold_start: bool = False,
+                              stay_signed_in: bool = True):
         """
         Pure keyboard autofill (ZERO mouse movement), the v3-era sequence that
         the Riot Client login form actually behaves with:
@@ -714,6 +767,24 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.08)
 
+            # Tick "Stay signed in", which sits immediately after the password
+            # field in the form's tab order, then step straight back to the
+            # password field.
+            #
+            # Going back matters: Enter inside the password field is the form's
+            # own submit and is the one submission path that reliably works.
+            # Earlier versions pressed Enter from wherever the tab walk had
+            # landed, which is how logins ended up triggering a social sign-in
+            # button instead. This borrows focus for one keystroke and returns
+            # it, so the submit is unchanged from the sequence that works.
+            if stay_signed_in and not is_session_persisted():
+                pyautogui.press('tab')
+                time.sleep(0.22)
+                pyautogui.press('space')
+                time.sleep(0.18)
+                pyautogui.hotkey('shift', 'tab')
+                time.sleep(0.22)
+
             # Submit. Enter inside the password field is the form's own submit -
             # nothing further should be pressed after this.
             pyautogui.press('enter')
@@ -751,7 +822,8 @@ class ClientLauncher:
             return False
 
     @classmethod
-    def login_account(cls, username: str, password: str, client_path: Optional[str] = None) -> Dict[str, Any]:
+    def login_account(cls, username: str, password: str, client_path: Optional[str] = None,
+                      stay_signed_in: bool = True) -> Dict[str, Any]:
         """
         Opens Riot Client and logs in using API logout & smart autofill.
         If VALORANT is running, exits VALORANT before proceeding.
@@ -790,7 +862,7 @@ class ClientLauncher:
                 # uncaught exception - without this it would just leave the
                 # login modal stuck on its last stage forever.
                 try:
-                    cls.auto_fill_credentials(username, password, not was_running)
+                    cls.auto_fill_credentials(username, password, not was_running, stay_signed_in)
                 except Exception as e:
                     login_logger.exception("[%s] auto-fill worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)

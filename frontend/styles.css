@@ -7226,3 +7226,9 @@ body.dashboard-mode .session-bar {
     margin-top: 8px;
     justify-content: center;
 }
+
+.btn-borderless-all {
+    width: 100%;
+    margin-top: 10px;
+    justify-content: center;
+}
