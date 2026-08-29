@@ -188,7 +188,7 @@ class Database:
                 ("auto_launch_after_login", "0"),
                 # Native quick panel, summoned globally by the hotkey below.
                 ("overlay_enabled", "1"),
-                ("overlay_hotkey", "CTRL+SHIFT+F8"),
+                ("overlay_hotkey", "SHIFT+5"),
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

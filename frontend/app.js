@@ -2510,7 +2510,7 @@ function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
-    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "CTRL+SHIFT+F8";
+    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "SHIFT+5";
     renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
@@ -2777,7 +2777,7 @@ async function saveSettings() {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
-            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "CTRL+SHIFT+F8").trim().toUpperCase()
+            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "SHIFT+5").trim().toUpperCase()
         }
     };
 
