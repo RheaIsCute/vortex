@@ -47,10 +47,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ("frontend", "frontend"),
-        # Intel's open-source PresentMon (MIT license) - the ETW capture
-        # engine behind the FPS counter. See vendor/PresentMon/NOTICE.txt.
-        ("vendor/PresentMon/PresentMon-x64.exe", "vendor/PresentMon"),
-        ("vendor/PresentMon/NOTICE.txt", "vendor/PresentMon"),
     ],
     hiddenimports=hidden_imports,
     hookspath=[],

@@ -25,7 +25,6 @@ from backend.client_launcher import ClientLauncher
 from backend import client_launcher
 from backend import valorant_client
 from backend import game_config
-from backend import fps_monitor
 from backend.version import APP_VERSION
 from backend import updater
 
@@ -1196,7 +1195,6 @@ class GameConfigBorderlessRequest(BaseModel):
 
 class OverlaySettingsRequest(BaseModel):
     overlay_enabled: Optional[bool] = None
-    fps_enabled: Optional[bool] = None
 
 
 class OverlaySwitchRequest(BaseModel):
@@ -3056,7 +3054,6 @@ async def live_launch_state():
 def _overlay_settings_view(settings: Dict[str, str]) -> Dict[str, bool]:
     return {
         "overlay_enabled": settings.get("overlay_enabled", "1") != "0",
-        "fps_enabled": settings.get("fps_enabled", "1") != "0",
     }
 
 
@@ -3076,23 +3073,12 @@ async def overlay_state():
 
 @app.post("/api/overlay/settings")
 async def update_overlay_settings(req: OverlaySettingsRequest):
-    """Saves the Quick Panel's own toggles, and arms/disarms the FPS
-    capture immediately so the change takes effect without a restart."""
+    """Saves the Quick Panel's own toggles."""
     updates: Dict[str, str] = {}
     if req.overlay_enabled is not None:
         updates["overlay_enabled"] = "1" if req.overlay_enabled else "0"
-    if req.fps_enabled is not None:
-        updates["fps_enabled"] = "1" if req.fps_enabled else "0"
     if updates:
         db.update_settings(updates)
-
-    if req.fps_enabled is not None:
-        if req.fps_enabled:
-            error = await asyncio.to_thread(fps_monitor.ensure_started)
-            if error:
-                return {"success": False, "message": error, "settings": _overlay_settings_view(db.get_settings())}
-        else:
-            await asyncio.to_thread(fps_monitor.ensure_stopped)
 
     return {"success": True, "settings": _overlay_settings_view(db.get_settings())}
 
@@ -3144,13 +3130,6 @@ async def overlay_switch_account(account_id: int, req: OverlaySwitchRequest, bac
         background_tasks.add_task(background_login_then_play, account_id)
         return {"success": True, "message": f"Switching to {label}, then starting VALORANT..."}
     return {"success": True, "message": f"Switching to {label}..."}
-
-
-@app.get("/api/fps/status")
-async def fps_status():
-    """Polled by the FPS HUD window - the current live number, or why
-    there isn't one yet."""
-    return await asyncio.to_thread(fps_monitor.get_status)
 
 
 async def _launch_game_for_current_session() -> None:

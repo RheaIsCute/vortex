@@ -26,7 +26,6 @@
         gameWarningText: document.getElementById("game-warning-text"),
         crosshairList: document.getElementById("crosshair-list"),
         launchGame: document.getElementById("toggle-launch-game"),
-        fpsEnabled: document.getElementById("toggle-fps"),
         toastStack: document.getElementById("toast-stack")
     };
 
@@ -94,6 +93,8 @@
         return source.slice(0, 2).toUpperCase() || "VX";
     }
 
+    const DEFAULT_TIER_ICON = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+
     function accountRank(account) {
         if (account.rank_label) return cleanText(account.rank_label);
         const rank = [account.rank_tier, account.rank_division]
@@ -101,6 +102,16 @@
             .filter(Boolean)
             .join(" ");
         return rank || "Unranked";
+    }
+
+    function accountRankDetail(account) {
+        const label = accountRank(account);
+        const rr = Number(account.lp);
+        return Number.isFinite(rr) && rr > 0 ? `${label} · ${rr} RR` : label;
+    }
+
+    function accountRankIcon(account) {
+        return cleanText(account.rank_icon_url) || DEFAULT_TIER_ICON;
     }
 
     async function apiRequest(url, options = {}) {
@@ -162,7 +173,6 @@
             }
 
             model.connected = true;
-            view.fpsEnabled.checked = Boolean(model.settings.fps_enabled);
             renderAll();
         } catch (error) {
             model.connected = false;
@@ -327,8 +337,20 @@
 
             const meta = document.createElement("div");
             meta.className = "account-meta";
+
+            const rankImg = document.createElement("img");
+            rankImg.className = "account-rank-icon";
+            rankImg.src = accountRankIcon(account);
+            rankImg.alt = "";
+            rankImg.loading = "lazy";
+            rankImg.addEventListener("error", () => {
+                rankImg.onerror = null;
+                rankImg.src = DEFAULT_TIER_ICON;
+            }, { once: true });
+            meta.appendChild(rankImg);
+
             const rank = document.createElement("span");
-            rank.textContent = accountRank(account);
+            rank.textContent = accountRankDetail(account);
             meta.appendChild(rank);
 
             const tagText = cleanText(account.tag);
@@ -551,29 +573,7 @@
         }
     }
 
-    async function updateFpsSetting() {
-        const desired = Boolean(view.fpsEnabled.checked);
-        view.fpsEnabled.disabled = true;
-        try {
-            const data = await apiRequest("/api/overlay/settings", {
-                method: "POST",
-                body: { fps_enabled: desired }
-            });
-            if (data.success === false) throw new Error(data.message || "FPS setting could not be saved.");
-            const returnedSettings = data.settings && typeof data.settings === "object" ? data.settings : data;
-            const confirmed = returnedSettings.fps_enabled;
-            view.fpsEnabled.checked = typeof confirmed === "boolean" ? confirmed : desired;
-            model.settings.fps_enabled = view.fpsEnabled.checked;
-            showToast(view.fpsEnabled.checked ? "FPS counter enabled." : "FPS counter hidden.", "success");
-        } catch (error) {
-            view.fpsEnabled.checked = !desired;
-            showToast(error.message || "Could not update the FPS counter.", "error");
-        } finally {
-            view.fpsEnabled.disabled = false;
-        }
-    }
-
-    function setActiveTab(tabName, focus = false) {
+function setActiveTab(tabName, focus = false) {
         if (!view.tabs.some(tab => tab.dataset.tab === tabName)) return;
         model.activeTab = tabName;
         view.tabs.forEach(tab => {
@@ -666,8 +666,6 @@
             renderAccounts();
             renderGameWarning();
         });
-        view.fpsEnabled.addEventListener("change", () => void updateFpsSetting());
-
         document.addEventListener("keydown", event => {
             if (event.key === "Escape") {
                 event.preventDefault();

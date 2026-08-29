@@ -667,6 +667,13 @@ input {
     background: var(--dim);
 }
 
+.account-rank-icon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    object-fit: contain;
+}
+
 .account-action,
 .crosshair-copy {
     min-width: 78px;
