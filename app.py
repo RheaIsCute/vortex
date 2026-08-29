@@ -7,6 +7,7 @@ import sys
 import os
 import io
 import ctypes
+import atexit
 
 # Set Windows AppUserModelID for custom Taskbar icon & grouping
 try:
@@ -41,12 +42,17 @@ else:
 
 from backend.server import app, db
 from backend.overlay_hotkey import OverlayHotkey
+from backend import fps_monitor
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 
 OVERLAY_WIDTH = 400
 OVERLAY_HEIGHT = 600
 OVERLAY_MARGIN = 24
+
+FPS_HUD_WIDTH = 120
+FPS_HUD_HEIGHT = 56
+FPS_MARGIN = 24
 
 
 def find_available_port(default_port: int = 8765) -> int:
@@ -65,6 +71,12 @@ def find_available_port(default_port: int = 8765) -> int:
 PORT = find_available_port(8765)
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
+
+# Backstop for the PresentMon subprocess: it's a normal child process, not
+# one Windows tears down automatically when this one exits, so anything that
+# skips the main window's own closing handler (Ctrl+C, task kill) still needs
+# this to avoid leaving it running.
+atexit.register(fps_monitor.ensure_stopped)
 
 
 def start_server():
@@ -174,6 +186,86 @@ def _start_overlay_hotkey(overlay_window):
     return hotkey
 
 
+def _fps_start_position(settings):
+    """Wherever the HUD was last dragged to, else the top-right corner."""
+    x_raw, y_raw = settings.get("fps_x", ""), settings.get("fps_y", "")
+    if x_raw and y_raw:
+        try:
+            return int(float(x_raw)), int(float(y_raw))
+        except ValueError:
+            pass
+    try:
+        screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        return max(0, screen_w - FPS_HUD_WIDTH - FPS_MARGIN), FPS_MARGIN
+    except Exception:
+        return None, None
+
+
+def _create_fps_window(settings):
+    """
+    The FPS HUD: a tiny always-on-top window that only ever shows a number.
+    Like the Quick Panel, this is an ordinary second webview window - nothing
+    here is drawn inside VALORANT or reads its memory. That also means it can
+    only visually sit on top of the game while VALORANT renders through the
+    desktop compositor (Borderless / Windowed Fullscreen), not in exclusive
+    Fullscreen - the same tradeoff every non-injected overlay has.
+    """
+    x, y = _fps_start_position(settings)
+    return webview.create_window(
+        title="Vortex FPS",
+        url=f"{URL}/static/fps_hud.html",
+        width=FPS_HUD_WIDTH,
+        height=FPS_HUD_HEIGHT,
+        x=x, y=y,
+        min_size=(FPS_HUD_WIDTH, FPS_HUD_HEIGHT),
+        resizable=False,
+        frameless=True,
+        easy_drag=True,
+        on_top=True,
+        transparent=True,
+        background_color="#0c0a14",
+        hidden=(settings.get("fps_enabled", "1") == "0"),
+    )
+
+
+def _wire_fps_window(fps_window):
+    """
+    Starts frame capture if the setting is already on, and keeps the HUD's
+    dragged position saved so it reopens where it was left.
+
+    The `moved` event fires on every pixel of a live drag, so writing to the
+    database from inside the handler would hammer it mid-drag. The handler
+    only updates an in-memory position; a slow periodic thread flushes it to
+    the database when it's actually changed.
+    """
+    pending = {"x": None, "y": None}
+
+    def on_moved(x, y):
+        pending["x"], pending["y"] = x, y
+
+    fps_window.events.moved += on_moved
+
+    def flush_loop():
+        last = (None, None)
+        while True:
+            time.sleep(1.5)
+            x, y = pending["x"], pending["y"]
+            if x is None or (x, y) == last:
+                continue
+            last = (x, y)
+            try:
+                db.update_settings({"fps_x": str(x), "fps_y": str(y)})
+            except Exception:
+                pass
+
+    threading.Thread(target=flush_loop, daemon=True, name="vortex-fps-position").start()
+
+    if db.get_settings().get("fps_enabled", "1") != "0":
+        error = fps_monitor.ensure_started()
+        if error:
+            print(f"[Vortex] FPS counter not armed: {error}")
+
+
 def main():
     # Start server in background thread
     server_thread = threading.Thread(target=start_server, daemon=True)
@@ -203,6 +295,23 @@ def main():
         )
         overlay_window = _create_overlay_window()
         _start_overlay_hotkey(overlay_window)
+        fps_window = _create_fps_window(db.get_settings())
+        _wire_fps_window(fps_window)
+
+        def _on_main_closing():
+            # pywebview keeps running as long as any window - including the
+            # hidden Quick Panel and the FPS HUD - still exists, so closing
+            # just the main window would otherwise leave the app alive with
+            # nothing visible to bring it back with. Closing the main window
+            # is "quit Vortex" - everything else has to go down with it.
+            fps_monitor.ensure_stopped()
+            for w in (overlay_window, fps_window):
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+
+        window.events.closing += _on_main_closing
         webview.start(debug=False)
     except Exception:
         webbrowser.open(URL)

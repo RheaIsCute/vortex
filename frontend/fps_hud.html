@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vortex FPS</title>
+<style>
+    :root { color-scheme: dark; }
+    html, body {
+        width: 100%; height: 100%; margin: 0; overflow: hidden;
+        background: transparent;
+    }
+    body {
+        display: flex; align-items: center; justify-content: center;
+        -webkit-app-region: drag;
+        user-select: none; -webkit-user-select: none;
+        font-family: Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+        cursor: move;
+    }
+    .pill {
+        display: flex; align-items: baseline; gap: 6px;
+        padding: 8px 16px;
+        border-radius: 999px;
+        background: rgba(12, 10, 20, 0.82);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(6px);
+    }
+    .value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #4be29a;
+        font-variant-numeric: tabular-nums;
+        transition: color 0.25s ease;
+    }
+    .value.tier-mid { color: #ffc96b; }
+    .value.tier-low { color: #ff6d83; }
+    .value.tier-none { color: #706a84; font-size: 20px; }
+    .unit {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: #9993ae;
+        text-transform: uppercase;
+    }
+</style>
+</head>
+<body>
+    <div class="pill">
+        <span class="value tier-none" id="fps-value">&mdash;</span>
+        <span class="unit">FPS</span>
+    </div>
+    <script src="fps_hud.js"></script>
+</body>
+</html>
