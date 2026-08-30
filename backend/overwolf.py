@@ -7,14 +7,14 @@ Overwolf - a Riot-approved partner that Vanguard explicitly permits - is the
 only sanctioned source. This module makes that dependency invisible:
 
   * find an existing Overwolf install (registry first, then the usual paths)
+  * install it silently if it's missing
   * start it the same way Overwolf's own startup entry does, so it goes
     straight to the tray with no window
-  * install it, silently, but only after the user has said yes once
 
-Installing is deliberately gated on stored consent. Putting third-party
-software on someone's machine unannounced is what antivirus vendors classify
-as bundleware, and Vortex's installer is unsigned already - a silent,
-undisclosed third-party install is a fast route to being quarantined.
+All of it hangs off the `overwolf_auto` setting, which is the single switch
+for the whole behaviour. Install is attempted once per run: a machine that
+can't install it (offline, no admin rights) shouldn't re-download a 200MB
+installer on every poll.
 """
 
 from __future__ import annotations
@@ -55,6 +55,10 @@ _REG_PATHS = (
 _START_COOLDOWN = 45.0
 _last_start_at = 0.0
 _start_lock = threading.Lock()
+
+# Install runs at most once per process, success or failure. Retrying a large
+# download on a machine that can't complete it just burns bandwidth forever.
+_install_attempted = False
 
 INSTALL_STATE: Dict[str, Any] = {
     "active": False,
@@ -193,16 +197,35 @@ def _install_worker() -> None:
 
 
 def start_install() -> Dict[str, Any]:
-    """Kick off a silent install. The caller is responsible for consent."""
+    """Kick off a silent install in the background."""
+    global _install_attempted
+
     if is_installed():
         ensure_running()
         return {"success": True, "message": "Overwolf is already installed."}
     if INSTALL_STATE["active"]:
         return {"success": False, "message": "An Overwolf install is already running."}
 
+    _install_attempted = True
     _set_install("downloading", "Starting the Overwolf download...", 0)
     threading.Thread(target=_install_worker, daemon=True).start()
     return {"success": True, "message": "Installing Overwolf..."}
+
+
+def ensure_available() -> bool:
+    """
+    Make live combat stats work, doing whatever that takes on this machine:
+    start Overwolf if it's installed, install it first if it isn't.
+
+    Safe to call on every poll - the launch has a cooldown and the install
+    only ever fires once per run. Returns True when Overwolf is up.
+    """
+    if is_installed():
+        return ensure_running()
+    if not _install_attempted and not INSTALL_STATE["active"]:
+        login_logger.info("Overwolf missing - installing it for live combat stats")
+        start_install()
+    return False
 
 
 def status() -> Dict[str, Any]:

@@ -1265,10 +1265,6 @@ class GameConfigBorderlessRequest(BaseModel):
     all_accounts: bool = False        # set every account that has config here
 
 
-class OverwolfConsentRequest(BaseModel):
-    accept: bool  # answer to the one-time "install Overwolf?" prompt
-
-
 class OverlaySettingsRequest(BaseModel):
     overlay_enabled: Optional[bool] = None
 
@@ -2498,10 +2494,10 @@ def build_live_snapshot() -> Dict[str, Any]:
 
     # Overwolf's event provider only records what it saw while running, so it
     # has to be up before the match starts - by the time a scoreboard would be
-    # useful it is already too late to launch it.
+    # useful it is already too late to launch it. Installs it if missing.
     if db.get_settings().get("overwolf_auto", "1") == "1":
         try:
-            overwolf.ensure_running()
+            overwolf.ensure_available()
         except Exception:
             pass
 
@@ -3087,29 +3083,13 @@ async def force_borderless_now(req: GameConfigBorderlessRequest):
 
 @app.get("/api/overwolf/status")
 async def overwolf_status():
-    """
-    Whether the live-combat provider is available, and whether we've ever
-    asked about installing it. `needs_consent` is what drives the one-time
-    prompt: not installed, and never answered.
-    """
-    state = await asyncio.to_thread(overwolf.status)
-    consent = db.get_settings().get("overwolf_consent", "")
-    state["consent"] = consent
-    state["needs_consent"] = (not state["installed"]) and consent == ""
-    return state
+    """Whether the live-combat provider is installed, running, or installing."""
+    return await asyncio.to_thread(overwolf.status)
 
 
-@app.post("/api/overwolf/consent")
-async def overwolf_consent(req: OverwolfConsentRequest):
-    """
-    Records the answer to the install prompt, and installs on a yes.
-
-    Declining is remembered so the prompt never comes back; live stats simply
-    stay off and the roster keeps showing recent-match averages.
-    """
-    db.update_settings({"overwolf_consent": "yes" if req.accept else "no"})
-    if not req.accept:
-        return {"success": True, "message": "Live combat stats stay off."}
+@app.post("/api/overwolf/install")
+async def overwolf_install():
+    """Installs Overwolf now, rather than waiting for VALORANT to start."""
     return await asyncio.to_thread(overwolf.start_install)
 
 

@@ -188,11 +188,9 @@ class Database:
                 # Native quick panel, summoned globally by the hotkey below.
                 ("overlay_enabled", "1"),
                 ("overlay_hotkey", "CTRL+SHIFT+F8"),
-                # Start Overwolf (in the tray) alongside VALORANT so live
-                # combat stats work. Only ever launches an existing install -
-                # installing it needs overwolf_consent, asked for once.
+                # Install (if missing) and tray-start Overwolf alongside
+                # VALORANT, so live combat stats work without being set up.
                 ("overwolf_auto", "1"),
-                ("overwolf_consent", ""),
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
