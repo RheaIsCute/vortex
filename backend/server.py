@@ -788,6 +788,20 @@ async def _start_background_workers():
     threading.Thread(target=_post_valorant_watch_loop,
                      name="vortex-post-valorant-watch", daemon=True).start()
 
+    # An update kills Overwolf (it holds Vortex's VCRUNTIME140.dll open, which
+    # blocked the install) but nothing brought it back unless the live HUD
+    # happened to poll with VALORANT already running. Restart it here on every
+    # launch so a fresh update doesn't silently leave live combat stats dead.
+    def _restore_overwolf() -> None:
+        try:
+            if db.get_settings().get("overwolf_auto", "1") == "1":
+                overwolf.ensure_available()
+        except Exception:
+            client_launcher.login_logger.exception("startup Overwolf restore failed")
+
+    threading.Thread(target=_restore_overwolf,
+                     name="vortex-overwolf-restore", daemon=True).start()
+
 
 # DYNAMIC PARAMETERIZED ROUTES
 @app.get("/api/accounts/{account_id}")
