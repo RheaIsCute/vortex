@@ -10,6 +10,21 @@ import time
 import asyncio
 import threading
 import subprocess
+import mimetypes
+
+# Windows maps file extensions to MIME types through the registry, which some
+# machines are missing entries for - a bare install can serve .svg/.js/.css as
+# application/octet-stream and the browser then refuses to use them. Pin the
+# few the frontend depends on so the static mount is correct everywhere.
+for _ext, _mime in (
+    (".svg", "image/svg+xml"),
+    (".js", "text/javascript"),
+    (".mjs", "text/javascript"),
+    (".css", "text/css"),
+    (".json", "application/json"),
+    (".woff2", "font/woff2"),
+):
+    mimetypes.add_type(_mime, _ext)
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor

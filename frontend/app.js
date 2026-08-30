@@ -344,12 +344,36 @@ const DOM = {
     toastContainer: document.getElementById("toast-container")
 };
 
+function signalBootReady() {
+    try {
+        if (window.__vortexBoot && window.__vortexBoot.ready) window.__vortexBoot.ready();
+        else window.__vortexBootReady = true;  // boot.js not parsed yet - it checks this flag
+    } catch (_) {}
+}
+
+function bootStatus(text) {
+    try {
+        if (window.__vortexBoot && window.__vortexBoot.status) window.__vortexBoot.status(text);
+    } catch (_) {}
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initEventListeners();
     initUiEnhancements();
-    loadSettings();
-    fetchStatsSummary();
-    fetchAccounts();
+
+    // Drive the boot screen: reveal the app once the first real data is in
+    // (settings, the stats bar, and the account roster). Everything else can
+    // keep loading behind the app. A 7s failsafe in boot.js covers a hang.
+    bootStatus("Loading your library");
+    Promise.allSettled([
+        loadSettings(),
+        fetchStatsSummary(),
+        fetchAccounts(),
+    ]).then(() => {
+        bootStatus("Almost there");
+        signalBootReady();
+    });
+
     fetchBannedAccounts(true);
     startContinuousSync();
     startLiveSessionPolling();

@@ -133,3 +133,128 @@ body { padding: 0; user-select: none; -webkit-font-smoothing: antialiased; }
 
 .aim-hud.is-waiting .hud-score-main strong { color: #94a3b8; }
 .aim-hud.is-waiting .hud-chart-head span:last-child { color: #94a3b8; }
+
+/* ==========================================================================
+   Waiting-for-match loading state
+   The HUD sits idle between the app starting and a live match producing
+   telemetry. Rather than a frozen row of dashes, everything reads as
+   "listening": the badge breathes, the score pulses, the chart is swept by
+   an indeterminate scan line, and the status line trails an ellipsis.
+   ========================================================================== */
+
+.aim-hud.is-waiting .hud-round {
+    color: #a5b4fc;
+    background: rgba(129, 140, 248, .14);
+    animation: hud-breathe 1.8s ease-in-out infinite;
+}
+.aim-hud.is-waiting .hud-round::before {
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    margin-right: 4px;
+    border-radius: 50%;
+    background: #a5b4fc;
+    vertical-align: middle;
+    animation: hud-blip 1.15s ease-in-out infinite;
+}
+
+.aim-hud.is-waiting .hud-score-main strong {
+    animation: hud-fade-pulse 1.7s ease-in-out infinite;
+}
+
+/* animated ellipsis after the status line */
+.aim-hud.is-waiting .hud-sub::after {
+    content: "";
+    animation: hud-ellipsis 1.4s steps(4, end) infinite;
+}
+
+/* indeterminate scan sweep across the chart */
+.hud-scan {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(129, 140, 248, .0) 35%,
+        rgba(129, 140, 248, .28) 50%,
+        rgba(129, 140, 248, .0) 65%,
+        transparent 100%
+    );
+    transform: translateX(-100%);
+}
+.aim-hud.is-waiting .hud-scan {
+    opacity: 1;
+    animation: hud-scan 1.6s cubic-bezier(.55, 0, .45, 1) infinite;
+}
+/* a faint moving pip riding the chart baseline while we wait */
+.aim-hud.is-waiting .hud-chart::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 20%;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #818cf8;
+    box-shadow: 0 0 8px 2px rgba(129, 140, 248, .7);
+    animation: hud-track 1.9s ease-in-out infinite;
+}
+
+@keyframes hud-breathe {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0); }
+    50% { box-shadow: 0 0 10px 1px rgba(129, 140, 248, .45); }
+}
+@keyframes hud-blip {
+    0%, 100% { opacity: .3; transform: scale(.8); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes hud-fade-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .45; }
+}
+@keyframes hud-ellipsis {
+    0% { content: ""; }
+    25% { content: "."; }
+    50% { content: ".."; }
+    75% { content: "..."; }
+    100% { content: ""; }
+}
+@keyframes hud-scan {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+@keyframes hud-track {
+    0%, 100% { left: 4%; opacity: .3; }
+    50% { left: 92%; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .aim-hud.is-waiting .hud-round,
+    .aim-hud.is-waiting .hud-round::before,
+    .aim-hud.is-waiting .hud-score-main strong,
+    .aim-hud.is-waiting .hud-sub::after,
+    .aim-hud.is-waiting .hud-scan,
+    .aim-hud.is-waiting .hud-chart::after {
+        animation: none;
+    }
+    .aim-hud.is-waiting .hud-scan { opacity: 0; }
+}
+
+/* ==========================================================================
+   Foreground gating
+   app.py toggles .hud-dormant on <body> when VALORANT is not the foreground
+   window, so the HUD is only present while the player is actually in game.
+   The native window stays alive; only its paint fades.
+   ========================================================================== */
+body.hud-dormant .aim-hud {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .28s ease;
+}
+.aim-hud {
+    opacity: 1;
+    transition: opacity .28s ease;
+}

@@ -5,7 +5,7 @@ and if a newer version is available, downloads the Windows installer from the
 matching GitHub release and launches it so it can replace the running app.
 
 Manifest format (version.json in RheaIsCute/vortex):
-    { "version": "5.5.17", "download_url": "...", "changelog": "..." }
+    { "version": "5.5.18", "download_url": "...", "changelog": "..." }
 where download_url points at the VortexSetup.exe asset of that release, e.g.
     https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe
 """

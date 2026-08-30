@@ -75,6 +75,7 @@ else:
 
 from backend.server import app, db
 from backend.overlay_hotkey import OverlayHotkey
+from backend.client_launcher import is_valorant_foreground
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 
@@ -222,7 +223,30 @@ def _create_live_hud_window():
 
 def _make_live_hud_controller(hud_window):
     """Returns the desktop bridge used by Settings to show/hide the aim HUD."""
-    state = {"hwnd": 0, "visible": False}
+    state = {"hwnd": 0, "visible": False, "fg_applied": None, "fade_out_at": 0.0}
+
+    # How long live_overlay.css takes to fade .aim-hud out. The native window
+    # is only hidden once that has finished, so the fade is actually seen.
+    HUD_FADE_SECONDS = 0.32
+
+    def _set_hud_dormant(dormant: bool):
+        """Toggle the CSS fade class on the HUD page.
+
+        The HUD should only be visible while VALORANT owns the foreground -
+        not while the player is in a browser, Discord, or the Vortex window.
+        A real native alpha fade needs WS_EX_LAYERED, which is what turned the
+        HUD into a black rectangle before, so the fade lives in CSS. The keeper
+        loop hides the native window entirely once the fade-out has run, so a
+        dormant HUD leaves nothing on screen at all.
+        """
+        js = "document.body&&document.body.classList.toggle('hud-dormant',%s)" % (
+            "true" if dormant else "false"
+        )
+        try:
+            runner = getattr(hud_window, "run_js", None) or hud_window.evaluate_js
+            runner(js)
+        except Exception:
+            pass
 
     def _set_ex_style(h: int, add_transparent: bool):
         try:
@@ -276,25 +300,18 @@ def _make_live_hud_controller(hud_window):
     def setLiveHudEnabled(enabled: bool):
         enabled = bool(enabled)
         state["visible"] = enabled
+        # Whether the HUD is actually on screen is decided by the keeper loop
+        # from VALORANT's foreground state - enabling here just arms it. Force a
+        # fresh evaluation either way.
+        state["fg_applied"] = None
+        state["fade_out_at"] = 0.0
         try:
             hwnd = _prepare()
             if enabled:
+                # Keep it hidden until the keeper confirms VALORANT is in front;
+                # showing it here would flash an empty panel on the desktop.
                 if hwnd:
-                    _apply_all_children(hwnd)
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
-                    win32gui.SetWindowPos(
-                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE,
-                    )
-                else:
-                    hud_window.show()
-                    hwnd = _prepare()
-                    if hwnd:
-                        _apply_all_children(hwnd)
-                        win32gui.SetWindowPos(
-                            hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE,
-                        )
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
             else:
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
@@ -305,21 +322,65 @@ def _make_live_hud_controller(hud_window):
             _startup_log("setLiveHudEnabled failed:\n" + traceback.format_exc())
             return {"success": False, "enabled": enabled}
 
-    # Persistent topmost-keeper daemon to maintain HUD overlay position above VALORANT
+    # Persistent daemon: keeps the HUD pinned above VALORANT and gates its
+    # presence on VALORANT actually being the foreground window. When the game
+    # is not in front the HUD fades out (CSS) and then the native window is
+    # hidden, so nothing is left on screen; when the game comes back it is
+    # shown again and fades in.
     def _topmost_keeper():
         while True:
             time.sleep(0.3)
             if not state["visible"]:
                 continue
             try:
+                fg = is_valorant_foreground()
+
                 hwnd = state["hwnd"] or win32gui.FindWindow(None, LIVE_HUD_TITLE)
-                if hwnd and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
-                    state["hwnd"] = hwnd
+                if not (hwnd and win32gui.IsWindow(hwnd)):
+                    # pywebview may not realise the native window until its
+                    # first show(); only pay that cost once the game is in front.
+                    if fg:
+                        try:
+                            hud_window.show()
+                        except Exception:
+                            pass
+                        hwnd = win32gui.FindWindow(None, LIVE_HUD_TITLE)
+                    if not (hwnd and win32gui.IsWindow(hwnd)):
+                        continue
+                state["hwnd"] = hwnd
+
+                if fg != state["fg_applied"]:
+                    if fg:
+                        # Coming back in-game: show the window, then fade in.
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                        _apply_all_children(hwnd)
+                        win32gui.SetWindowPos(
+                            hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                            | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
+                        )
+                        _set_hud_dormant(False)
+                    else:
+                        # Left the game: start the CSS fade-out now; the window
+                        # itself is hidden a beat later, once the fade has run.
+                        _set_hud_dormant(True)
+                        state["fade_out_at"] = time.time()
+                    state["fg_applied"] = fg
+
+                if fg:
+                    # Re-assert topmost only while actually visible in-game.
                     _apply_all_children(hwnd)
                     win32gui.SetWindowPos(
                         hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                        | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
                     )
+                elif (
+                    state["fade_out_at"]
+                    and time.time() - state["fade_out_at"] > HUD_FADE_SECONDS
+                    and win32gui.IsWindowVisible(hwnd)
+                ):
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
             except Exception:
                 pass
 

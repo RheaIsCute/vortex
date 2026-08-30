@@ -1,5 +1,5 @@
 {
-  "version": "5.5.17",
+  "version": "5.5.18",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.17: fixes the in-game Live Aim HUD rendering as a black rectangle, and gives it a smaller, smoother edge-to-edge design."
+  "changelog": "Vortex v5.5.18: new animated boot screen that builds the Vortex logo on launch, a loading animation while the app starts, a waiting-for-match animation on the Live Aim HUD, and the HUD now only shows while VALORANT is the active window."
 }

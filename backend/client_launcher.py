@@ -127,6 +127,42 @@ def is_valorant_running() -> bool:
         return False
 
 
+def is_valorant_foreground() -> bool:
+    """True only when VALORANT owns the foreground window.
+
+    Used to gate the Live Aim HUD: it should be on screen only while the
+    player is actually in the game, not while they are alt-tabbed to a
+    browser, Discord, or the Vortex window itself. Any failure is treated as
+    "not foreground" so the HUD errs toward hidden.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd:
+            return False
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if not pid:
+            return False
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.c_uint32(260)
+            if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                handle, 0, buf, ctypes.byref(size)
+            ):
+                name = os.path.basename(buf.value).lower()
+                return name in _VALORANT_PROCS
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    return False
+
+
 # Live per-session login progress, polled by the frontend to drive the
 # "logging into Riot Client" animation. Single active login at a time.
 LOGIN_PROGRESS: Dict[str, Any] = {
@@ -1367,6 +1403,11 @@ class ClientLauncher:
     def is_valorant_running() -> bool:
         """Checks if VALORANT is currently running (ultra-fast Win32 check)."""
         return is_valorant_running()
+
+    @staticmethod
+    def is_valorant_foreground() -> bool:
+        """True only when VALORANT owns the foreground window."""
+        return is_valorant_foreground()
 
     @staticmethod
     def kill_valorant() -> bool:

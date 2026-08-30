@@ -1,0 +1,259 @@
+/* ==========================================================================
+   Vortex boot screen
+   A full-cover layer shown on launch: the logo draws itself in stroke by
+   stroke, blooms, then a slim loader runs while app.js pulls the first data.
+   app.js drives the copy and the dismissal through window.__vortexBoot.
+   Everything here is self-contained and removed from the DOM once done.
+   ========================================================================== */
+
+#vortex-boot {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: grid;
+    place-items: center;
+    background:
+        radial-gradient(120% 90% at 50% 18%, #1a1330 0%, transparent 60%),
+        radial-gradient(90% 70% at 50% 120%, #241546 0%, transparent 55%),
+        #08060f;
+    opacity: 1;
+    transition: opacity .5s ease, transform .5s ease;
+    overflow: hidden;
+    --vb-accent: #8a4bff;
+    /* Ultimate failsafe: if boot.js never runs / never removes the element,
+       fade it out and stop it capturing input after 12s regardless. */
+    animation: vb-failsafe 1s linear 12s forwards;
+}
+
+@keyframes vb-failsafe {
+    to { opacity: 0; visibility: hidden; pointer-events: none; }
+}
+
+#vortex-boot::after {
+    /* faint drifting grid, purely atmospheric */
+    content: "";
+    position: absolute;
+    inset: -40%;
+    background-image:
+        linear-gradient(rgba(138, 75, 255, .05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(138, 75, 255, .05) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(60% 50% at 50% 42%, #000 0%, transparent 75%);
+    animation: vb-grid 26s linear infinite;
+}
+
+@keyframes vb-grid {
+    to { transform: translate3d(46px, 46px, 0); }
+}
+
+.vb-stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
+    padding: 40px;
+    transform: translateZ(0);
+}
+
+/* ---- logo ---- */
+.vb-logo-wrap {
+    position: relative;
+    width: 178px;
+    height: 115px;
+    display: grid;
+    place-items: center;
+}
+
+.vb-logo {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    filter: drop-shadow(0 10px 30px rgba(120, 60, 240, .0));
+    transition: filter .6s ease;
+}
+
+.vb-logo .vb-stroke {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+}
+
+.vb-logo .vb-fill { opacity: 0; }
+
+/* draw sequence — each arm/swirl strokes on, then its fill fades in behind */
+#vortex-boot:not(.vb-reduced) .vb-stroke {
+    animation: vb-draw .62s cubic-bezier(.65, 0, .35, 1) forwards;
+}
+#vortex-boot:not(.vb-reduced) .vb-fill {
+    animation: vb-fill .5s ease forwards;
+}
+
+#vortex-boot .vb-stroke:nth-child(1) { animation-delay: .10s; }
+#vortex-boot .vb-stroke:nth-child(2) { animation-delay: .30s; }
+#vortex-boot .vb-stroke:nth-child(3) { animation-delay: .52s; }
+#vortex-boot .vb-stroke:nth-child(4) { animation-delay: .92s; }
+
+#vortex-boot .vb-fill:nth-child(1) { animation-delay: .58s; }
+#vortex-boot .vb-fill:nth-child(2) { animation-delay: .74s; }
+#vortex-boot .vb-fill:nth-child(3) { animation-delay: .96s; }
+#vortex-boot .vb-fill:nth-child(4) { animation-delay: 1.28s; }
+
+@keyframes vb-draw { to { stroke-dashoffset: 0; } }
+@keyframes vb-fill { to { opacity: 1; } }
+
+/* bloom — glow pulse + expanding ring the moment the last stroke lands */
+#vortex-boot.vb-bloom .vb-logo {
+    filter: drop-shadow(0 0 26px rgba(150, 90, 255, .55))
+            drop-shadow(0 8px 34px rgba(90, 40, 200, .45));
+    animation: vb-pop .7s cubic-bezier(.2, 1.4, .3, 1);
+}
+
+@keyframes vb-pop {
+    0% { transform: scale(.9); }
+    55% { transform: scale(1.035); }
+    100% { transform: scale(1); }
+}
+
+.vb-ring {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 120px;
+    height: 120px;
+    margin: -60px 0 0 -60px;
+    border-radius: 50%;
+    border: 2px solid rgba(160, 110, 255, .7);
+    opacity: 0;
+    pointer-events: none;
+}
+#vortex-boot.vb-bloom .vb-ring {
+    animation: vb-ring 0.85s ease-out forwards;
+}
+#vortex-boot.vb-bloom .vb-ring.vb-ring-2 { animation-delay: .12s; }
+
+@keyframes vb-ring {
+    0% { opacity: .9; transform: scale(.4); }
+    100% { opacity: 0; transform: scale(2.6); }
+}
+
+/* sparks flung out on bloom */
+.vb-spark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: #c8a6ff;
+    box-shadow: 0 0 8px 2px rgba(160, 110, 255, .8);
+    opacity: 0;
+}
+#vortex-boot.vb-bloom .vb-spark {
+    animation: vb-spark .7s ease-out forwards;
+}
+#vortex-boot.vb-bloom .vb-spark:nth-child(1) { --dx: -66px; --dy: -30px; animation-delay: .02s; }
+#vortex-boot.vb-bloom .vb-spark:nth-child(2) { --dx: 58px;  --dy: -42px; animation-delay: .05s; }
+#vortex-boot.vb-bloom .vb-spark:nth-child(3) { --dx: 78px;  --dy: 16px;  animation-delay: .01s; }
+#vortex-boot.vb-bloom .vb-spark:nth-child(4) { --dx: -72px; --dy: 22px;  animation-delay: .06s; }
+#vortex-boot.vb-bloom .vb-spark:nth-child(5) { --dx: 10px;  --dy: -60px; animation-delay: .08s; }
+#vortex-boot.vb-bloom .vb-spark:nth-child(6) { --dx: -18px; --dy: 56px;  animation-delay: .03s; }
+
+@keyframes vb-spark {
+    0% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+    100% { opacity: 0; transform: translate3d(var(--dx), var(--dy), 0) scale(.3); }
+}
+
+/* ---- wordmark + loader (phase 2) ---- */
+.vb-lower {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity .45s ease, transform .45s ease;
+}
+#vortex-boot.vb-loading .vb-lower {
+    opacity: 1;
+    transform: none;
+}
+
+.vb-word {
+    font-family: "Outfit", "Segoe UI", system-ui, sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    letter-spacing: .5em;
+    text-indent: .5em;
+    color: #efeaff;
+    background: linear-gradient(92deg, #8f79ff, #c86bff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.vb-track {
+    position: relative;
+    width: 172px;
+    height: 3px;
+    border-radius: 3px;
+    background: rgba(160, 120, 255, .16);
+    overflow: hidden;
+}
+.vb-track::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, transparent, #a06bff, #d9a8ff, #a06bff, transparent);
+    animation: vb-slide 1.15s ease-in-out infinite;
+}
+#vortex-boot.vb-done .vb-track::before {
+    animation: none;
+    width: 100%;
+    left: 0;
+    background: linear-gradient(90deg, #8f79ff, #d9a8ff);
+    transition: width .35s ease;
+}
+
+@keyframes vb-slide {
+    0% { left: -42%; }
+    100% { left: 102%; }
+}
+
+.vb-status {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: #9d93c4;
+    min-height: 13px;
+    transition: opacity .2s ease;
+}
+.vb-status.vb-status-swap { opacity: 0; }
+
+/* ---- exit ---- */
+#vortex-boot.vb-out {
+    opacity: 0;
+    transform: scale(1.04);
+    pointer-events: none;
+}
+
+/* ---- reduced motion: no draw, just a calm fade-in then out ---- */
+#vortex-boot.vb-reduced .vb-stroke { display: none; }
+#vortex-boot.vb-reduced .vb-fill { opacity: 1; }
+#vortex-boot.vb-reduced .vb-logo {
+    animation: vb-simple-in .4s ease forwards;
+}
+#vortex-boot.vb-reduced .vb-ring,
+#vortex-boot.vb-reduced .vb-spark,
+#vortex-boot.vb-reduced::after { display: none; }
+
+@keyframes vb-simple-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #vortex-boot::after { animation: none; }
+}
