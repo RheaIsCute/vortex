@@ -1322,19 +1322,20 @@ class ClientLauncher:
     def login_account(cls, username: str, password: str, client_path: Optional[str] = None,
                       stay_signed_in: bool = True, restart_client: bool = True) -> Dict[str, Any]:
         """
-        Signs out, restarts the Riot Client, and logs the account in.
+        Signs the current account out and logs the given one in.
 
-        Every login now starts the client from scratch rather than reusing
-        whatever is already on screen. A client that has been sitting open
-        can be on any screen - a half-filled form, an error banner, a "session
-        expired" notice, the region picker - and the old warm path assumed a
-        clean login form and typed into whatever was actually there. Killing
-        it first costs a few seconds and removes that entire class of failure,
-        along with any stale keyboard focus or leftover text in the fields.
+        Fast path: if the Riot Client is already open, sign the live session
+        out through its own API and type the credentials straight into the
+        sign-in page that comes up - no kill, no relaunch, no lost window. If
+        it is already sitting on the sign-in page with nothing signed in, it
+        goes straight to typing.
 
-        Each step is confirmed before the next one runs, so a failure names
-        the step that failed instead of surfacing as credentials going
-        somewhere unexpected.
+        This is only taken when the USERNAME/PASSWORD fields actually
+        materialise (which the splash, a half-drawn client, an error screen or
+        the region picker cannot fake). Anything else falls through to the
+        full teardown below - kill VALORANT, kill the client, relaunch clean -
+        and `auto_fill_credentials` still keeps one restart in reserve if the
+        page fights back. Each step is confirmed before the next runs.
         """
         with _LOGIN_START_LOCK:
             age = time.time() - float(LOGIN_PROGRESS.get("started_at") or 0.0)
@@ -1352,7 +1353,7 @@ class ClientLauncher:
             LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
             LOGIN_PROGRESS["stay_signed_in"] = None
             LOGIN_PROGRESS["active"] = True
-        _set_login_stage("opening", "Closing VALORANT and the Riot Client...", username)
+        _set_login_stage("opening", "Preparing to sign in...", username)
 
         target_path = client_path or cls.detect_riot_client_path()
         if not target_path or not os.path.exists(target_path):
@@ -1377,9 +1378,51 @@ class ClientLauncher:
                     login_logger.exception("[%s] retry worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)
 
-            import threading
             threading.Thread(target=_retry_worker, daemon=True).start()
             return {"success": True, "message": f"Retrying the login for {username}..."}
+
+        # Fast path: the client is already open. Sign the live session out via
+        # its API and reuse the window instead of killing and relaunching it.
+        # VALORANT still has to go first - the client won't switch accounts
+        # underneath a running game. If the sign-in form doesn't come up we
+        # fall through to the full restart, so a stuck client still recovers.
+        if cls.find_riot_window():
+            if cls.is_valorant_running():
+                _set_login_stage("opening", "Closing VALORANT...", username)
+                cls.kill_valorant()
+                cls.wait_for_processes_gone(_VALORANT_PROCS, timeout=8.0)
+
+            had_session = bool(cls.get_lockfile_auth())
+            if had_session:
+                _set_login_stage("signout", "Signing out of the current session...", username)
+                cls.api_sign_out()
+                cls.wait_for_signed_out(timeout=8.0)
+                _set_login_stage("waiting_window", "Loading the sign-in page...", username)
+            else:
+                _set_login_stage("waiting_window", "Using the Riot Client that's already open...", username)
+
+            # A just-signed-out client needs a moment to swap to the form; one
+            # that was already on it answers almost immediately.
+            form = cls.wait_for_login_form(timeout=18.0 if had_session else 6.0)
+            if form is not None:
+                login_logger.info("[%s] warm login - filling the sign-in page already on screen", username)
+
+                def _warm_worker():
+                    try:
+                        cls.auto_fill_credentials(
+                            username, password, cold_start=False,
+                            stay_signed_in=stay_signed_in, client_path=target_path,
+                        )
+                    except Exception as e:
+                        login_logger.exception("[%s] warm login worker crashed", username)
+                        _set_login_stage("error", f"Login automation crashed: {e}", username)
+
+                threading.Thread(target=_warm_worker, daemon=True).start()
+                return {"success": True, "message": f"Logging in to {username}..."}
+
+            login_logger.info(
+                "[%s] no sign-in form on the open client - restarting it", username
+            )
 
         try:
             # 1. VALORANT first - the Riot Client can't switch accounts under a
