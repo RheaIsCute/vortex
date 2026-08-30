@@ -1,5 +1,5 @@
 {
-  "version": "5.5.21",
+  "version": "5.5.22",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.21: makes auto-updates reliable - the updater and installer now close Overwolf and any leftover WebView2 processes before installing, which is what kept the update failing with a 'file in use' error and asking you to retry by hand."
+  "changelog": "Vortex v5.5.22: adds an optional 'After VALORANT Closes' setting that can automatically start a program of your choice the moment VALORANT exits."
 }
