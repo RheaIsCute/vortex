@@ -362,6 +362,25 @@ Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction S
 $owWasRunning = [bool](Get-Process -Name "Overwolf" -ErrorAction SilentlyContinue)
 Get-Process -Name "Overwolf","OverwolfLauncher","OverwolfBrowser" -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
+
+# Anything else with a DLL loaded out of Vortex's _internal - e.g. a program
+# started by the "After VALORANT Closes" setting that ships no CRT of its own
+# and picked up _internal\VCRUNTIME140.dll off the inherited search path.
+$vxInternal = "{current_dir}"
+if ($vxInternal) {{ $vxInternal = Join-Path $vxInternal "_internal" }}
+if ($vxInternal) {{
+    try {{
+        Get-Process -ErrorAction SilentlyContinue | ForEach-Object {{
+            $proc = $_
+            try {{
+                if ($proc.Modules | Where-Object {{ $_.FileName -like "$vxInternal\\*" }}) {{
+                    Write-Log ("Killing {{0}} ({{1}}) - holds a Vortex _internal DLL" -f $proc.ProcessName, $proc.Id)
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                }}
+            }} catch {{}}
+        }}
+    }} catch {{}}
+}}
 Write-Log "Cleared Vortex/WebView2/Overwolf (overwolf was running: $owWasRunning)"
 Start-Sleep -Milliseconds 900
 

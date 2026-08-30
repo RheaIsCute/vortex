@@ -1,5 +1,5 @@
 {
-  "version": "5.5.23",
+  "version": "5.5.24",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.23: fixes the Live Aim HUD showing no headshot / K-D-A stats. Overwolf changed where the Valorant Tracker app records live game events, so Vortex now reads the new log format and location."
+  "changelog": "Vortex v5.5.24: the 'After VALORANT Closes' program is now launched fully detached so it can't hold Vortex's runtime files open and break the next update; the updater also force-closes anything still holding a Vortex library. Includes the 5.5.23 fix for live headshot / K/D/A stats."
 }

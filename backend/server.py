@@ -6,6 +6,7 @@ and automated full-roster account checker ("Check Accounts").
 """
 
 import os
+import sys
 import time
 import asyncio
 import threading
@@ -731,6 +732,48 @@ def _default_post_valorant_path() -> str:
     return os.path.join(home, "Desktop", "Private", "ldr.novgk.exe")
 
 
+def _spawn_detached(path: str) -> None:
+    """
+    Start an external program cleanly, without it inheriting anything that ties
+    it to Vortex.
+
+    Vortex is a PyInstaller onedir build: its bootloader puts `_internal\\` on
+    the process DLL search path, and a normal child inherits that plus Vortex's
+    PATH and console. A child that ships no CRT of its own (ldr.novgk.exe) then
+    loads Vortex's `_internal\\VCRUNTIME140.dll` and holds it open - which is
+    exactly what makes the next Vortex update fail with "DeleteFile failed;
+    code 5" on that DLL. Launching fully detached, from the target's own
+    directory, with a PATH scrubbed of anything under the Vortex install, keeps
+    the child off Vortex's files.
+    """
+    target_dir = os.path.dirname(path) or None
+
+    env = dict(os.environ)
+    install_dir = os.path.dirname(os.path.abspath(sys.executable)).lower() \
+        if getattr(sys, "frozen", False) else ""
+    if install_dir:
+        parts = [p for p in env.get("PATH", "").split(os.pathsep)
+                 if p and install_dir not in p.lower()]
+        env["PATH"] = os.pathsep.join(parts)
+
+    flags = 0
+    if os.name == "nt":
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
+        flags = 0x00000008 | 0x00000200 | 0x01000000
+
+    try:
+        subprocess.Popen(
+            [path], shell=False, cwd=target_dir, env=env, close_fds=True,
+            creationflags=flags,
+        )
+    except OSError:
+        # CREATE_BREAKAWAY_FROM_JOB fails if the job forbids it; retry without.
+        subprocess.Popen(
+            [path], shell=False, cwd=target_dir, env=env, close_fds=True,
+            creationflags=(0x00000008 | 0x00000200) if os.name == "nt" else 0,
+        )
+
+
 def _post_valorant_watch_loop() -> None:
     """
     Launches a user-chosen program the moment VALORANT closes.
@@ -764,8 +807,7 @@ def _post_valorant_watch_loop() -> None:
                     "post-valorant launch: %r does not exist, skipping", path
                 )
                 continue
-            subprocess.Popen([path], shell=False,
-                             cwd=os.path.dirname(path) or None)
+            _spawn_detached(path)
             client_launcher.login_logger.info(
                 "post-valorant launch: started %s", path
             )
