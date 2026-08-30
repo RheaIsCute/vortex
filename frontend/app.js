@@ -5,6 +5,33 @@
  * and automated full-roster account checker ("Check Accounts").
  */
 
+// Game assets are mirrored locally at release time so rank/agent/weapon art
+// stays sharp and the dashboard does not depend on a tiny remote fallback.
+const LOCAL_GAME_ASSET_ROOT = "/static/assets/valorant-api/";
+function localGameAssetUrl(value) {
+    if (typeof value !== "string") return value;
+    return value.replace(/^https:\/\/media\.valorant-api\.com\//i, LOCAL_GAME_ASSET_ROOT);
+}
+
+function localizeGameAssets(value) {
+    if (typeof value === "string") return localGameAssetUrl(value);
+    if (Array.isArray(value)) return value.map(localizeGameAssets);
+    if (value && typeof value === "object") {
+        Object.keys(value).forEach(key => { value[key] = localizeGameAssets(value[key]); });
+    }
+    return value;
+}
+
+// Every dashboard API response passes through this once, covering new asset
+// fields without requiring each future card/template to remember the helper.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    const nativeJson = response.json.bind(response);
+    response.json = async () => localizeGameAssets(await nativeJson());
+    return response;
+};
+
 // Global State
 const state = {
     accounts: [],
@@ -53,7 +80,7 @@ const TIER_ICONS = {
     UNRANKED: { icon: "fa-solid fa-circle-question", colorClass: "rank-unranked", label: "Unranked" }
 };
 
-const TIER_BASE_URL = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04";
+const TIER_BASE_URL = `${LOCAL_GAME_ASSET_ROOT}competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04`;
 const DEFAULT_TIER_ICON = `${TIER_BASE_URL}/0/largeicon.png`;
 
 // Mirrors TIER_INDEX_MAP in backend/scraper.py so a stored peak rank can
@@ -3983,7 +4010,7 @@ function stopQueueClock() {
 // -- match hero, personal line, rosters -----------------------------------
 
 const DEFAULT_UNRANKED_ICON =
-    "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+    `${LOCAL_GAME_ASSET_ROOT}competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png`;
 
 function sideMeta(side) {
     return side === "Defender"

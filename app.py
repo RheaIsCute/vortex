@@ -9,6 +9,39 @@ import io
 import ctypes
 import traceback
 
+
+def _enable_per_monitor_dpi_awareness():
+    """Render WebView2 at the native DPI of whichever monitor owns it.
+
+    This must run before pywebview, WinForms, or any other UI library is
+    imported.  If Windows sees the process as merely system-DPI-aware it may
+    bitmap-scale the whole window after a monitor/DPI change, which makes
+    otherwise hardware-accelerated text look soft or pixelated.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        # Windows 8.1 fallback: PROCESS_PER_MONITOR_DPI_AWARE.
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+_enable_per_monitor_dpi_awareness()
+
 # Set Windows AppUserModelID for custom Taskbar icon & grouping
 try:
     myappid = "vortex.valorant.accountmanager.v2"

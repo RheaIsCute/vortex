@@ -86,7 +86,11 @@
         return cleanText(account.display_name, cleanText(account.username, "Unnamed account"));
     }
 
-    const DEFAULT_TIER_ICON = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png";
+    const LOCAL_GAME_ASSET_ROOT = "/static/assets/valorant-api/";
+    const localGameAssetUrl = value => typeof value === "string"
+        ? value.replace(/^https:\/\/media\.valorant-api\.com\//i, LOCAL_GAME_ASSET_ROOT)
+        : value;
+    const DEFAULT_TIER_ICON = `${LOCAL_GAME_ASSET_ROOT}competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/0/largeicon.png`;
 
     function accountRank(account) {
         if (account.rank_label) return cleanText(account.rank_label);
@@ -104,7 +108,7 @@
     }
 
     function accountRankIcon(account) {
-        return cleanText(account.rank_icon_url) || DEFAULT_TIER_ICON;
+        return localGameAssetUrl(cleanText(account.rank_icon_url)) || DEFAULT_TIER_ICON;
     }
 
     async function apiRequest(url, options = {}) {
