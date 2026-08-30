@@ -1,12 +1,13 @@
 """
 Auto-update checker for Vortex Valorant Account Manager.
-Checks a small static JSON version manifest hosted on Vercel (asarii.xyz),
-and if a newer version is available, downloads the Windows installer and
-launches it so it can replace the running app.
+Checks the version.json manifest committed at the root of the vortex repo,
+and if a newer version is available, downloads the Windows installer from the
+matching GitHub release and launches it so it can replace the running app.
 
-Manifest format matches the existing precedent in the RheaIsCute/asa repo
-(see public/autovgc/version.json):
-    { "version": "3.1.0", "download_url": "...", "changelog": "..." }
+Manifest format (version.json in RheaIsCute/vortex):
+    { "version": "5.5.15", "download_url": "...", "changelog": "..." }
+where download_url points at the VortexSetup.exe asset of that release, e.g.
+    https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe
 """
 
 import os
@@ -23,9 +24,12 @@ from backend.version import APP_VERSION
 import json
 import time
 
+# The manifest lives at the repo root on the default branch. jsdelivr is listed
+# first because GitHub Raw is CDN-cached for minutes after a push and can serve
+# a stale manifest; both are consulted and the highest advertised version wins.
 VERSION_CHECK_URLS = [
-    "https://raw.githubusercontent.com/RheaIsCute/asa/master/public/vortex/version.json",
-    "https://asarii.xyz/vortex/version.json"
+    "https://cdn.jsdelivr.net/gh/RheaIsCute/vortex@master/version.json",
+    "https://raw.githubusercontent.com/RheaIsCute/vortex/master/version.json",
 ]
 REQUEST_TIMEOUT = 6.0
 
@@ -61,7 +65,7 @@ PYI_ENV_VARS = (
 
 def check_for_update() -> Optional[Dict[str, Any]]:
     """
-    Queries the version manifest from GitHub Raw / asarii.xyz.
+    Queries the version.json manifest from the vortex repo (jsdelivr / GitHub Raw).
     Returns a dict with 'version', 'url', and optional 'notes' if a newer
     version is available, otherwise None.
     Never raises - any network/parsing failure is treated as "no update".

@@ -1,7 +1,7 @@
 """
 Single source of truth for the app's current version.
 Bump this on every release before building the installer - the update
-checker compares this against the version published at asarii.xyz.
+checker compares this against version.json published in the vortex repo.
 """
 
-APP_VERSION = "5.5.14"
+APP_VERSION = "5.5.15"

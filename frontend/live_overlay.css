@@ -1,47 +1,135 @@
 :root { color-scheme: dark; font-family: "Segoe UI Variable", Inter, "Segoe UI", sans-serif; }
 * { box-sizing: border-box; }
-html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090812; color: #f8fafc; }
-body { padding: 8px; user-select: none; -webkit-font-smoothing: antialiased; }
+
+/* The window itself IS the card. WebView2 draws an opaque rectangle no matter
+   what, so instead of floating a rounded panel on a black backdrop (which just
+   showed hard black corners), the surface fills the window edge to edge with
+   no outer padding, no border, no radius gap. */
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #0b0a15;
+    color: #f4f3fb;
+}
+body { padding: 0; user-select: none; -webkit-font-smoothing: antialiased; }
 
 .aim-hud {
     position: relative;
+    display: flex;
+    flex-direction: column;
     height: 100%;
     overflow: hidden;
-    border: 1px solid rgba(192, 132, 252, .35);
-    border-radius: 15px;
+    padding: 11px 13px 12px;
     background:
-        radial-gradient(circle at 89% -10%, rgba(56, 189, 248, .26), transparent 34%),
-        radial-gradient(circle at 6% 112%, rgba(251, 113, 133, .16), transparent 44%),
-        linear-gradient(145deg, rgba(20, 15, 34, .98), rgba(7, 8, 17, .98));
-    box-shadow: 0 14px 36px rgba(0, 0, 0, .5), inset 0 1px rgba(255,255,255,.12);
+        radial-gradient(120% 90% at 100% 0%, rgba(56, 189, 248, .14), transparent 55%),
+        radial-gradient(120% 90% at 0% 100%, rgba(251, 113, 133, .10), transparent 55%),
+        linear-gradient(160deg, #15122a 0%, #0b0a15 60%);
 }
-.aim-hud::after { content:""; position:absolute; inset:0; pointer-events:none; background:linear-gradient(rgba(255,255,255,.024) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.024) 1px,transparent 1px); background-size:24px 24px; opacity:.45; }
-.hud-sheen { position:absolute; inset:-80% 42% auto -30%; height:180%; transform:rotate(18deg); background:linear-gradient(90deg,transparent,rgba(255,255,255,.075),transparent); pointer-events:none; }
-.hud-head,.hud-score,.hud-chart-wrap,.hud-foot { position:relative; z-index:1; }
-.hud-head { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 0; font-family:Consolas,"Cascadia Mono",monospace; font-size:9px; font-weight:800; letter-spacing:.14em; }
-.hud-brand { display:flex; align-items:center; gap:7px; color:#ddd6fe; }
-.hud-brand img { width:13px; height:13px; object-fit:contain; filter:drop-shadow(0 0 6px rgba(168,85,247,.55)); }
-.hud-brand small { color:#7dd3fc; font-size:8px; }
-.hud-round { padding:4px 7px; border:1px solid rgba(125,211,252,.28); border-radius:999px; color:#7dd3fc; background:rgba(14,165,233,.08); font-size:8px; }
-.hud-score { display:flex; justify-content:space-between; gap:14px; padding:10px 13px 8px; }
-.hud-score-main { display:grid; align-content:start; }
-.hud-label { color:#a8a4bb; font-family:Consolas,"Cascadia Mono",monospace; font-size:8px; font-weight:800; letter-spacing:.12em; }
-.hud-score-main strong { margin-top:1px; color:#fb7185; font-family:Consolas,"Cascadia Mono",monospace; font-size:37px; letter-spacing:-.08em; line-height:1; text-shadow:0 0 20px rgba(251,113,133,.22); }
-.hud-score-main em { font-size:16px; font-style:normal; letter-spacing:0; }
-.hud-sub { margin-top:4px; color:#938fa8; font-size:9px; }
-.hud-kda { display:grid; align-content:center; justify-items:end; font-family:Consolas,"Cascadia Mono",monospace; }
-.hud-kda span { color:#8f8aa3; font-size:8px; letter-spacing:.1em; }
-.hud-kda strong { margin-top:4px; color:#f8fafc; font-size:13px; }
-.hud-kda small { margin-top:4px; color:#38bdf8; font-size:10px; }
-.hud-chart-wrap { padding:0 13px; }
-.hud-chart-head { display:flex; justify-content:space-between; margin-bottom:5px; color:#8f8aa3; font-family:Consolas,"Cascadia Mono",monospace; font-size:8px; font-weight:800; letter-spacing:.11em; }
-.hud-chart-head span:last-child { color:#2dd4bf; }
-.hud-chart { position:relative; height:68px; overflow:hidden; border:1px solid rgba(255,255,255,.08); border-radius:8px; background:rgba(2,4,11,.42); }
-.hud-chart i { position:absolute; left:0; right:0; border-top:1px dashed rgba(255,255,255,.08); }
-.hud-chart i:nth-child(1){top:25%}.hud-chart i:nth-child(2){top:50%}.hud-chart i:nth-child(3){top:75%}
-.hud-chart svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
-.hud-foot { display:flex; align-items:center; gap:10px; padding:8px 13px 10px; color:#a6a1b6; font-family:Consolas,"Cascadia Mono",monospace; font-size:8px; }
-.hud-foot span { display:inline-flex; align-items:center; gap:4px; }
-.hud-foot i { width:6px; height:6px; border-radius:50%; }.hud-foot i.is-head{background:#fb7185;box-shadow:0 0 8px rgba(251,113,133,.8)}.hud-foot i.is-body{background:#38bdf8}.hud-foot i.is-leg{background:#a78bfa}
-.hud-foot b { color:#f8fafc; font-size:9px; }.hud-dmg { margin-left:auto; color:#7dd3fc; }
-.aim-hud.is-waiting .hud-score-main strong { color:#94a3b8; }.aim-hud.is-waiting .hud-chart-head span:last-child { color:#94a3b8; }
+/* soft vignette so the outer pixels fade instead of ending on a hard line */
+.aim-hud::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: inset 0 0 22px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+.aim-hud > * { position: relative; z-index: 1; }
+
+.hud-sheen { display: none; }
+
+.hud-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .16em;
+}
+.hud-brand { display: flex; align-items: center; gap: 6px; color: #ddd6fe; }
+.hud-brand img { width: 12px; height: 12px; object-fit: contain; filter: drop-shadow(0 0 5px rgba(168, 85, 247, .5)); }
+.hud-brand small { color: #7dd3fc; font-size: 7px; }
+.hud-round {
+    padding: 3px 7px;
+    border-radius: 999px;
+    color: #7dd3fc;
+    background: rgba(14, 165, 233, .12);
+    font-size: 7px;
+}
+
+.hud-score {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 9px;
+}
+.hud-score-main { display: grid; align-content: start; min-width: 0; }
+.hud-label {
+    color: #9c98b4;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: .13em;
+}
+.hud-score-main strong {
+    margin-top: 2px;
+    color: #fb7185;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 30px;
+    letter-spacing: -.06em;
+    line-height: 1;
+    text-shadow: 0 0 16px rgba(251, 113, 133, .25);
+}
+.hud-score-main em { font-size: 13px; font-style: normal; letter-spacing: 0; }
+.hud-sub { margin-top: 3px; color: #7f7b95; font-size: 8px; }
+.hud-kda { display: grid; align-content: end; justify-items: end; font-family: Consolas, "Cascadia Mono", monospace; }
+.hud-kda span { color: #837e98; font-size: 7px; letter-spacing: .1em; }
+.hud-kda strong { margin-top: 3px; color: #f4f3fb; font-size: 12px; }
+.hud-kda small { margin-top: 2px; color: #38bdf8; font-size: 9px; }
+
+.hud-chart-wrap { margin-top: 10px; }
+.hud-chart-head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    color: #837e98;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: .12em;
+}
+.hud-chart-head span:last-child { color: #2dd4bf; }
+.hud-chart {
+    position: relative;
+    height: 44px;
+    overflow: hidden;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, .03);
+}
+.hud-chart i { position: absolute; left: 0; right: 0; border-top: 1px dashed rgba(255, 255, 255, .06); }
+.hud-chart i:nth-child(1) { top: 25%; } .hud-chart i:nth-child(2) { top: 50%; } .hud-chart i:nth-child(3) { top: 75%; }
+.hud-chart svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+.hud-foot {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: auto;
+    padding-top: 9px;
+    color: #9c98b4;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 7px;
+}
+.hud-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.hud-foot i { width: 5px; height: 5px; border-radius: 50%; }
+.hud-foot i.is-head { background: #fb7185; box-shadow: 0 0 6px rgba(251, 113, 133, .8); }
+.hud-foot i.is-body { background: #38bdf8; }
+.hud-foot i.is-leg { background: #a78bfa; }
+.hud-foot b { color: #f4f3fb; font-size: 8px; }
+.hud-dmg { margin-left: auto; color: #7dd3fc; }
+
+.aim-hud.is-waiting .hud-score-main strong { color: #94a3b8; }
+.aim-hud.is-waiting .hud-chart-head span:last-child { color: #94a3b8; }

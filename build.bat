@@ -35,7 +35,36 @@ if not exist dist\Vortex\Vortex.exe (
     echo Build FAILED - check the output above.
     exit /b 1
 )
-echo Build succeeded: dist\Vortex\Vortex.exe
+
+REM Vortex.exe existing is not proof the bundle is complete. A PyInstaller run
+REM that dies partway through COLLECT can still leave Vortex.exe plus a handful
+REM of _internal files - that is exactly how a ~44-file installer for 5.5.14 got
+REM built and shipped, gutting every machine that auto-updated to it. A healthy
+REM one-dir build has well over a thousand files under _internal\; anything
+REM close to empty means the build is truncated and must NOT be packaged.
+set _INTERNAL_COUNT=0
+for /f %%c in ('dir /a-d /b /s "dist\Vortex\_internal" 2^>nul ^| find /c /v ""') do set _INTERNAL_COUNT=%%c
+echo _internal file count: %_INTERNAL_COUNT%
+if %_INTERNAL_COUNT% LSS 500 (
+    echo.
+    echo Build FAILED - dist\Vortex\_internal has only %_INTERNAL_COUNT% files.
+    echo The PyInstaller bundle is truncated. Refusing to build the installer
+    echo from an incomplete build. Re-run and check the PyInstaller output.
+    exit /b 1
+)
+
+REM Spot-check a few binary deps that have gone missing from bad builds before:
+REM the stdlib C extensions and pydantic_core's compiled module.
+for %%f in (_ctypes.pyd _ssl.pyd _socket.pyd _sqlite3.pyd) do (
+    if not exist "dist\Vortex\_internal\%%f" (
+        echo.
+        echo Build FAILED - dist\Vortex\_internal\%%f is missing.
+        echo A stdlib C extension did not get bundled. See build_exe.spec.
+        exit /b 1
+    )
+)
+
+echo Build succeeded: dist\Vortex\Vortex.exe (%_INTERNAL_COUNT% files in _internal)
 
 set ISCC="%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
 if not exist %ISCC% set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"

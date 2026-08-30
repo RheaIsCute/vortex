@@ -490,7 +490,7 @@ async function checkForUpdate(manual) {
     } catch (err) {
         if (manual) {
             showToast("Couldn't reach the update server. Check your connection.", "error");
-            if (DOM.updateStatusText) DOM.updateStatusText.textContent = "Updates are hosted at asarii.xyz.";
+            if (DOM.updateStatusText) DOM.updateStatusText.textContent = "Updates are delivered through GitHub releases.";
         }
         return;
     }

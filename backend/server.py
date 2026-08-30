@@ -1081,9 +1081,9 @@ async def app_version():
 @app.get("/api/check-update")
 async def check_update():
     """
-    Checks asarii.xyz for a newer release. Returns available:false if this
-    is already the latest version, or if the check fails for any reason
-    (offline, host unreachable, etc.) - never raises.
+    Checks the vortex repo's version.json for a newer release. Returns
+    available:false if this is already the latest version, or if the check
+    fails for any reason (offline, host unreachable, etc.) - never raises.
     """
     update_info = await asyncio.to_thread(updater.check_for_update)
     if not update_info:

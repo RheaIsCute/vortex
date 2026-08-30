@@ -1,0 +1,5 @@
+{
+  "version": "5.5.15",
+  "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
+  "changelog": "Vortex v5.5.15: fixes the incomplete 5.5.14 update that could leave the app unable to start (missing modules on launch). This release reinstalls the full application."
+}
