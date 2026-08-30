@@ -4050,7 +4050,7 @@ function renderMeCard(match) {
     const combatTiles = [
         { k: "K / D / A", v: cur.kda_line || "--", c: hasCombat ? "is-kda" : "is-pending" },
         { k: "K/D", v: num(cur.kd, 2), c: goodBad(cur.kd, 1) },
-        { k: cur.hs_pct != null ? "Headshot %" : "HS Kills", v: cur.hs_pct != null ? pct(cur.hs_pct) : pct(cur.headshot_kill_pct), c: hasCombat ? "is-hs" : "is-pending" },
+        { k: cur.hs_pct != null ? "Headshot" : "HS Kills", v: cur.hs_pct != null ? pct(cur.hs_pct) : pct(cur.headshot_kill_pct), c: hasCombat ? "is-hs" : "is-pending" },
         { k: "ADR", v: num(cur.adr), c: hasCombat ? "is-adr" : "is-pending" },
         { k: "ACS", v: num(cur.acs), c: hasCombat ? "is-acs" : "is-pending" }
     ];
@@ -4067,7 +4067,7 @@ function renderMeCard(match) {
             c: (cur.rounds_won || 0) >= (cur.rounds_lost || 0) ? "is-good" : "is-bad"
         },
         {
-            k: "Round Win %",
+            k: "Round Win",
             v: cur.rounds_played ? cur.round_winrate + "%" : "--",
             c: goodBad(cur.rounds_played ? cur.round_winrate : null, 50)
         },
@@ -4083,7 +4083,7 @@ function renderMeCard(match) {
     // -- last 5 matches (the average, named as the average) ---------------
     const recentTiles = [
         { k: "Avg K/D", v: num(recent.kd, 2), c: goodBad(recent.kd, 1) },
-        { k: "Avg HS%", v: pct(recent.hs_pct), c: "is-hs" },
+        { k: "Avg HS", v: pct(recent.hs_pct), c: "is-hs" },
         { k: "Avg ADR", v: num(recent.adr), c: "is-adr" },
         { k: "Win Rate", v: pct(recent.winrate), c: goodBad(recent.winrate, 50) }
     ];
@@ -4869,7 +4869,7 @@ function renderPlayerStats() {
         <div class="stat-tiles">
             ${statTile("Winrate", `${act.winrate || 0}%`,
                        `${act.games || 0} ranked games`, winrateClass(act.winrate))}
-            ${statTile("Headshot %", `${combat.hs || 0}%`,
+            ${statTile("Headshot", `${combat.hs || 0}%`,
                        `Last ${combat.matches || 0} matches`, "is-accent")}
             ${statTile("K/D", combat.kd || 0, `KDA ${combat.kda || 0}`, combat.kd >= 1 ? "is-ok" : "is-bad")}
             ${statTile("ACS", combat.acs || 0, "Avg combat score", "is-gold")}
