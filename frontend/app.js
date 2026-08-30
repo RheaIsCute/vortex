@@ -5066,7 +5066,8 @@ function renderPlayerStats() {
                     </span>
                 `).join("") || '<span class="dash-roster-empty">No ranked games yet.</span>'}
             </div>
-            ${renderSparkline(s.rr_history || [])}
+            <div class="stat-trend-label"><i class="fa-solid fa-chart-line"></i> ${escapeHtml(s.trend_label || "Performance trend")}</div>
+            ${renderSparkline((s.performance_history && s.performance_history.length) ? s.performance_history : (s.rr_history || []))}
         </div>
 
         ${(s.top_agents || []).length ? `

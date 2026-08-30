@@ -235,7 +235,10 @@ body {
     user-select: none;
     line-height: 1.5;
     font-size: 14px;
-    -webkit-font-smoothing: antialiased;
+    /* Let Windows/WebView2 choose native ClearType/subpixel smoothing. Forcing
+       grayscale antialiasing makes small, light text look softer on 1080p
+       displays and does not improve GPU acceleration. */
+    text-rendering: optimizeLegibility;
 }
 
 ::selection {
@@ -265,15 +268,16 @@ body {
     background: transparent;
 }
 
-/* --- Ambient background: drifting aurora + grain + vignette --- */
+/* --- Ambient background: static aurora + vignette -----------------------
+   Large animated blur filters forced WebView2 to repaint/composite millions
+   of pixels every frame. Radial gradients already provide the soft falloff,
+   so keeping them static preserves the atmosphere at near-zero idle cost. */
 .bg-glow {
     position: fixed;
     border-radius: 50%;
-    filter: blur(130px);
     pointer-events: none;
     z-index: 0;
-    opacity: 0.42;
-    will-change: transform;
+    opacity: 0.28;
     transition: background var(--dur-4) ease;
 }
 
@@ -282,8 +286,7 @@ body {
     height: 620px;
     top: -180px;
     right: -120px;
-    background: radial-gradient(circle, var(--aur-1), transparent 68%);
-    animation: drift-a 26s ease-in-out infinite;
+    background: radial-gradient(circle, color-mix(in srgb, var(--aur-1) 72%, transparent), transparent 70%);
 }
 
 .bg-glow-2 {
@@ -291,8 +294,7 @@ body {
     height: 700px;
     bottom: -220px;
     left: -160px;
-    background: radial-gradient(circle, var(--aur-2), transparent 68%);
-    animation: drift-b 32s ease-in-out infinite;
+    background: radial-gradient(circle, color-mix(in srgb, var(--aur-2) 72%, transparent), transparent 70%);
 }
 
 .bg-glow-3 {
@@ -300,9 +302,8 @@ body {
     height: 460px;
     top: 34%;
     left: 44%;
-    opacity: 0.2;
-    background: radial-gradient(circle, var(--aur-3), transparent 68%);
-    animation: drift-c 24s ease-in-out infinite;
+    opacity: 0.12;
+    background: radial-gradient(circle, color-mix(in srgb, var(--aur-3) 60%, transparent), transparent 70%);
 }
 
 /* WebView2 keeps compositing large blurred layers even when the app is behind
@@ -430,7 +431,6 @@ body.effects-paused .scroll-top-btn {
 .brand-mark i {
     position: relative;
     z-index: 1;
-    animation: slow-spin 9s linear infinite;
 }
 
 .brand-text {
@@ -451,7 +451,6 @@ body.effects-paused .scroll-top-btn {
     -webkit-text-fill-color: transparent;
     background-clip: text;
     white-space: nowrap;
-    animation: sheen 8s ease-in-out infinite;
 }
 
 .brand-tagline {
@@ -1245,7 +1244,7 @@ body.effects-paused .scroll-top-btn {
 
 /* Small live dot on playable accounts. */
 .badge-status.badge-playable i {
-    animation: pulse-dot 2.4s ease-in-out infinite;
+    opacity: 0.9;
 }
 
 .badge-status.badge-banned {
@@ -5976,8 +5975,8 @@ body.dashboard-mode .session-bar {
 .dash-agent-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-    max-height: 208px;
+    gap: 8px;
+    max-height: 272px;
     overflow-y: auto;
     padding-right: 3px;
 }
@@ -5986,8 +5985,9 @@ body.dashboard-mode .session-bar {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
-    padding: 7px 4px;
+    gap: 4px;
+    min-height: 68px;
+    padding: 6px 4px 7px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--stroke-1);
     background: var(--surface-2);
@@ -6000,9 +6000,11 @@ body.dashboard-mode .session-bar {
 }
 
 .dash-agent-btn img {
-    width: 30px;
-    height: 30px;
+    width: 46px;
+    height: 42px;
     object-fit: contain;
+    image-rendering: auto;
+    transform: translateZ(0);
 }
 
 .dash-agent-btn span {
@@ -6481,7 +6483,7 @@ body.dashboard-mode .session-bar {
     background: var(--surface-2);
 }
 
-.stat-hero-peak img { width: 34px; height: 34px; object-fit: contain; }
+.stat-hero-peak img { width: 42px; height: 42px; object-fit: contain; image-rendering: auto; }
 
 .stat-hero-peak div {
     display: flex;
@@ -6683,6 +6685,21 @@ body.dashboard-mode .session-bar {
 
 .stat-spark-area { fill: url(#sparkFill); opacity: 0.5; }
 
+.stat-trend-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.stat-trend-label i { color: var(--a-soft); }
+
 /* Agent rows */
 .stat-agents {
     display: flex;
@@ -6692,7 +6709,7 @@ body.dashboard-mode .session-bar {
 
 .stat-agent-row {
     display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) auto;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
     align-items: center;
     gap: 11px;
     padding: 8px 10px;
@@ -6705,10 +6722,11 @@ body.dashboard-mode .session-bar {
 .stat-agent-row:hover { border-color: var(--edge); transform: translateX(3px); }
 
 .stat-agent-row img {
-    width: 34px;
-    height: 34px;
+    width: 44px;
+    height: 44px;
     border-radius: var(--radius-xs);
     object-fit: cover;
+    image-rendering: auto;
     background: var(--surface-3);
 }
 
@@ -6796,8 +6814,8 @@ body.dashboard-mode .session-bar {
 
 .stat-match-agent-wrap {
     flex: none;
-    width: 38px;
-    height: 38px;
+    width: 46px;
+    height: 46px;
     border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--surface-3);
@@ -6808,6 +6826,7 @@ body.dashboard-mode .session-bar {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    image-rendering: auto;
 }
 
 .stat-match-meta {

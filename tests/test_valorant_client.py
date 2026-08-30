@@ -190,6 +190,54 @@ class PlayerStatsCacheTests(unittest.TestCase):
             self.assertEqual(8, vc._STATS_CACHE["generation"])
 
 
+class PlayerStatsDerivationTests(unittest.TestCase):
+    def test_placement_wins_are_read_from_wins_by_tier(self):
+        mmr = {
+            "LatestCompetitiveUpdate": {
+                "SeasonID": "act-current", "TierAfterUpdate": 0,
+                "RankedRatingAfterUpdate": 0,
+            },
+            "QueueSkills": {"competitive": {"SeasonalInfoBySeasonID": {
+                "act-current": {
+                    "CompetitiveTier": 0, "NumberOfWins": 0,
+                    "NumberOfGames": 2, "WinsByTier": {"0": 2},
+                },
+                "act-old": {
+                    "CompetitiveTier": 5, "NumberOfWins": 0,
+                    "NumberOfGames": 3, "WinsByTier": {"5": 1},
+                },
+            }}},
+        }
+        with patch.object(vc, "get_seasons", return_value={
+            "act-current": "Current", "act-old": "Old",
+        }):
+            out = vc._mmr_summary(mmr)
+
+        self.assertEqual({"wins": 2, "losses": 0, "games": 2, "winrate": 100.0},
+                         {k: out["act"][k] for k in ("wins", "losses", "games", "winrate")})
+        self.assertEqual(3, out["lifetime"]["wins"])
+        self.assertEqual(2, out["lifetime"]["losses"])
+        self.assertEqual(60.0, out["lifetime"]["winrate"])
+
+    def test_recent_form_uses_real_match_outcomes_and_acs(self):
+        updates = [
+            {"MatchID": "new", "RankedRatingEarned": 0, "CompetitiveMovement": "MOVEMENT_UNKNOWN"},
+            {"MatchID": "old", "RankedRatingEarned": 0, "CompetitiveMovement": "MOVEMENT_UNKNOWN"},
+        ]
+        matches = [
+            {"match_id": "new", "ranked": True, "result": "Win", "map": "Summit", "acs": 415},
+            {"match_id": "old", "ranked": True, "result": "Win", "map": "Ascent", "acs": 360},
+        ]
+
+        out = vc._form_from_updates(updates, matches)
+
+        self.assertEqual(["Win", "Win"], [entry["result"] for entry in out["form"]])
+        self.assertEqual([360, 415], out["performance_history"])
+        self.assertEqual(2, out["streak"])
+        self.assertEqual("Win", out["streak_type"])
+        self.assertEqual(100.0, out["recent_winrate"])
+
+
 class CurrentActMmrTests(unittest.TestCase):
     """parse_player_mmr must read the current rank from the live act only."""
 

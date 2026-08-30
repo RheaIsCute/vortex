@@ -76,6 +76,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="frontend/assets/logo.ico",
+    manifest="vortex.manifest",
 )
 
 coll = COLLECT(

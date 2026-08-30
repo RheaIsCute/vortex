@@ -2093,12 +2093,25 @@ def _mmr_summary(mmr: Dict[str, Any]) -> Dict[str, Any]:
             peak_tier = season_tier
             peak_season = seasons.get(season_id, "")
 
-        wins += int(entry.get("NumberOfWins", 0) or 0)
-        games += int(entry.get("NumberOfGames", 0) or 0)
+        # During placements Riot leaves NumberOfWins at zero but still records
+        # the real wins in WinsByTier (usually under tier 0).  Treating only
+        # NumberOfWins as authoritative made a 2-0 act render as 0-2 and also
+        # corrupted the lifetime record.
+        tier_wins = 0
+        for count in (entry.get("WinsByTier") or {}).values():
+            try:
+                tier_wins += int(count or 0)
+            except (TypeError, ValueError):
+                continue
+        season_wins = max(int(entry.get("NumberOfWins", 0) or 0), tier_wins)
+        season_games = int(entry.get("NumberOfGames", 0) or 0)
+
+        wins += season_wins
+        games += season_games
 
         if season_id == current_season:
-            act_wins = int(entry.get("NumberOfWins", 0) or 0)
-            act_games = int(entry.get("NumberOfGames", 0) or 0)
+            act_wins = season_wins
+            act_games = season_games
             leaderboard = int(entry.get("LeaderboardRank", 0) or 0)
             if not current_tier:
                 current_tier = season_tier
@@ -2122,7 +2135,8 @@ def _mmr_summary(mmr: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _form_from_updates(updates: List[Dict[str, Any]],
+                       matches: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
     Win/loss form and the RR graph. Competitive updates carry the RR delta
     for each match, which is enough to classify the result without paying for
@@ -2135,37 +2149,55 @@ def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     form: List[Dict[str, Any]] = []
     rr_history: List[int] = []
+    performance_history: List[int] = []
+    update_by_match = {
+        str(u.get("MatchID") or ""): u for u in updates if u.get("MatchID")
+    }
 
-    for u in updates:
-        if not u.get("MatchID"):
-            continue
-        delta = int(u.get("RankedRatingEarned", 0) or 0)
-        movement = (u.get("CompetitiveMovement") or "").upper()
+    # Match details are the ground truth for W/L. Placement matches commonly
+    # report zero RR and MOVEMENT_UNKNOWN, which the old implementation
+    # mislabeled as Draw. When details are available, drive the whole form from
+    # those real outcomes and graph actual match ACS instead of fake tier*100.
+    ranked_matches = [m for m in (matches or []) if m.get("ranked")]
+    if ranked_matches:
+        for match in ranked_matches:
+            update = update_by_match.get(str(match.get("match_id") or ""), {})
+            form.append({
+                "result": match.get("result") or "Draw",
+                "rr": int(update.get("RankedRatingEarned", 0) or 0),
+                "tier": int(update.get("TierAfterUpdate", 0) or 0),
+                "map": match.get("map") or resolve_map(update.get("MapID", "")).get("name", ""),
+                "acs": int(match.get("acs", 0) or 0),
+            })
+            performance_history.append(int(match.get("acs", 0) or 0))
+    else:
+        for u in updates:
+            if not u.get("MatchID"):
+                continue
+            delta = int(u.get("RankedRatingEarned", 0) or 0)
+            movement = (u.get("CompetitiveMovement") or "").upper()
 
-        if movement in ("PROMOTED", "MAJOR_INCREASE", "MINOR_INCREASE"):
-            result = "Win"
-        elif movement in ("DEMOTED", "MAJOR_DECREASE", "MINOR_DECREASE"):
-            result = "Loss"
-        elif delta > 0:
-            result = "Win"
-        elif delta < 0:
-            result = "Loss"
-        else:
-            result = "Draw"
+            if movement in ("PROMOTED", "MAJOR_INCREASE", "MINOR_INCREASE"):
+                result = "Win"
+            elif movement in ("DEMOTED", "MAJOR_DECREASE", "MINOR_DECREASE"):
+                result = "Loss"
+            elif delta > 0:
+                result = "Win"
+            elif delta < 0:
+                result = "Loss"
+            else:
+                result = "Draw"
 
-        form.append({
-            "result": result,
-            "rr": delta,
-            "tier": int(u.get("TierAfterUpdate", 0) or 0),
-            "map": resolve_map(u.get("MapID", "")).get("name", ""),
-        })
-        # Ladder position, not RR-within-tier. Raw RR wraps to ~0 on a
-        # promotion, so plotting it drew a cliff every time the player ranked
-        # *up*. Folding the tier in keeps the line monotonic with progress.
-        rr_history.append(
-            int(u.get("TierAfterUpdate", 0) or 0) * 100
-            + int(u.get("RankedRatingAfterUpdate", 0) or 0)
-        )
+            form.append({
+                "result": result,
+                "rr": delta,
+                "tier": int(u.get("TierAfterUpdate", 0) or 0),
+                "map": resolve_map(u.get("MapID", "")).get("name", ""),
+            })
+            rr_history.append(
+                int(u.get("TierAfterUpdate", 0) or 0) * 100
+                + int(u.get("RankedRatingAfterUpdate", 0) or 0)
+            )
 
     streak, streak_type = 0, ""
     for entry in form:
@@ -2184,6 +2216,8 @@ def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "form": list(reversed(form[:FORM_GAMES])),
         "rr_history": list(reversed(rr_history[:FORM_GAMES])),
+        "performance_history": list(reversed(performance_history[:FORM_GAMES])),
+        "trend_label": "ACS trend" if performance_history else "Rank trend",
         "streak": streak,
         "streak_type": streak_type,
         "recent_wins": wins,
@@ -2313,13 +2347,11 @@ def build_player_stats(client: "ValorantLiveClient") -> Dict[str, Any]:
         stats.setdefault("lifetime", {"wins": 0, "losses": 0, "games": 0, "winrate": 0.0})
         stats.setdefault("act", {"wins": 0, "losses": 0, "games": 0, "winrate": 0.0, "label": ""})
 
+    updates: List[Dict[str, Any]] = []
     try:
-        stats.update(_form_from_updates(client.competitive_updates(20)))
+        updates = client.competitive_updates(20)
     except Exception:
-        stats.setdefault("form", [])
-        stats.setdefault("rr_history", [])
-        stats.setdefault("streak", 0)
-        stats.setdefault("streak_type", "")
+        pass
 
     matches: List[Dict[str, Any]] = []
     try:
@@ -2334,6 +2366,7 @@ def build_player_stats(client: "ValorantLiveClient") -> Dict[str, Any]:
     stats["recent"] = matches
     stats["combat"] = _combat_from_matches(matches)
     stats["top_agents"] = _top_agents(matches)
+    stats.update(_form_from_updates(updates, matches))
 
     try:
         stats["inventory"] = _inventory(client)
