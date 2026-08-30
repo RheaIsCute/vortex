@@ -5152,16 +5152,18 @@ function statTile(label, value, sub, cls) {
 
 /** RR over the last games, drawn as a self-scaling sparkline. */
 function renderSparkline(points) {
-    if (!points || points.length < 2) return "";
+    if (!points || !points.length) return "";
 
     const w = 100, h = 30;
-    const min = Math.min(...points);
-    const max = Math.max(...points);
+    const values = points.length === 1 ? [points[0], points[0]] : points;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
     const span = Math.max(max - min, 1);
+    const flat = max === min;
 
-    const coords = points.map((p, i) => {
-        const x = (i / (points.length - 1)) * w;
-        const y = h - ((p - min) / span) * (h - 4) - 2;
+    const coords = values.map((p, i) => {
+        const x = (i / (values.length - 1)) * w;
+        const y = flat ? h / 2 : h - ((p - min) / span) * (h - 4) - 2;
         return `${x.toFixed(2)},${y.toFixed(2)}`;
     });
 
