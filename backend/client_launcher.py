@@ -135,9 +135,17 @@ LOGIN_PROGRESS: Dict[str, Any] = {
     "stage": "idle",   # idle | opening | signout | waiting_window | typing | submitted | done | error
     "message": "",
     "started_at": 0.0,
+    "stage_at": 0.0,   # when the current stage was entered - drives the watchdog
     "attempt": 0,
     "can_retry": False,
 }
+
+# A login that hangs - a wedged UI Automation call, a Riot Client that never
+# answers - used to leave the progress modal spinning with no error and no way
+# back. The watchdog below forces it to an error if a single stage stalls or
+# the whole attempt runs long.
+_LOGIN_STAGE_STALL_LIMIT = 100.0
+_LOGIN_HARD_LIMIT = 210.0
 
 # Starting a login tears down both VALORANT and the Riot Client.  Two clicks
 # arriving together must never run that sequence concurrently, otherwise each
@@ -148,6 +156,7 @@ _LOGIN_START_LOCK = threading.Lock()
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
     LOGIN_PROGRESS["stage"] = stage
     LOGIN_PROGRESS["message"] = message
+    LOGIN_PROGRESS["stage_at"] = time.time()
     if username is not None:
         LOGIN_PROGRESS["username"] = username
     if stage in ("opening", "signout"):
@@ -194,6 +203,61 @@ def _uia():
     except Exception as e:
         login_logger.warning("UI Automation unavailable: %s", e)
         return None
+
+
+def _drop_stale_uia_client() -> None:
+    """
+    Make UI Automation rebuild its COM client on the calling thread.
+
+    uiautomation keeps one process-wide IUIAutomation object, created in the
+    COM apartment of whichever thread first needs it. comtypes gives every
+    thread its own single-threaded apartment, so once that object exists on
+    one thread, a call into it from another thread has to marshal back - and
+    if that first thread has since exited or parked (a returned request-pool
+    worker), the marshalled call never returns and the login hangs with no
+    error at all.
+
+    Every login funnels all of its UIA work onto one worker thread; calling
+    this at the top of that worker means it builds its own client instead of
+    inheriting one pinned to a thread from a previous login.
+    """
+    try:
+        import uiautomation
+        uiautomation.uiautomation._AutomationClient._instance = None
+    except Exception:
+        pass
+
+
+def _login_watchdog() -> None:
+    """
+    Forces a stuck login to an error so the progress modal can never spin
+    forever. A stage that hasn't advanced in _LOGIN_STAGE_STALL_LIMIT seconds,
+    or a whole attempt past _LOGIN_HARD_LIMIT, is treated as dead.
+    """
+    while True:
+        time.sleep(5.0)
+        try:
+            p = LOGIN_PROGRESS
+            if not p.get("active") or p.get("stage") in ("done", "error", "idle"):
+                continue
+            now = time.time()
+            started = float(p.get("started_at") or 0.0)
+            stage_at = float(p.get("stage_at") or started)
+            if now - stage_at > _LOGIN_STAGE_STALL_LIMIT or now - started > _LOGIN_HARD_LIMIT:
+                login_logger.error(
+                    "[%s] login watchdog - stuck in stage=%s for %.0fs, forcing error",
+                    p.get("username", ""), p.get("stage"), now - stage_at,
+                )
+                _set_login_stage(
+                    "error",
+                    "Login timed out - the Riot Client stopped responding. Try again.",
+                    p.get("username") or None,
+                )
+        except Exception:
+            login_logger.exception("login watchdog iteration failed")
+
+
+threading.Thread(target=_login_watchdog, name="vortex-login-watchdog", daemon=True).start()
 
 
 def set_stay_signed_in(hwnd: int) -> Optional[bool]:
@@ -1373,6 +1437,7 @@ class ClientLauncher:
 
             def _retry_worker():
                 try:
+                    _drop_stale_uia_client()
                     cls.auto_fill_credentials(username, password, False, stay_signed_in, target_path)
                 except Exception as e:
                     login_logger.exception("[%s] retry worker crashed", username)
@@ -1381,50 +1446,90 @@ class ClientLauncher:
             threading.Thread(target=_retry_worker, daemon=True).start()
             return {"success": True, "message": f"Retrying the login for {username}..."}
 
-        # Fast path: the client is already open. Sign the live session out via
-        # its API and reuse the window instead of killing and relaunching it.
-        # VALORANT still has to go first - the client won't switch accounts
-        # underneath a running game. If the sign-in form doesn't come up we
-        # fall through to the full restart, so a stuck client still recovers.
+        # Fast path: the client is already open. Hand the whole login to one
+        # worker thread - close VALORANT, sign the live session out through the
+        # client's own API, wait for its sign-in page, and type straight into
+        # it. Only if that page never shows does it fall through to the full
+        # teardown-and-relaunch.
+        #
+        # Every UI Automation call in a login must run on the SAME thread.
+        # comtypes puts each thread in its own single-threaded COM apartment,
+        # and the frozen build's UIA client, once built on one thread, hangs
+        # forever when touched from another. login_account runs on a pooled
+        # request thread that is about to be parked, so it makes no UIA call
+        # itself - the worker makes every one of them.
         if cls.find_riot_window():
-            if cls.is_valorant_running():
-                _set_login_stage("opening", "Closing VALORANT...", username)
-                cls.kill_valorant()
-                cls.wait_for_processes_gone(_VALORANT_PROCS, timeout=8.0)
+            _set_login_stage("opening", "Using the Riot Client that's already open...", username)
 
-            had_session = bool(cls.get_lockfile_auth())
-            if had_session:
-                _set_login_stage("signout", "Signing out of the current session...", username)
-                cls.api_sign_out()
-                cls.wait_for_signed_out(timeout=8.0)
-                _set_login_stage("waiting_window", "Loading the sign-in page...", username)
-            else:
-                _set_login_stage("waiting_window", "Using the Riot Client that's already open...", username)
+            def _warm_worker():
+                try:
+                    _drop_stale_uia_client()
 
-            # A just-signed-out client needs a moment to swap to the form; one
-            # that was already on it answers almost immediately.
-            form = cls.wait_for_login_form(timeout=18.0 if had_session else 6.0)
-            if form is not None:
-                login_logger.info("[%s] warm login - filling the sign-in page already on screen", username)
+                    if cls.is_valorant_running():
+                        _set_login_stage("opening", "Closing VALORANT...", username)
+                        cls.kill_valorant()
+                        cls.wait_for_processes_gone(_VALORANT_PROCS, timeout=8.0)
 
-                def _warm_worker():
-                    try:
+                    had_session = bool(cls.get_lockfile_auth())
+                    if had_session:
+                        _set_login_stage("signout", "Signing out of the current session...", username)
+                        cls.api_sign_out()
+                        cls.wait_for_signed_out(timeout=8.0)
+                        _set_login_stage("waiting_window", "Loading the sign-in page...", username)
+                        # The client's own sign-out animation needs a beat to
+                        # tear the home screen down and mount the login form;
+                        # racing it leaves UIA reading half-built controls.
+                        time.sleep(1.5)
+                    else:
+                        _set_login_stage("waiting_window", "Opening the sign-in page...", username)
+
+                    form = cls.wait_for_login_form(timeout=20.0 if had_session else 8.0)
+                    if form is not None:
+                        login_logger.info(
+                            "[%s] warm login - typing into the sign-in page already on screen", username
+                        )
                         cls.auto_fill_credentials(
                             username, password, cold_start=False,
                             stay_signed_in=stay_signed_in, client_path=target_path,
                         )
-                    except Exception as e:
-                        login_logger.exception("[%s] warm login worker crashed", username)
-                        _set_login_stage("error", f"Login automation crashed: {e}", username)
+                        return
 
-                threading.Thread(target=_warm_worker, daemon=True).start()
-                return {"success": True, "message": f"Logging in to {username}..."}
+                    login_logger.info(
+                        "[%s] warm login - no sign-in page appeared, restarting the client", username
+                    )
+                    cls._full_restart_login(username, password, stay_signed_in, target_path)
+                except Exception as e:
+                    login_logger.exception("[%s] warm login worker crashed", username)
+                    _set_login_stage("error", f"Login automation crashed: {e}", username)
 
-            login_logger.info(
-                "[%s] no sign-in form on the open client - restarting it", username
-            )
+            threading.Thread(target=_warm_worker, daemon=True).start()
+            return {"success": True, "message": f"Logging in to {username}..."}
 
+        # Cold path: nothing open to reuse - full teardown and relaunch, on a
+        # worker thread for the same UIA-threading reason.
+        threading.Thread(
+            target=cls._full_restart_login,
+            args=(username, password, stay_signed_in, target_path),
+            daemon=True,
+        ).start()
+        return {"success": True, "message": f"Logging in to {username}..."}
+
+    @classmethod
+    def _full_restart_login(cls, username: str, password: str,
+                            stay_signed_in: bool, target_path: str) -> None:
+        """
+        The teardown-and-relaunch login, start to finish on the calling
+        thread: close VALORANT, sign the current session out through the API,
+        kill the Riot Client, start it fresh, and fill the new sign-in page.
+
+        Callers must invoke this on a dedicated worker thread, never the
+        request thread - every UI Automation call for the login happens here
+        and they all share this thread's COM apartment (see
+        auto_fill_credentials and _drop_stale_uia_client).
+        """
         try:
+            _drop_stale_uia_client()
+
             # 1. VALORANT first - the Riot Client can't switch accounts under a
             #    running game, and confirm it's actually gone before moving on.
             if cls.is_valorant_running():
@@ -1463,31 +1568,10 @@ class ClientLauncher:
 
             subprocess.Popen([target_path], shell=False)
             _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
-
-            def _run_autofill():
-                # This runs on its own thread with no caller left to see an
-                # uncaught exception - without this it would just leave the
-                # login modal stuck on its last stage forever.
-                try:
-                    cls.auto_fill_credentials(username, password, True, stay_signed_in, target_path)
-                except Exception as e:
-                    login_logger.exception("[%s] auto-fill worker crashed", username)
-                    _set_login_stage("error", f"Login automation crashed: {e}", username)
-
-            import threading
-            threading.Thread(target=_run_autofill, daemon=True).start()
-
-            return {
-                "success": True,
-                "message": f"Logging in to {username}..."
-            }
+            cls.auto_fill_credentials(username, password, True, stay_signed_in, target_path)
         except Exception as e:
-            login_logger.exception("[%s] login_account failed to start", username)
-            _set_login_stage("error", f"Failed to start Riot Client: {str(e)}", username)
-            return {
-                "success": False,
-                "message": f"Failed to start Riot Client: {str(e)}"
-            }
+            login_logger.exception("[%s] restart-login worker crashed", username)
+            _set_login_stage("error", f"Login automation crashed: {e}", username)
 
     @staticmethod
     def force_kill_riot_client():
