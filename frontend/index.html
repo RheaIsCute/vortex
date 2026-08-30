@@ -726,10 +726,13 @@
                     <div class="overlay-hotkey-row">
                         <label for="settings-overlay-hotkey" class="overlay-hotkey-label">Shortcut</label>
                         <input type="text" id="settings-overlay-hotkey" class="form-control overlay-hotkey-input"
-                               placeholder="CTRL+SHIFT+F8" autocomplete="off" spellcheck="false">
+                               placeholder="Click, then press your keys" autocomplete="off" spellcheck="false"
+                               readonly aria-describedby="overlay-hotkey-help">
+                        <button type="button" class="btn-ghost overlay-hotkey-clear" id="overlay-hotkey-clear"
+                                title="Reset to SHIFT+5"><i class="fa-solid fa-rotate-left"></i></button>
                     </div>
                     <p class="field-help" id="overlay-hotkey-help">
-                        One or more of CTRL / ALT / SHIFT / WIN, plus a letter, digit, or F1-F24. CTRL+SHIFT+F8 avoids game and Windows shortcuts. Applies on next launch.
+                        Click the box and press the combination you want. One or more of CTRL / ALT / SHIFT / WIN, plus a letter, digit, or F1-F24. Applies on next launch.
                     </p>
                 </div>
 

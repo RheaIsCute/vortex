@@ -6440,7 +6440,7 @@ body.dashboard-mode .session-bar {
 /* Tile row */
 .stat-tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
     gap: 10px;
 }
 
@@ -6448,6 +6448,10 @@ body.dashboard-mode .session-bar {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    /* Grid items default to min-width:auto, so an over-long value (the
+       "15.5/13.2/4.8" K/D/A line) pushed past the tile and sat on top of the
+       one next to it instead of being contained. */
+    min-width: 0;
     padding: 13px 15px;
     border-radius: var(--radius-md);
     border: 1px solid var(--stroke-1);
@@ -6475,7 +6479,13 @@ body.dashboard-mode .session-bar {
     font-weight: 700;
     color: var(--text-main);
     line-height: 1.1;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
+
+/* Values that are inherently long (a full K/D/A triple) get their own size so
+   they stay on one line instead of wrapping or overflowing. */
+.stat-tile-value.is-compact { font-size: 15px; }
 
 .stat-tile-sub {
     font-size: 11px;
@@ -7604,6 +7614,22 @@ button.match-card, button.stat-match, button.dash-player {
 .overlay-hotkey-input.is-invalid {
     border-color: var(--danger);
 }
+
+/* It's a recorder, not a text field - the caret would imply you can type. */
+.overlay-hotkey-input { cursor: pointer; caret-color: transparent; }
+
+.overlay-hotkey-input.is-recording {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(var(--a-rgb), .18);
+}
+
+.overlay-hotkey-clear {
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+}
+.overlay-hotkey-clear:hover { color: var(--text); }
 
 #overlay-hotkey-help.is-error {
     color: var(--danger);

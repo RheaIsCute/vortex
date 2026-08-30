@@ -2127,6 +2127,11 @@ def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
     Win/loss form and the RR graph. Competitive updates carry the RR delta
     for each match, which is enough to classify the result without paying for
     a full match-details fetch per game.
+
+    Riot returns these newest-first. The streak is read in that order, but
+    both series are handed out oldest-first and over the same matches, so the
+    graph and the W/L pips under it describe the same games in the same
+    direction - they used to run opposite ways over different lengths.
     """
     form: List[Dict[str, Any]] = []
     rr_history: List[int] = []
@@ -2154,7 +2159,13 @@ def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
             "tier": int(u.get("TierAfterUpdate", 0) or 0),
             "map": resolve_map(u.get("MapID", "")).get("name", ""),
         })
-        rr_history.append(int(u.get("RankedRatingAfterUpdate", 0) or 0))
+        # Ladder position, not RR-within-tier. Raw RR wraps to ~0 on a
+        # promotion, so plotting it drew a cliff every time the player ranked
+        # *up*. Folding the tier in keeps the line monotonic with progress.
+        rr_history.append(
+            int(u.get("TierAfterUpdate", 0) or 0) * 100
+            + int(u.get("RankedRatingAfterUpdate", 0) or 0)
+        )
 
     streak, streak_type = 0, ""
     for entry in form:
@@ -2169,9 +2180,10 @@ def _form_from_updates(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
     wins = sum(1 for f in form if f["result"] == "Win")
     losses = sum(1 for f in form if f["result"] == "Loss")
 
+    FORM_GAMES = 12
     return {
-        "form": form[:12],
-        "rr_history": list(reversed(rr_history[:15])),
+        "form": list(reversed(form[:FORM_GAMES])),
+        "rr_history": list(reversed(rr_history[:FORM_GAMES])),
         "streak": streak,
         "streak_type": streak_type,
         "recent_wins": wins,

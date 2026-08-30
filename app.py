@@ -279,7 +279,7 @@ def _start_overlay_hotkey(toggle):
     if settings.get("overlay_enabled", "1") == "0":
         return None
 
-    spec = settings.get("overlay_hotkey", "CTRL+SHIFT+F8") or "CTRL+SHIFT+F8"
+    spec = settings.get("overlay_hotkey", "SHIFT+5") or "SHIFT+5"
     hotkey = OverlayHotkey()
     error = hotkey.start(spec, toggle)
     if error:

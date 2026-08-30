@@ -187,7 +187,7 @@ class Database:
                 ("auto_launch_after_login", "0"),
                 # Native quick panel, summoned globally by the hotkey below.
                 ("overlay_enabled", "1"),
-                ("overlay_hotkey", "CTRL+SHIFT+F8"),
+                ("overlay_hotkey", "SHIFT+5"),
                 # Install (if missing) and tray-start Overwolf alongside
                 # VALORANT, so live combat stats work without being set up.
                 ("overwolf_auto", "1"),
@@ -195,14 +195,11 @@ class Database:
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-            # SHIFT+5 was the original default, but it collides with ordinary
-            # typing and can trigger awkward shell/taskbar focus transitions
-            # while a fullscreen game owns the keyboard. Move only that exact
-            # legacy default; custom shortcuts remain untouched.
-            cursor.execute(
-                "UPDATE settings SET value = 'CTRL+SHIFT+F8' "
-                "WHERE key = 'overlay_hotkey' AND UPPER(REPLACE(value, ' ', '')) = 'SHIFT+5'"
-            )
+            # (A migration used to rewrite SHIFT+5 to CTRL+SHIFT+F8 here. It is
+            # gone because SHIFT+5 is the wanted default again, and a migration
+            # that rewrites one specific value can never be told apart from the
+            # user deliberately choosing it - it just undid their choice on
+            # every startup.)
 
             # Migrate any legacy 'Smurf' tags to 'Ranked' (if level >= 20) or 'Unrated'
             cursor.execute("UPDATE accounts SET tag = 'Ranked' WHERE UPPER(tag) = 'SMURF' AND level >= 20")

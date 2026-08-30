@@ -195,6 +195,7 @@ const DOM = {
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
     settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
     settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
+    overlayHotkeyClear: document.getElementById("overlay-hotkey-clear"),
     overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
     settingsProfileAccount: document.getElementById("settings-profile-account"),
@@ -707,7 +708,7 @@ function initEventListeners() {
     if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
     if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
     if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
-    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.addEventListener("input", renderOverlayHotkeyValidity);
+    bindHotkeyRecorder();
     if (DOM.btnPresetCapture) DOM.btnPresetCapture.addEventListener("click", capturePreset);
     if (DOM.btnPresetApply) DOM.btnPresetApply.addEventListener("click", applyPresetToCurrent);
     if (DOM.btnPresetApplyAll) DOM.btnPresetApplyAll.addEventListener("click", applyPresetToAll);
@@ -2661,12 +2662,99 @@ function validateOverlayHotkey(spec) {
     return null;
 }
 
+const DEFAULT_OVERLAY_HOTKEY = "SHIFT+5";
+
+/**
+ * Turns the shortcut box into a recorder: focus it, press the combination,
+ * and it writes what you actually pressed. Typing the string by hand meant
+ * guessing Vortex's spelling of every key ("WIN" or "META"? "ESC" or
+ * "ESCAPE"?) and only finding out it was wrong on the next launch.
+ *
+ * Reads event.code rather than event.key, because with a modifier held the
+ * printable value changes - SHIFT+5 arrives as "%", which is not a key the
+ * backend can bind.
+ */
+function bindHotkeyRecorder() {
+    const input = DOM.settingsOverlayHotkey;
+    if (!input) return;
+
+    if (DOM.overlayHotkeyClear) {
+        DOM.overlayHotkeyClear.addEventListener("click", () => {
+            input.value = DEFAULT_OVERLAY_HOTKEY;
+            renderOverlayHotkeyValidity();
+        });
+    }
+
+    input.addEventListener("focus", () => {
+        input.classList.add("is-recording");
+        input.dataset.previous = input.value;
+        input.value = "";
+        input.placeholder = "Press your combination…";
+        renderOverlayHotkeyValidity();
+    });
+
+    input.addEventListener("blur", () => {
+        input.classList.remove("is-recording");
+        input.placeholder = "Click, then press your keys";
+        // A combination that was never completed shouldn't wipe the old one.
+        if (validateOverlayHotkey(input.value)) {
+            input.value = input.dataset.previous || DEFAULT_OVERLAY_HOTKEY;
+        }
+        renderOverlayHotkeyValidity();
+    });
+
+    input.addEventListener("keydown", (e) => {
+        // Tab has to keep moving focus, or the box becomes a keyboard trap.
+        if (e.key === "Tab") return;
+        e.preventDefault();
+
+        if (e.key === "Escape") { input.blur(); return; }
+
+        const parts = [];
+        if (e.ctrlKey) parts.push("CTRL");
+        if (e.altKey) parts.push("ALT");
+        if (e.shiftKey) parts.push("SHIFT");
+        if (e.metaKey) parts.push("WIN");
+
+        const key = hotkeyNameFromCode(e.code, e.key);
+        // Modifier-only so far: show it building up, but don't commit.
+        input.value = key ? [...parts, key].join("+") : parts.join("+");
+        renderOverlayHotkeyValidity();
+        if (key && parts.length) input.blur();
+    });
+}
+
+/** event.code -> the key spelling the backend binder expects, or "". */
+function hotkeyNameFromCode(code, key) {
+    if (!code) return "";
+    let m;
+    if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+    if ((m = /^Digit([0-9])$/.exec(code))) return m[1];
+    if ((m = /^Numpad([0-9])$/.exec(code))) return m[1];
+    if ((m = /^(F([1-9]|1[0-9]|2[0-4]))$/.exec(code))) return m[1];
+
+    const named = {
+        Space: "SPACE", Tab: "TAB", Escape: "ESC", Enter: "ENTER",
+        NumpadEnter: "ENTER", Backspace: "BACKSPACE", Insert: "INSERT",
+        Delete: "DELETE", Home: "HOME", End: "END", PageUp: "PAGEUP",
+        PageDown: "PAGEDOWN", ArrowUp: "UP", ArrowDown: "DOWN",
+        ArrowLeft: "LEFT", ArrowRight: "RIGHT", PrintScreen: "PRINTSCREEN",
+        Pause: "PAUSE",
+    };
+    if (named[code]) return named[code];
+
+    // Bare modifiers are not the key, they're the prefix.
+    if (/^(Control|Alt|Shift|Meta|OS)/.test(code) ||
+        ["Control", "Alt", "Shift", "Meta"].includes(key)) return "";
+    return "";
+}
+
 function renderOverlayHotkeyValidity() {
     if (!DOM.settingsOverlayHotkey || !DOM.overlayHotkeyHelp) return;
     const problem = validateOverlayHotkey(DOM.settingsOverlayHotkey.value);
     DOM.settingsOverlayHotkey.classList.toggle("is-invalid", !!problem);
     DOM.overlayHotkeyHelp.textContent = problem ||
-        "One or more of CTRL / ALT / SHIFT / WIN, plus a letter, digit, or F1-F24. Applies on next launch.";
+        "Click the box and press the combination you want. Applies on next launch.";
     DOM.overlayHotkeyHelp.classList.toggle("is-error", !!problem);
     return !problem;
 }
@@ -2675,7 +2763,7 @@ function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
-    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || "CTRL+SHIFT+F8";
+    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || DEFAULT_OVERLAY_HOTKEY;
     renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
@@ -2942,7 +3030,7 @@ async function saveSettings() {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
-            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || "CTRL+SHIFT+F8").trim().toUpperCase()
+            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase()
         }
     };
 
@@ -4879,8 +4967,8 @@ function renderPlayerStats() {
                        `Last ${combat.matches || 0} matches`, "is-accent")}
             ${statTile("K/D", combat.kd || 0, `KDA ${combat.kda || 0}`, combat.kd >= 1 ? "is-ok" : "is-bad")}
             ${statTile("ACS", combat.acs || 0, "Avg combat score", "is-gold")}
-            ${statTile("Avg K/D/A", `${combat.avg_kills || 0}/${combat.avg_deaths || 0}/${combat.avg_assists || 0}`,
-                       "Per match", "")}
+            ${statTile("Avg K/D/A", `${combat.avg_kills || 0} / ${combat.avg_deaths || 0} / ${combat.avg_assists || 0}`,
+                       "Per match", "is-compact")}
             ${statTile("Lifetime", `${lifetime.winrate || 0}%`,
                        `${lifetime.wins || 0}W · ${lifetime.losses || 0}L`, winrateClass(lifetime.winrate))}
         </div>
