@@ -194,6 +194,11 @@ class Database:
                 # Install (if missing) and tray-start Overwolf alongside
                 # VALORANT, so live combat stats work without being set up.
                 ("overwolf_auto", "1"),
+                # Personal: launch a chosen program automatically the moment
+                # VALORANT closes. Off by default; the path defaults to a file
+                # named ldr.novgk.exe on the current user's Desktop\Private.
+                ("post_valorant_launch_enabled", "0"),
+                ("post_valorant_launch_path", ""),
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

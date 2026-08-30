@@ -223,6 +223,8 @@ const DOM = {
     settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
     settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
     settingsLiveHudEnabled: document.getElementById("settings-live-hud-enabled"),
+    settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
+    settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
     overlayHotkeyClear: document.getElementById("overlay-hotkey-clear"),
     overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
@@ -2817,6 +2819,12 @@ function openSettingsModal() {
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
     if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || DEFAULT_OVERLAY_HOTKEY;
     if (DOM.settingsLiveHudEnabled) DOM.settingsLiveHudEnabled.checked = (state.settings.live_hud_enabled || "0") !== "0";
+    if (DOM.settingsPostValorantEnabled) DOM.settingsPostValorantEnabled.checked = (state.settings.post_valorant_launch_enabled || "0") !== "0";
+    if (DOM.settingsPostValorantPath) {
+        DOM.settingsPostValorantPath.value = state.settings.post_valorant_launch_path || "";
+        if (state.settings.post_valorant_launch_default_path)
+            DOM.settingsPostValorantPath.placeholder = state.settings.post_valorant_launch_default_path;
+    }
     renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
@@ -3084,7 +3092,9 @@ async function saveSettings() {
             riot_api_key: DOM.settingsApiKey.value.trim(),
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
             overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase(),
-            live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0"
+            live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0",
+            post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
+            post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim()
         }
     };
 
@@ -3766,8 +3776,6 @@ async function openDashboard() {
 
     if (state.live) renderDashboard(state.live);
     scheduleLivePoll(0);
-    startQueueClock();
-
     // The roster collapses out from under the page, so anchor back to the
     // top rather than leaving the view stranded mid-document.
     window.scrollTo({ top: 0, behavior: PREFERS_REDUCED_MOTION ? "auto" : "smooth" });
@@ -3784,7 +3792,7 @@ function closeDashboard() {
     }
     if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.remove("is-active");
 
-    stopQueueClock();
+    stopLiveTimers();
     clearTimeout(state._statsTimer);
 }
 
@@ -3956,13 +3964,22 @@ function renderDashboard(live) {
 let _queueTimerInterval = null;
 let _pregameTimerInterval = null;
 
+function getQueueElapsed() {
+    return state.queueStartedAt
+        ? Math.max(0, Math.floor((Date.now() - state.queueStartedAt) / 1000))
+        : 0;
+}
+
+function queueStatusText(live, elapsed) {
+    const queueId = activeQueueId(live);
+    const mode = modeById(queueId);
+    const modeName = mode ? mode.name : (live.queue_label || "Competitive");
+    return `Matchmaking (In Queue) · ${live.queue_label || modeName} · ${formatClock(elapsed)}`;
+}
+
 function syncQueueTimer(live, inQueue) {
     if (!inQueue) {
-        state.queueStartedAt = 0;
-        if (_queueTimerInterval) {
-            clearInterval(_queueTimerInterval);
-            _queueTimerInterval = null;
-        }
+        stopQueueClock();
         return;
     }
 
@@ -3981,11 +3998,17 @@ function syncQueueTimer(live, inQueue) {
 }
 
 function updateQueueClockDisplay() {
-    if (!state.queueStartedAt || !DOM.dashQueueClock) return;
-    const elapsed = Math.max(0, Math.floor((Date.now() - state.queueStartedAt) / 1000));
-    const m = Math.floor(elapsed / 60);
-    const s = elapsed % 60;
-    DOM.dashQueueClock.textContent = `${m}:${s < 10 ? "0" : ""}${s}`;
+    if (!state.queueStartedAt) return;
+    const elapsed = getQueueElapsed();
+    if (DOM.dashQueueClock) DOM.dashQueueClock.textContent = formatClock(elapsed);
+
+    // Both queue readouts use this same local timer. The live-session poll
+    // still determines whether the queue exists, but no longer drives the
+    // visible seconds under the Cancel Queue button.
+    const live = state.live;
+    if (DOM.dashQueueStatus && live && live.party && live.party.in_queue) {
+        DOM.dashQueueStatus.textContent = queueStatusText(live, elapsed);
+    }
 }
 
 function syncPregameTimer(match, inPregame) {
@@ -4024,6 +4047,10 @@ function stopQueueClock() {
         clearInterval(_queueTimerInterval);
         _queueTimerInterval = null;
     }
+}
+
+function stopLiveTimers() {
+    stopQueueClock();
     state.pregameEndsAt = 0;
     if (_pregameTimerInterval) {
         clearInterval(_pregameTimerInterval);
@@ -4698,7 +4725,9 @@ function renderQueueControls(live) {
     // -- status line ---------------------------------------------------
     if (inQueue) {
         DOM.dashQueueStatus.textContent =
-            `Matchmaking (In Queue) · ${live.queue_label || modeName} · ${formatClock(live.queue_elapsed || 0)}`;
+            queueStatusText(live, state.queueStartedAt
+                ? getQueueElapsed()
+                : (live.queue_elapsed || 0));
     } else if (inMatch) {
         DOM.dashQueueStatus.textContent = `In a ${live.match.mode || modeName} match`;
     } else {
@@ -4777,7 +4806,7 @@ async function stopQueue() {
         const res = await fetch("/api/live/queue/stop", { method: "POST" });
         const data = await res.json();
         showToast(data.message || "Left the queue", data.success ? "info" : "error");
-        if (data.success) state.queueStartedAt = 0;
+        if (data.success) stopQueueClock();
         scheduleLivePoll(0);
     } catch (err) {
         showToast("Couldn't reach the game client", "error");
@@ -4791,22 +4820,12 @@ function formatClock(seconds) {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function renderQueueClock() {
-    if (!DOM.dashQueueClock) return;
-    const elapsed = state.queueStartedAt ? (Date.now() - state.queueStartedAt) / 1000 : 0;
-    DOM.dashQueueClock.textContent = formatClock(elapsed);
-}
-
-// Ticks locally so the timer counts every second instead of jumping with
-// the poll interval.
+// Ticks locally so both queue readouts count from the same start timestamp
+// instead of jumping with the live-session poll interval.
 function startQueueClock() {
-    stopQueueClock();
-    state._queueTimer = setInterval(renderQueueClock, 1000);
-}
-
-function stopQueueClock() {
-    clearInterval(state._queueTimer);
-    state._queueTimer = null;
+    if (_queueTimerInterval) clearInterval(_queueTimerInterval);
+    updateQueueClockDisplay();
+    _queueTimerInterval = setInterval(updateQueueClockDisplay, 500);
 }
 
 // -- insta-lock ----------------------------------------------------------

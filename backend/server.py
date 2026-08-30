@@ -720,6 +720,61 @@ async def _auto_refresh_loop():
         await asyncio.sleep(AUTO_REFRESH_INTERVAL_SECONDS)
 
 
+def _default_post_valorant_path() -> str:
+    """Desktop\\Private\\ldr.novgk.exe for the current user, if it exists."""
+    home = os.path.expanduser("~")
+    for base in (os.path.join(home, "Desktop"),
+                 os.path.join(home, "OneDrive", "Desktop")):
+        candidate = os.path.join(base, "Private", "ldr.novgk.exe")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(home, "Desktop", "Private", "ldr.novgk.exe")
+
+
+def _post_valorant_watch_loop() -> None:
+    """
+    Launches a user-chosen program the moment VALORANT closes.
+
+    Watches the running->not-running edge of VALORANT. Only fires on a real
+    transition (so it never triggers on startup when the game isn't running),
+    and only once per close until the game is seen running again.
+    """
+    was_running = launcher.is_valorant_running()
+    while True:
+        time.sleep(4.0)
+        try:
+            running = launcher.is_valorant_running()
+        except Exception:
+            continue
+        if running:
+            was_running = True
+            continue
+        if not was_running:
+            continue
+        # running -> not running: VALORANT just closed.
+        was_running = False
+        try:
+            settings = db.get_settings()
+            if (settings.get("post_valorant_launch_enabled") or "0") == "0":
+                continue
+            path = (settings.get("post_valorant_launch_path") or "").strip() \
+                or _default_post_valorant_path()
+            if not os.path.exists(path):
+                client_launcher.login_logger.warning(
+                    "post-valorant launch: %r does not exist, skipping", path
+                )
+                continue
+            subprocess.Popen([path], shell=False,
+                             cwd=os.path.dirname(path) or None)
+            client_launcher.login_logger.info(
+                "post-valorant launch: started %s", path
+            )
+        except Exception:
+            client_launcher.login_logger.exception(
+                "post-valorant launch failed"
+            )
+
+
 @app.on_event("startup")
 async def _start_background_workers():
     global _auto_refresh_task
@@ -730,6 +785,8 @@ async def _start_background_workers():
         pass
     if _auto_refresh_task is None:
         _auto_refresh_task = asyncio.create_task(_auto_refresh_loop())
+    threading.Thread(target=_post_valorant_watch_loop,
+                     name="vortex-post-valorant-watch", daemon=True).start()
 
 
 # DYNAMIC PARAMETERIZED ROUTES
@@ -1035,7 +1092,9 @@ async def stats_summary():
 
 @app.get("/api/settings")
 async def get_settings():
-    return db.get_settings()
+    s = db.get_settings()
+    s["post_valorant_launch_default_path"] = _default_post_valorant_path()
+    return s
 
 
 @app.post("/api/settings")
@@ -3262,7 +3321,7 @@ async def live_set_instalock(req: InstalockRequest):
     state = await asyncio.to_thread(valorant_client.arm_instalock, req.agent_id, agent["name"])
     return {
         "success": True,
-        "message": f"Insta-lock armed for {agent['name']}.",
+        "message": f"Auto Lock enabled for: {agent['name']}",
         "instalock": state
     }
 
