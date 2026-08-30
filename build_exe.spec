@@ -25,6 +25,10 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 
 hidden_imports = [
+    # multiprocessing's frozen bootstrap imports socket dynamically; keep
+    # the stdlib module in the bundle so packaged startup cannot fail with
+    # "No module named 'socket'" before the WebView is created.
+    "socket",
     "win32timezone",
     # UI Automation is how the Riot Client's "Stay signed in" checkbox is
     # found and set. comtypes generates its typelib wrappers at runtime, so
