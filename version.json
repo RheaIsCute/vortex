@@ -1,5 +1,5 @@
 {
-  "version": "5.5.15",
+  "version": "5.5.17",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.15: fixes the incomplete 5.5.14 update that could leave the app unable to start (missing modules on launch). This release reinstalls the full application."
+  "changelog": "Vortex v5.5.17: fixes the in-game Live Aim HUD rendering as a black rectangle, and gives it a smaller, smoother edge-to-edge design."
 }

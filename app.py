@@ -224,14 +224,26 @@ def _make_live_hud_controller(hud_window):
     """Returns the desktop bridge used by Settings to show/hide the aim HUD."""
     state = {"hwnd": 0, "visible": False}
 
-    def _apply_clickthrough(h: int):
+    def _set_ex_style(h: int, add_transparent: bool):
         try:
             ex_style = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
-            new_ex = (ex_style | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+            # WS_EX_LAYERED is NOT needed for click-through and is actively
+            # harmful: a layered window with no SetLayeredWindowAttributes call
+            # composites as an opaque black rectangle on many GPUs once WebView2
+            # re-lays out - exactly how the HUD went solid black. Always clear
+            # it. WS_EX_TRANSPARENT (mouse pass-through) goes on the top-level
+            # window only; forcing it onto the WebView2 render child can stop
+            # that child painting on some runtime versions.
+            new_ex = (ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW & ~WS_EX_LAYERED
+            if add_transparent:
+                new_ex |= WS_EX_TRANSPARENT
             if ex_style != new_ex:
                 win32gui.SetWindowLong(h, win32con.GWL_EXSTYLE, new_ex)
         except Exception:
             pass
+
+    def _apply_clickthrough(h: int):
+        _set_ex_style(h, add_transparent=True)
 
     def _apply_all_children(parent_hwnd: int):
         if not parent_hwnd or not win32gui.IsWindow(parent_hwnd):
@@ -239,7 +251,7 @@ def _make_live_hud_controller(hud_window):
         _apply_clickthrough(parent_hwnd)
         try:
             def _child_cb(chwnd, _):
-                _apply_clickthrough(chwnd)
+                _set_ex_style(chwnd, add_transparent=False)
                 return True
             win32gui.EnumChildWindows(parent_hwnd, _child_cb, None)
         except Exception:
