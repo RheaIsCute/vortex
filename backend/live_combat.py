@@ -1,112 +1,280 @@
-"""Read-only, best-effort live combat events from VALORANT's own game log.
+"""Read exact live VALORANT combat data from Overwolf's first-party GEP log.
 
-Riot's match-details endpoint often withholds combat totals until the match is
-finished. The game does append local-agent voice events while a round is
-happening. This tails that file without touching the game process or input.
+Riot's local core-game endpoint exposes the live roster but not its scoreboard,
+and match-details normally stays empty until the game ends. Overwolf's official
+VALORANT Game Events Provider (GEP) writes a log while you play that carries
+your own running kills/deaths/assists/headshots, a per-round hit report, and a
+kill feed. This module tails that log - no game memory, no injected input, no
+scraping another app's UI.
+
+What GEP actually gives us (verified against real logs):
+  featureName "kill"       key "kills" / "assists" / "headshots"  -> your totals
+  featureName "death"      key "deaths"                           -> your total
+  featureName "me"         key "player_name"                      -> "Name#Tag"
+  featureName "match_info" key "match_id"                         -> match uuid
+  featureName "match_info" key "round_report"  (JSON string)      -> your round
+  featureName "match_info" key "kill_feed"     (JSON string)      -> one kill
+
+There is NO full live scoreboard for other players. Their kills/deaths are
+rebuilt from the kill feed by game name, which is best-effort: it misses kills
+that happened before Overwolf attached and can't see assists for anyone but
+you. The local player shows in the feed under a client-locale token
+("自分", "You", ...), so their numbers always come from the exact "kill" /
+"death" totals instead.
 """
 
 from __future__ import annotations
 
+import glob
+import json
 import os
 import re
 import threading
-from typing import Dict
+import time
+from typing import Any, Dict, List
+
+_INFO_RE = re.compile(r"\[GEP\] info update\s+(\{.*\})\s*$")
+_MAX_LOG_AGE = 12 * 60 * 60
+_FRESH_PROVIDER_AGE = 90
 
 
-_AGENT_RE = re.compile(r"(?i)Current character:\s+Default__([A-Za-z0-9]+)_PC_C")
-_MATCH_RE = re.compile(r"(?i)MatchId:\s*([a-f0-9-]{36})")
-_INGAME_RE = re.compile(r"Reconcile called with the current state: InGame", re.I)
-_KILL_RE = re.compile(r"(?i)Play_VO_([A-Za-z0-9]+)_E02_Kill")
-_DEATH_RE = re.compile(r"(?i)Play_VO_([A-Za-z0-9]+)_DeathEffort")
-_HEADSHOT_RE = re.compile(r"(?i)Play_VO_([A-Za-z0-9]+)(?:_E\d+)?_HeadshotKill(?:_\d+)?")
+def _json_value(value: Any) -> Any:
+    """GEP nests some payloads (round_report, kill_feed) as JSON strings."""
+    if isinstance(value, str) and value[:1] in ("{", "["):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def _blank_scoreline() -> Dict[str, int]:
+    return {"kills": 0, "deaths": 0, "headshots": 0}
 
 
 class LiveCombatTracker:
-    """Stateful tailer for the current local match."""
+    """Stateful tailer for Overwolf's current VALORANT GEP session."""
 
-    def __init__(self) -> None:
+    def __init__(self, log_dir: str = "") -> None:
         self._lock = threading.Lock()
+        self._log_dir_override = log_dir
         self._match_id = ""
-        self._offset = 0
-        self._agent = ""
         self._active = False
-        self._counts = {"kills": 0, "deaths": 0, "headshot_kills": 0}
+        self._offsets: Dict[str, int] = {}
+        self._local_name = ""
+        self._local = {"kills": None, "deaths": None, "assists": None, "headshot_kills": None}
+        self._feed: Dict[str, Dict[str, int]] = {}
+        self._round_reports: List[Dict[str, Any]] = []
+        self._latest_event_at = 0.0
 
-    @staticmethod
-    def _log_path() -> str:
-        return os.path.join(os.getenv("LOCALAPPDATA") or "", "VALORANT", "Saved", "Logs", "ShooterGame.log")
+    def _log_dir(self) -> str:
+        if self._log_dir_override:
+            return self._log_dir_override
+        return os.path.join(
+            os.getenv("LOCALAPPDATA") or "", "Overwolf", "Log", "Apps",
+            "Overwolf General GameEvents Provider",
+        )
+
+    def _files(self) -> List[str]:
+        now = time.time()
+        fresh = []
+        for path in glob.glob(os.path.join(self._log_dir(), "index.html*.log")):
+            try:
+                if now - os.path.getmtime(path) <= _MAX_LOG_AGE:
+                    fresh.append(path)
+            except OSError:
+                continue
+        return sorted(fresh, key=lambda p: (os.path.getmtime(p), p))
 
     def _reset(self, match_id: str) -> None:
-        self._match_id, self._offset, self._agent, self._active = match_id, 0, "", False
-        self._counts = {"kills": 0, "deaths": 0, "headshot_kills": 0}
+        self._match_id = match_id
+        self._active = False
+        self._offsets = {}
+        self._clear_match_state()
+
+    def _clear_match_state(self) -> None:
+        self._local = {"kills": None, "deaths": None, "assists": None, "headshot_kills": None}
+        self._feed = {}
+        self._round_reports = []
+        self._latest_event_at = 0.0
+
+    def _feed_for(self, name: str) -> Dict[str, int]:
+        return self._feed.setdefault(name, _blank_scoreline())
+
+    def _consume_kill_feed(self, kf: Dict[str, Any]) -> None:
+        # assist1..4 hold agent icon asset names, not players, so kill-feed
+        # scorelines are kills/deaths/headshots only.
+        attacker = str(kf.get("attacker") or "").strip().lower()
+        victim = str(kf.get("victim") or "").strip().lower()
+        if attacker:
+            line = self._feed_for(attacker)
+            line["kills"] += 1
+            if kf.get("headshot"):
+                line["headshots"] += 1
+        if victim:
+            self._feed_for(victim)["deaths"] += 1
+
+    def _consume_update(self, payload: Dict[str, Any], wanted_match: str) -> None:
+        feature = str(payload.get("featureName") or "")
+        key = str(payload.get("key") or "")
+        value = _json_value(payload.get("value"))
+
+        if feature == "me" and key == "player_name" and value:
+            self._local_name = str(value)
+            return
+
+        if feature == "match_info" and key == "match_id":
+            now_active = str(value or "").lower() == wanted_match.lower()
+            if now_active and not self._active:
+                # Entering our match - drop anything gathered from an earlier
+                # match still sitting in the same log file.
+                self._clear_match_state()
+            self._active = now_active
+            return
+
+        if not self._active:
+            return
+        self._latest_event_at = time.time()
+
+        if feature == "kill" and key in ("kills", "assists", "headshots"):
+            self._local["headshot_kills" if key == "headshots" else key] = int(value or 0)
+            return
+        if feature == "death" and key == "deaths":
+            self._local["deaths"] = int(value or 0)
+            return
+
+        if feature == "match_info" and key == "round_report" and isinstance(value, dict):
+            self._round_reports.append({
+                "damage": float(value.get("damage") or 0),
+                "headshots": int(value.get("headshot") or 0) + int(value.get("final_headshot") or 0),
+                "bodyshots": int(value.get("bodyshots") or 0),
+                "legshots": int(value.get("legshots") or 0),
+            })
+            return
+
+        if feature == "match_info" and key == "kill_feed" and isinstance(value, dict):
+            self._consume_kill_feed(value)
 
     def _consume_line(self, line: str, wanted_match: str) -> None:
-        agent = _AGENT_RE.search(line)
-        if agent:
-            self._agent = agent.group(1).lower()
+        found = _INFO_RE.search(line)
+        if not found:
+            return
+        try:
+            payload = json.loads(found.group(1))
+        except (TypeError, ValueError):
+            return
+        if isinstance(payload, dict):
+            self._consume_update(payload, wanted_match)
 
-        match = _MATCH_RE.search(line)
-        if match and match.group(1).lower() == wanted_match.lower():
-            self._active = True
-            self._counts = {"kills": 0, "deaths": 0, "headshot_kills": 0}
-            return
-        if not self._active and _INGAME_RE.search(line):
-            self._active = True
-            self._counts = {"kills": 0, "deaths": 0, "headshot_kills": 0}
-            return
-        if not self._active or not self._agent:
-            return
+    def _read_updates(self, wanted_match: str) -> List[str]:
+        files = self._files()
+        live_set = set(files)
+        self._offsets = {p: n for p, n in self._offsets.items() if p in live_set}
+        for path in files:
+            try:
+                size = os.path.getsize(path)
+                offset = self._offsets.get(path, 0)
+                if size < offset:
+                    offset = 0
+                if size == offset:
+                    continue
+                with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                    handle.seek(offset)
+                    for line in handle:
+                        self._consume_line(line, wanted_match)
+                    self._offsets[path] = handle.tell()
+            except OSError:
+                continue
+        return files
 
-        kill = _KILL_RE.search(line)
-        if kill and kill.group(1).lower() == self._agent:
-            self._counts["kills"] += 1
-            return
-        death = _DEATH_RE.search(line)
-        if death and death.group(1).lower() == self._agent:
-            self._counts["deaths"] += 1
-            return
-        headshot = _HEADSHOT_RE.search(line)
-        if headshot and headshot.group(1).lower() == self._agent:
-            self._counts["headshot_kills"] += 1
+    def _players_payload(self) -> Dict[str, Dict[str, Any]]:
+        """Kill-feed scorelines keyed by lowercase game name (no tag)."""
+        local_key = self._local_name.split("#")[0].strip().lower()
+        out: Dict[str, Dict[str, Any]] = {}
+        for name, line in self._feed.items():
+            if name == local_key:
+                continue  # local player is the exact-totals path, not the feed
+            out[name] = {
+                "available": True,
+                "kills": line["kills"],
+                "deaths": line["deaths"],
+                "headshots": line["headshots"],
+            }
+        return out
 
     def snapshot(self, match_id: str) -> Dict[str, object]:
-        """Return immediately updated local event totals, if the log has them."""
-        path = self._log_path()
-        if not match_id or not os.path.exists(path):
-            return {"available": False}
+        """Current-game local combat totals plus a best-effort kill-feed scoreboard."""
+        if not match_id:
+            return {"available": False, "provider": "overwolf_gep"}
 
         with self._lock:
             if self._match_id != match_id:
                 self._reset(match_id)
-            try:
-                size = os.path.getsize(path)
-                if self._offset == 0 or size < self._offset:
-                    start = max(0, size - 8 * 1024 * 1024)
-                    with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-                        handle.seek(start)
-                        if start:
-                            handle.readline()
-                        for line in handle:
-                            self._consume_line(line, match_id)
-                        self._offset = handle.tell()
-                elif size > self._offset:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-                        handle.seek(self._offset)
-                        for line in handle:
-                            self._consume_line(line, match_id)
-                        self._offset = handle.tell()
-            except OSError:
-                return {"available": False}
+            files = self._read_updates(match_id)
 
-            if not self._active:
-                return {"available": False}
-            kills = self._counts["kills"]
+            provider_mtime = 0.0
+            for path in files:
+                try:
+                    provider_mtime = max(provider_mtime, os.path.getmtime(path))
+                except OSError:
+                    pass
+            provider_fresh = bool(provider_mtime and time.time() - provider_mtime <= _FRESH_PROVIDER_AGE)
+
+            kills = self._local["kills"]
+            deaths = self._local["deaths"]
+            assists = self._local["assists"]
+            hs_kills = self._local["headshot_kills"]
+
+            damage = round(sum(r["damage"] for r in self._round_reports))
+            head = sum(r["headshots"] for r in self._round_reports)
+            body = sum(r["bodyshots"] for r in self._round_reports)
+            leg = sum(r["legshots"] for r in self._round_reports)
+            shots = head + body + leg
+            observed_rounds = len(self._round_reports)
+
+            players = self._players_payload()
+
+            # GEP only emits a "kill"/"death" update once you actually score, so
+            # a fresh match reads as None/None. Once a round has been reported
+            # you are demonstrably in the game, so unscored totals are really 0.
+            if observed_rounds > 0:
+                kills = int(kills or 0)
+                deaths = int(deaths or 0)
+                assists = int(assists or 0)
+            have_local = kills is not None or deaths is not None
+            available = bool(self._active and (have_local or players))
+
+            if not files:
+                reason = "Overwolf isn't installed, so exact live combat data isn't available."
+            elif not provider_fresh:
+                reason = "Start Overwolf before or during the match for exact live combat data."
+            elif not self._active:
+                reason = "Waiting for Overwolf's live provider to attach to this match."
+            else:
+                reason = ""
+
             return {
-                "available": True,
-                "source": "game_log",
-                "kills": kills,
-                "deaths": self._counts["deaths"],
-                "assists": None,
-                "headshot_kills": self._counts["headshot_kills"],
-                "headshot_kill_pct": round(self._counts["headshot_kills"] / kills * 100, 1) if kills else 0.0,
+                "available": available,
+                "provider": "overwolf_gep",
+                "source": "overwolf_gep",
+                "provider_fresh": provider_fresh,
+                "reason": reason,
+                "players": players,
+                "kills": int(kills) if kills is not None else None,
+                "deaths": int(deaths) if deaths is not None else None,
+                "assists": int(assists) if assists is not None else None,
+                "headshot_kills": int(hs_kills or 0),
+                "headshot_kill_pct": (
+                    round(int(hs_kills or 0) / max(1, int(kills or 0)) * 100, 1)
+                    if kills is not None else None
+                ),
+                "headshots": head,
+                "bodyshots": body,
+                "legshots": leg,
+                "shots": shots,
+                "hs_pct": round(head / shots * 100, 1) if shots else None,
+                "damage": damage,
+                "rounds_observed": observed_rounds,
+                "adr": round(damage / observed_rounds) if observed_rounds else None,
+                "acs": None,
             }

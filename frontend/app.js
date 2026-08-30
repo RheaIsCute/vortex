@@ -4037,7 +4037,7 @@ function renderMeCard(match) {
     const recent = me.recent || {};
     const hasCombat = !!cur.available;
     const inMatch = match.phase === "in_match";
-    const liveEventsOnly = cur.source === "game_log";
+    const gepLive = cur.source === "overwolf_gep";
 
     const num = (v, digits) => (v === null || v === undefined)
         ? "--"
@@ -4050,7 +4050,7 @@ function renderMeCard(match) {
     const combatTiles = [
         { k: "K / D / A", v: cur.kda_line || "--", c: hasCombat ? "is-kda" : "is-pending" },
         { k: "K/D", v: num(cur.kd, 2), c: goodBad(cur.kd, 1) },
-        { k: liveEventsOnly ? "HS Kills" : "Headshot %", v: liveEventsOnly ? pct(cur.headshot_kill_pct) : pct(cur.hs_pct), c: hasCombat ? "is-hs" : "is-pending" },
+        { k: cur.hs_pct != null ? "Headshot %" : "HS Kills", v: cur.hs_pct != null ? pct(cur.hs_pct) : pct(cur.headshot_kill_pct), c: hasCombat ? "is-hs" : "is-pending" },
         { k: "ADR", v: num(cur.adr), c: hasCombat ? "is-adr" : "is-pending" },
         { k: "ACS", v: num(cur.acs), c: hasCombat ? "is-acs" : "is-pending" }
     ];
@@ -4116,10 +4116,10 @@ function renderMeCard(match) {
         ? '<img src="' + me.tier_icon + '" class="dash-me-rank" alt="" onerror="this.style.display=\'none\';">'
         : "";
 
-    const pendingHtml = liveEventsOnly ?
+    const pendingHtml = gepLive ?
         '<div class="dash-me-pending is-live-feed">' +
             '<i class="fa-solid fa-satellite-dish"></i>' +
-            '<span>Live event feed: K/D updates the moment events reach your local game log. “HS Kills” is headshot kills per kill; Riot still supplies exact shot accuracy, ADR and ACS when available.</span>' +
+            '<span>Exact live K/D/A from Overwolf. Headshot accuracy and ADR use observed round reports; ACS becomes available when Riot publishes the completed match.</span>' +
         '</div>' : (hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
@@ -4309,6 +4309,25 @@ function renderRoster(el, players) {
                </div>`
             : "";
 
+        // Show exact current-game K/D when Overwolf's live provider has it for
+        // this player; otherwise the recent-match averages, same as always. The
+        // averages are never relabelled as live.
+        const live = (p.live && p.live.available) ? p.live : null;
+        const liveKd = live ? (Number(live.kills || 0) / Math.max(1, Number(live.deaths || 0))) : 0;
+        const liveKda = live
+            ? (live.assists != null
+                ? `${live.kills}/${live.deaths}/${live.assists}`
+                : `${live.kills}/${live.deaths}`)
+            : "";
+        const liveStatsHtml = live
+            ? stat("is-kd", "fa-crosshairs", liveKda, "Current match kills / deaths" + (live.assists != null ? " / assists" : "")) +
+              stat("is-kd", "fa-chart-line", `${liveKd.toFixed(2)} KD`, "Current match K/D") +
+              `<span class="dash-player-stat-pill is-live" title="Exact current-game numbers from Overwolf"><i class="fa-solid fa-satellite-dish"></i> LIVE</span>`
+            : stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "Recent matches K/D") +
+              stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Recent matches Headshot accuracy") +
+              stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Recent average damage per round") +
+              stat("is-wr", "fa-chart-simple", wrValue, wrTitle) + formPips;
+
         return `
             <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'))" title="Check this player's match history">
                 <div class="dash-player-lead">
@@ -4332,11 +4351,7 @@ function renderRoster(el, players) {
                             ${escapeHtml(p.peak_tier_label || "")}</span>` : ""}
                     </div>
                     <div class="dash-player-stats-row">
-                        ${stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "Recent matches K/D")}
-                        ${stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Recent matches Headshot accuracy")}
-                        ${stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Average damage per round")}
-                        ${stat("is-wr", "fa-chart-simple", wrValue, wrTitle)}
-                        ${formPips}
+                        ${liveStatsHtml}
                     </div>
                 </div>
 

@@ -1732,7 +1732,8 @@ def _live_probe(client, match_id: str, rounds_played: int = -1) -> Optional[Dict
 
 
 def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
-                queue_id: str, progress: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+                queue_id: str, progress: Optional[Dict[str, Any]] = None,
+                live_combat: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     The "you, right now" card: agent and rank straight from the match, plus two
     strictly separated combat lines.
@@ -1751,7 +1752,9 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
     progress = progress or {}
     rounds_played = int(progress.get("rounds_played", -1) or 0) if progress else -1
     live = _live_probe(client, match_id, rounds_played) if match_id else None
-    log_live = _LIVE_COMBAT.snapshot(match_id) if match_id else {"available": False}
+    event_live = live_combat if live_combat is not None else (
+        _LIVE_COMBAT.snapshot(match_id) if match_id else {"available": False}
+    )
 
     # What the round ledger alone can tell us about this match. This part is
     # live every poll, with no dependency on Riot publishing match details.
@@ -1766,7 +1769,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
 
     current: Dict[str, Any] = {
         "available": False,
-        "reason": "Riot publishes this match's combat stats when it ends.",
+        "reason": event_live.get("reason") or "Waiting for an exact live combat source.",
         "kills": None,
         "deaths": None,
         "assists": None,
@@ -1794,31 +1797,32 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "defense_record": {"won": defense_won, "played": defense_played},
     }
 
-    # The local game log updates as events happen, filling the gap before
-    # Riot makes an exact match-details response available. It only reports
-    # what it can observe: kills/deaths and the headshot-kill percentage.
-    if log_live.get("available"):
-        kills = int(log_live.get("kills", 0) or 0)
-        deaths = int(log_live.get("deaths", 0) or 0)
+    # Overwolf's official VALORANT Game Events Provider supplies the live
+    # scoreboard and local round reports that Riot's core-game response omits.
+    if event_live.get("available"):
+        kills = int(event_live.get("kills", 0) or 0)
+        deaths = int(event_live.get("deaths", 0) or 0)
+        assists = int(event_live.get("assists", 0) or 0)
         current.update({
             "available": True,
-            "source": "game_log",
-            "reason": "Live event feed from the local VALORANT game log.",
+            "source": "overwolf_gep",
+            "reason": "Exact current-game data from Overwolf's VALORANT event provider.",
             "kills": kills,
             "deaths": deaths,
-            "assists": None,
-            "kda_line": f"{kills}/{deaths}/—",
+            "assists": assists,
+            "kda_line": f"{kills}/{deaths}/{assists}",
             "kd": round(kills / max(1, deaths), 2),
-            "kda": None,
-            "hs_pct": None,
-            "headshot_kill_pct": log_live.get("headshot_kill_pct", 0.0),
-            "adr": None,
-            "acs": None,
-            "headshots": 0,
-            "bodyshots": 0,
-            "legshots": 0,
-            "shots": 0,
-            "damage": 0,
+            "kda": round((kills + assists) / max(1, deaths), 2),
+            "hs_pct": event_live.get("hs_pct"),
+            "headshot_kill_pct": event_live.get("headshot_kill_pct"),
+            "adr": event_live.get("adr"),
+            "acs": event_live.get("acs"),
+            "headshots": int(event_live.get("headshots", 0) or 0),
+            "bodyshots": int(event_live.get("bodyshots", 0) or 0),
+            "legshots": int(event_live.get("legshots", 0) or 0),
+            "shots": int(event_live.get("shots", 0) or 0),
+            "damage": int(event_live.get("damage", 0) or 0),
+            "rounds_observed": int(event_live.get("rounds_observed", 0) or 0),
         })
 
     if live:
@@ -2218,6 +2222,51 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
     }
 
 
+def _attach_live_combat(roster: List[Dict[str, Any]], live_combat: Dict[str, Any]) -> None:
+    """
+    Overlay exact current-game K/D/A onto the roster where we have it.
+
+    You get exact totals from Overwolf's "kill"/"death" features. Everyone else
+    is rebuilt from the kill feed by game name, so only apply it when the name
+    matches exactly one player on the roster (kill-feed names carry no tag).
+    Players with no live data keep their historical stats untouched.
+    """
+    if not live_combat.get("available"):
+        return
+
+    feed = live_combat.get("players") or {}
+    name_counts: Dict[str, int] = {}
+    for entry in roster:
+        gname = (entry.get("name") or "").split("#")[0].strip().lower()
+        if gname:
+            name_counts[gname] = name_counts.get(gname, 0) + 1
+
+    for entry in roster:
+        if entry.get("is_self"):
+            if live_combat.get("kills") is None and live_combat.get("deaths") is None:
+                continue
+            entry["live"] = {
+                "available": True,
+                "kills": live_combat.get("kills"),
+                "deaths": live_combat.get("deaths"),
+                "assists": live_combat.get("assists"),
+                "source": "overwolf_gep",
+            }
+            continue
+
+        gname = (entry.get("name") or "").split("#")[0].strip().lower()
+        line = feed.get(gname)
+        if not line or name_counts.get(gname, 0) != 1:
+            continue
+        entry["live"] = {
+            "available": True,
+            "kills": line.get("kills"),
+            "deaths": line.get("deaths"),
+            "assists": None,  # kill feed can't attribute assists to other players
+            "source": "overwolf_gep",
+        }
+
+
 def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     match_id = match_id or client.coregame_match_id()
     if not match_id:
@@ -2241,6 +2290,8 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
 
     _warm_player_stats(client, players)
     roster = [_roster_entry(client, p, names, client.puuid) for p in players]
+    live_combat = _LIVE_COMBAT.snapshot(match_id)
+    _attach_live_combat(roster, live_combat)
     ally = [r for r in roster if r["team"] == self_team]
     enemy = [r for r in roster if r["team"] != self_team]
 
@@ -2288,7 +2339,13 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "team": ally,
         "enemy": enemy,
         "stacks": stacks,
-        "me": _self_block(client, match_id, me, queue_id, progress),
+        "me": _self_block(client, match_id, me, queue_id, progress, live_combat),
+        "live_provider": {
+            "name": "Overwolf VALORANT Game Events",
+            "available": bool(live_combat.get("available")),
+            "fresh": bool(live_combat.get("provider_fresh")),
+            "reason": live_combat.get("reason", ""),
+        },
         "progress": progress,
         "score": {"ally": ally_score, "enemy": enemy_score},
         "round": total_rounds + 1,

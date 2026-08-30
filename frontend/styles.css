@@ -5691,6 +5691,7 @@ body.dashboard-mode .session-bar {
 .dash-player-stat-pill.is-hs { color: #fb7185; background: rgba(251, 113, 133, 0.08); border-color: rgba(251, 113, 133, 0.25); }
 .dash-player-stat-pill.is-adr { color: #c4b5fd; background: rgba(167, 139, 250, 0.08); border-color: rgba(167, 139, 250, 0.25); }
 .dash-player-stat-pill.is-wr { color: #34d399; background: rgba(52, 211, 153, 0.08); border-color: rgba(52, 211, 153, 0.25); }
+.dash-player-stat-pill.is-live { color: #2dd4bf; background: rgba(45, 212, 191, 0.09); border-color: rgba(45, 212, 191, 0.32); }
 
 .dash-player-rank {
     display: flex;
