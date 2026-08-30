@@ -1210,6 +1210,14 @@ async def import_text_accounts(req: ImportTextRequest, background_tasks: Backgro
 _LIVE_SNAPSHOT: Dict[str, Any] = {"data": None, "built_at": 0.0}
 _LIVE_SNAPSHOT_TTL = 1.2
 
+# Set by build_live_snapshot(): True only in agent select or a live match.
+# app.py's Live Aim HUD keeper reads this to stay hidden in the menus.
+_IN_MATCH_NOW = False
+
+
+def in_match_now() -> bool:
+    return _IN_MATCH_NOW
+
 # Identity seen on the previous poll for a username that isn't in the DB yet,
 # keyed by username: (identity_tuple, seen_at). Used to require a stable read
 # before auto-creating an account row - see build_live_snapshot().
@@ -2379,6 +2387,12 @@ def build_live_snapshot() -> Dict[str, Any]:
     if one is running. Never raises - an unreachable client just comes back
     as available: false.
     """
+    global _IN_MATCH_NOW
+    # Cleared up front; only set true once we confirm PREGAME/INGAME below, so
+    # every early return (game closed, client not connected) leaves it false
+    # and the desktop HUD hides.
+    _IN_MATCH_NOW = False
+
     snapshot: Dict[str, Any] = {
         "available": False,
         "valorant_running": False,
@@ -2567,6 +2581,9 @@ def build_live_snapshot() -> Dict[str, Any]:
         loop_state = "MENUS"
 
     snapshot["state"] = loop_state
+    # Cheap flag the desktop HUD reads to decide whether to be on screen: it
+    # should only show in agent select or an actual match, not the menus.
+    _IN_MATCH_NOW = loop_state in ("PREGAME", "INGAME")
     snapshot["queue_id"] = presence.get("queueId", "") or ""
     snapshot["queue_label"] = valorant_client.MODE_LABELS.get(snapshot["queue_id"], snapshot["queue_id"])
 

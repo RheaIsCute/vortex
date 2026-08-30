@@ -52,6 +52,25 @@ def _blank_scoreline() -> Dict[str, int]:
     return {"kills": 0, "deaths": 0, "headshots": 0}
 
 
+def _hs_pct(head_shots: int, total_shots: int, hs_kills, kills):
+    """Headshot percentage for the HUD.
+
+    Overwolf GEP gives no true per-shot hit location for non-killing hits
+    (round_report.headshot is stuck at 0), so real aim accuracy isn't
+    available. What IS reliable is headshot KILLS (feature "kill", key
+    "headshots"), so the HUD shows the headshot-kill rate. If a future GEP
+    build starts populating the per-shot count (more headshots seen than
+    there were headshot kills), use that real ratio instead.
+    """
+    hs_kills = int(hs_kills or 0)
+    kills = int(kills or 0)
+    if total_shots and head_shots > hs_kills:
+        return round(head_shots / total_shots * 100, 1)
+    if kills:
+        return round(hs_kills / kills * 100, 1)
+    return None
+
+
 class LiveCombatTracker:
     """Stateful tailer for Overwolf's current VALORANT GEP session."""
 
@@ -144,11 +163,31 @@ class LiveCombatTracker:
             return
 
         if feature == "match_info" and key == "round_report" and isinstance(value, dict):
+            def _num(v):
+                try:
+                    return int(float(v))
+                except (TypeError, ValueError):
+                    return 0
+            head = _num(value.get("headshot")) + _num(value.get("final_headshot"))
+            body = _num(value.get("bodyshots"))
+            leg = _num(value.get("legshots"))
+            hits = _num(value.get("hit"))
+            # GEP's per-location counts are the shaky part - the "headshot" key
+            # is often stuck at 0 while "hit" is right. If the parts don't add
+            # up to the reported hit count, trust `hit` and treat the shortfall
+            # as body shots so the ratio stays sane.
+            if hits and head + body + leg != hits:
+                body = max(0, hits - head - leg)
             self._round_reports.append({
                 "damage": float(value.get("damage") or 0),
-                "headshots": int(value.get("headshot") or 0) + int(value.get("final_headshot") or 0),
-                "bodyshots": int(value.get("bodyshots") or 0),
-                "legshots": int(value.get("legshots") or 0),
+                "headshots": head,
+                "bodyshots": body,
+                "legshots": leg,
+                "hits": hits or (head + body + leg),
+                # cumulative kill/headshot-kill totals as of this round, so the
+                # trace can plot a rolling headshot-kill rate
+                "cum_kills": int(self._local["kills"] or 0),
+                "cum_hs_kills": int(self._local["headshot_kills"] or 0),
             })
             return
 
@@ -229,6 +268,7 @@ class LiveCombatTracker:
             head = sum(r["headshots"] for r in self._round_reports)
             body = sum(r["bodyshots"] for r in self._round_reports)
             leg = sum(r["legshots"] for r in self._round_reports)
+            hits = sum(r.get("hits", 0) for r in self._round_reports)
             shots = head + body + leg
             observed_rounds = len(self._round_reports)
 
@@ -272,10 +312,42 @@ class LiveCombatTracker:
                 "bodyshots": body,
                 "legshots": leg,
                 "shots": shots,
-                "hs_pct": round(head / shots * 100, 1) if shots else None,
+                # HS% shown on the HUD. GEP's per-shot headshot count is often
+                # stuck at 0 while headshot KILLS (feature "kill" key
+                # "headshots") are reliable, so prefer the headshot-kill rate
+                # and only fall back to the shot breakdown when it looks real
+                # (some headshots recorded on more shots than kills).
+                "hs_pct": _hs_pct(head, shots, hs_kills, kills),
                 "damage": damage,
                 "rounds_observed": observed_rounds,
                 "adr": round(damage / observed_rounds) if observed_rounds else None,
                 "acs": None,
-                "accuracy_history": list(self._round_reports[-12:]),
+                # Per-round trace for the HUD aim graph: a rolling headshot %
+                # up to and including each round, so the line is smooth and
+                # trends rather than spiking 0/33/0 on GEP's shaky per-round
+                # headshot counts.
+                "accuracy_history": self._rolling_hs_history(),
             }
+
+    def _rolling_hs_history(self) -> List[Dict[str, Any]]:
+        """Per-round trace for the HUD aim graph: the rolling headshot % up to
+        and including each round. Uses the real shot breakdown when GEP gives
+        one, otherwise the rolling headshot-kill rate (same fallback as the
+        headline number)."""
+        out: List[Dict[str, Any]] = []
+        h = b = leg = 0
+        for r in self._round_reports:
+            h += r["headshots"]
+            b += r["bodyshots"]
+            leg += r["legshots"]
+            total = h + b + leg
+            cum_kills = r.get("cum_kills", 0)
+            cum_hs_kills = r.get("cum_hs_kills", 0)
+            pct = _hs_pct(h, total, cum_hs_kills, cum_kills)
+            out.append({
+                "headshots": h,
+                "bodyshots": b,
+                "legshots": leg,
+                "hs_pct": pct if pct is not None else 0.0,
+            })
+        return out[-12:]

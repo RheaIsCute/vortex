@@ -73,7 +73,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, BASE_DIR)
 
-from backend.server import app, db
+from backend.server import app, db, in_match_now
 from backend.overlay_hotkey import OverlayHotkey
 from backend.client_launcher import is_valorant_foreground
 
@@ -323,17 +323,17 @@ def _make_live_hud_controller(hud_window):
             return {"success": False, "enabled": enabled}
 
     # Persistent daemon: keeps the HUD pinned above VALORANT and gates its
-    # presence on VALORANT actually being the foreground window. When the game
-    # is not in front the HUD fades out (CSS) and then the native window is
-    # hidden, so nothing is left on screen; when the game comes back it is
-    # shown again and fades in.
+    # presence on being in an actual match with VALORANT in front. In the
+    # menus, alt-tabbed, or with no match, the HUD fades out (CSS) and then
+    # the native window is hidden - nothing is left on screen. When the game
+    # comes back to a live match it is shown again and fades in.
     def _topmost_keeper():
         while True:
             time.sleep(0.3)
             if not state["visible"]:
                 continue
             try:
-                fg = is_valorant_foreground()
+                fg = is_valorant_foreground() and in_match_now()
 
                 hwnd = state["hwnd"] or win32gui.FindWindow(None, LIVE_HUD_TITLE)
                 if not (hwnd and win32gui.IsWindow(hwnd)):

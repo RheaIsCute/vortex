@@ -41,7 +41,10 @@
         }
         const head = n(current.headshots), body = n(current.bodyshots), leg = n(current.legshots), shots = head + body + leg;
         const reports = Array.isArray(current.accuracy_history) ? current.accuracy_history.slice(-12) : [];
-        const history = reports.map(r => { const h=n(r.headshots), b=n(r.bodyshots), l=n(r.legshots); return pct(h,h+b+l); });
+        const history = reports.map(r =>
+            r.hs_pct != null ? n(r.hs_pct)
+            : pct(n(r.headshots), n(r.headshots) + n(r.bodyshots) + n(r.legshots))
+        );
         el.root.classList.remove("is-waiting");
         el.round.textContent = `ROUND ${current.round_number || match.round || "--"}`;
         el.hs.innerHTML = `${current.hs_pct == null ? "--" : Number(current.hs_pct).toFixed(1)}<em>%</em>`;

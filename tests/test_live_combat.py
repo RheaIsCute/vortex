@@ -39,13 +39,15 @@ class LiveCombatTrackerTests(unittest.TestCase):
             self._line("death", "deaths", 2),
             self._line("kill", "assists", 1),
             self._line("kill", "headshots", 4),
+            # round_report where the per-shot headshot count is real (more
+            # headshots than headshot kills) - hs_pct comes from the shots.
             self._line("match_info", "round_report", {
-                "damage": 150, "hit": 4, "headshot": 1, "final_headshot": 1,
-                "bodyshots": "2", "legshots": "0",
+                "damage": 150, "hit": 5, "headshot": 3, "final_headshot": 1,
+                "bodyshots": "1", "legshots": "0",
             }),
             self._line("match_info", "round_report", {
-                "damage": 90, "hit": 3, "headshot": 0, "final_headshot": 0,
-                "bodyshots": "2", "legshots": "1",
+                "damage": 90, "hit": 3, "headshot": 1, "final_headshot": 0,
+                "bodyshots": "1", "legshots": "1",
             }),
         ])
 
@@ -57,9 +59,34 @@ class LiveCombatTrackerTests(unittest.TestCase):
         self.assertEqual(240, out["damage"])
         self.assertEqual(120, out["adr"])
         self.assertEqual(2, out["rounds_observed"])
-        self.assertEqual(2, out["headshots"])
-        self.assertEqual(28.6, out["hs_pct"])
+        # round 1: head 4, round 2: head 1 -> 5 total; shots 4+2+1 = 7 -> wait
+        # r1 hit=5 head=4 body=1 leg=0; r2 hit=3 head=1 body=1 leg=1 -> head 5
+        self.assertEqual(5, out["headshots"])
+        self.assertEqual(round(5 / 8 * 100, 1), out["hs_pct"])  # 62.5
         self.assertIsNone(out["acs"])
+
+    def test_hs_pct_falls_back_to_headshot_kill_rate_when_gep_headshots_stuck(self):
+        # Real-world GEP bug: per-round "headshot" key stuck at 0, only
+        # "final_headshot" fires. hs_pct should then be the headshot-KILL rate,
+        # not headshot-kills / total-shots.
+        self._write([
+            self._line("me", "player_name", "Me#NA"),
+            self._line("match_info", "match_id", self.MATCH_ID),
+            self._line("kill", "kills", 4),
+            self._line("death", "deaths", 1),
+            self._line("kill", "headshots", 3),  # 3 headshot kills of 4
+            self._line("match_info", "round_report", {
+                "damage": 130, "hit": 4, "headshot": 0, "final_headshot": 1,
+                "bodyshots": "3", "legshots": "0",
+            }),
+            self._line("match_info", "round_report", {
+                "damage": 260, "hit": 6, "headshot": 0, "final_headshot": 1,
+                "bodyshots": "5", "legshots": "0",
+            }),
+        ])
+        out = LiveCombatTracker(self.temp.name).snapshot(self.MATCH_ID)
+        self.assertEqual(75.0, out["hs_pct"])       # 3 hs-kills / 4 kills
+        self.assertEqual(75.0, out["headshot_kill_pct"])
 
     def test_kill_feed_builds_other_player_scoreboard(self):
         def feed(attacker, victim, headshot=False):

@@ -1,5 +1,5 @@
 {
-  "version": "5.5.19",
+  "version": "5.5.20",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.19: fixes live match detection, agent-select instalock and the queue after Riot's client update changed the presence data format, and Vortex now installs the Valorant Tracker Overwolf app for you in the background so live combat stats work with no setup."
+  "changelog": "Vortex v5.5.20: the Live Aim HUD only shows during agent select and matches now (not in the menus), and its headshot number now tracks your headshot-kill rate properly instead of getting stuck - Overwolf doesn't expose true per-shot accuracy, so this is the closest reliable metric."
 }
