@@ -1,5 +1,5 @@
 {
-  "version": "5.5.22",
+  "version": "5.5.23",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.22: adds an optional 'After VALORANT Closes' setting that can automatically start a program of your choice the moment VALORANT exits."
+  "changelog": "Vortex v5.5.23: fixes the Live Aim HUD showing no headshot / K-D-A stats. Overwolf changed where the Valorant Tracker app records live game events, so Vortex now reads the new log format and location."
 }

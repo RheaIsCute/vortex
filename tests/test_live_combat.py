@@ -132,6 +132,50 @@ class LiveCombatTrackerTests(unittest.TestCase):
         self.assertFalse(out["available"])
         self.assertIn("Vortex Telemetry", out["reason"])
 
+    def test_reads_valorant_tracker_nested_log_format(self):
+        # The current Valorant Tracker app logs GEP updates in a nested shape
+        # to background.html*.log, not the old flat "[GEP] info update" line.
+        vt_path = os.path.join(self.temp.name, "background.html.log")
+
+        def vt(feature, key, value):
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            body = {"info": {feature: {key: value}}, "feature": feature}
+            return (
+                "2026-08-30 00:05:00,000 (INFO) </js/x.js> (:14) - "
+                "[Overwolf | Game Events Service | Default | Info Update] "
+                + json.dumps(body) + "\n"
+            )
+
+        with open(vt_path, "w", encoding="utf-8") as handle:
+            handle.writelines([
+                vt("me", "playerId", "my-puuid-123"),
+                vt("match_info", "roster_0", {
+                    "name": "Panda Marley #LAS", "player_id": "my-puuid-123",
+                }),
+                vt("match_info", "matchId", self.MATCH_ID),
+                vt("kill", "kills", 5),
+                vt("kill", "headshots", 4),
+                vt("death", "deaths", 2),
+                vt("match_info", "round_report", {
+                    "damage": 200, "hit": 4, "headshot": 0, "final_headshot": 1,
+                    "bodyshots": "3", "legshots": "0",
+                }),
+                vt("match_info", "kill_feed", {
+                    "attacker": "somefoe", "victim": "Panda Marley", "headshot": True,
+                }),
+            ])
+
+        out = LiveCombatTracker(self.temp.name).snapshot(self.MATCH_ID)
+        self.assertTrue(out["available"])
+        self.assertEqual((5, 2), (out["kills"], out["deaths"]))
+        self.assertEqual(4, out["headshot_kills"])
+        self.assertEqual(80.0, out["hs_pct"])  # 4 hs-kills / 5 kills
+        self.assertEqual(200, out["damage"])
+        # the local player is identified via roster player_id == me/playerId,
+        # so they are kept out of the kill-feed scoreboard
+        self.assertNotIn("panda marley", out["players"])
+
     def test_accepts_direct_vortex_telemetry_events_without_a_log(self):
         tracker = LiveCombatTracker(self.temp.name)
         tracker.ingest({"featureName": "match_info", "key": "match_id", "value": self.MATCH_ID}, self.MATCH_ID)
