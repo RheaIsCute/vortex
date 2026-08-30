@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>Vortex Live Aim HUD</title>
+    <link rel="stylesheet" href="live_overlay.css">
+    <script src="live_overlay.js" defer></script>
+</head>
+<body>
+    <main class="aim-hud is-waiting" id="aim-hud" aria-live="polite">
+        <div class="hud-sheen"></div>
+        <header class="hud-head">
+            <span class="hud-brand"><b></b> VORTEX <small>LIVE AIM</small></span>
+            <span class="hud-round" id="hud-round">WAITING</span>
+        </header>
+
+        <section class="hud-score">
+            <div class="hud-score-main">
+                <span class="hud-label">HEADSHOT CHANCE</span>
+                <strong id="hud-hs">--<em>%</em></strong>
+                <span class="hud-sub" id="hud-sub">Waiting for match telemetry</span>
+            </div>
+            <div class="hud-kda">
+                <span>K / D / A</span>
+                <strong id="hud-kda">-- / -- / --</strong>
+                <small id="hud-kd">-- KD</small>
+            </div>
+        </section>
+
+        <section class="hud-chart-wrap">
+            <div class="hud-chart-head"><span>AIM TRACE</span><span id="hud-observed">LIVE</span></div>
+            <div class="hud-chart" id="hud-chart">
+                <i></i><i></i><i></i>
+                <svg viewBox="0 0 340 76" preserveAspectRatio="none" aria-hidden="true">
+                    <defs><linearGradient id="hud-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185" stop-opacity=".48"/><stop offset="1" stop-color="#fb7185" stop-opacity="0"/></linearGradient></defs>
+                    <polygon id="hud-area" points="0,69 0,69" fill="url(#hud-fill)"></polygon>
+                    <polyline id="hud-line" points="0,69" fill="none" stroke="#fb7185" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    <circle id="hud-dot" cx="0" cy="69" r="3.8" fill="#fff" stroke="#fb7185" stroke-width="2.2"></circle>
+                </svg>
+            </div>
+        </section>
+
+        <footer class="hud-foot">
+            <span><i class="is-head"></i><b id="hud-head">--</b> HEAD</span>
+            <span><i class="is-body"></i><b id="hud-body">--</b> BODY</span>
+            <span><i class="is-leg"></i><b id="hud-leg">--</b> LEG</span>
+            <span class="hud-dmg" id="hud-dmg">-- DMG</span>
+        </footer>
+    </main>
+</body>
+</html>

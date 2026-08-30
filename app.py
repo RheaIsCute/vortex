@@ -49,8 +49,13 @@ OVERLAY_WIDTH = 430
 OVERLAY_HEIGHT = 640
 OVERLAY_MARGIN = 24
 OVERLAY_TITLE = "Vortex Quick Panel"
+LIVE_HUD_WIDTH = 390
+LIVE_HUD_HEIGHT = 246
+LIVE_HUD_TITLE = "Vortex Live Aim HUD"
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_NOACTIVATE = 0x08000000
 
 
 def find_available_port(default_port: int = 8765) -> int:
@@ -151,6 +156,84 @@ def _create_overlay_window():
         on_top=True,
         hidden=True,
     )
+
+
+def _create_live_hud_window():
+    """Small passive upper-right HUD for the live aim trace.
+
+    This is intentionally a normal desktop window, not an injected game
+    overlay.  Its native style makes it click-through and non-activating, so
+    it never captures the VALORANT cursor or opens the Windows taskbar.
+    """
+    try:
+        screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        x = max(0, screen_w - LIVE_HUD_WIDTH - OVERLAY_MARGIN)
+    except Exception:
+        x = None
+    return webview.create_window(
+        title=LIVE_HUD_TITLE,
+        url=f"{URL}/static/live_overlay.html",
+        width=LIVE_HUD_WIDTH,
+        height=LIVE_HUD_HEIGHT,
+        x=x,
+        y=OVERLAY_MARGIN,
+        min_size=(320, 200),
+        background_color="#090812",
+        frameless=True,
+        easy_drag=False,
+        on_top=True,
+        hidden=True,
+    )
+
+
+def _make_live_hud_controller(hud_window):
+    """Returns the desktop bridge used by Settings to show/hide the aim HUD."""
+    state = {"hwnd": 0, "visible": False}
+
+    def _prepare() -> int:
+        hwnd = state["hwnd"] or win32gui.FindWindow(None, LIVE_HUD_TITLE)
+        if not hwnd:
+            return 0
+        state["hwnd"] = hwnd
+        try:
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            ex_style = (ex_style | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_FRAMECHANGED | win32con.SWP_NOACTIVATE,
+            )
+            return hwnd
+        except Exception:
+            _startup_log("prepare_live_hud failed:\n" + traceback.format_exc())
+            return 0
+
+    def setLiveHudEnabled(enabled: bool):
+        enabled = bool(enabled)
+        state["visible"] = enabled
+        try:
+            hwnd = _prepare()
+            if enabled:
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE,
+                    )
+                else:
+                    hud_window.show()
+                    _prepare()
+            else:
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                else:
+                    hud_window.hide()
+            return {"success": True, "enabled": enabled}
+        except Exception:
+            _startup_log("setLiveHudEnabled failed:\n" + traceback.format_exc())
+            return {"success": False, "enabled": enabled}
+
+    return setLiveHudEnabled
 
 
 def _make_overlay_controller(overlay_window, main_window):
@@ -320,9 +403,19 @@ def main():
         _startup_log("main WebView created")
         overlay_window = _create_overlay_window()
         _startup_log("hidden Quick Panel WebView created")
+        live_hud_window = _create_live_hud_window()
+        _startup_log("hidden Live Aim HUD WebView created")
         toggle_overlay = _make_overlay_controller(overlay_window, window)
+        set_live_hud_enabled = _make_live_hud_controller(live_hud_window)
+        window.expose(set_live_hud_enabled)
+
+        def _restore_live_hud_after_load(*_args):
+            enabled = db.get_settings().get("live_hud_enabled", "0") != "0"
+            set_live_hud_enabled(enabled)
+
+        live_hud_window.events.loaded += _restore_live_hud_after_load
         _start_overlay_hotkey(toggle_overlay)
-        _startup_log("overlay controller and hotkey initialized")
+        _startup_log("overlay controller, Live Aim HUD, and hotkey initialized")
 
         def _on_main_closing():
             # pywebview keeps running as long as any window - including the
@@ -332,6 +425,10 @@ def main():
             # - everything else has to go down with it.
             try:
                 overlay_window.destroy()
+            except Exception:
+                pass
+            try:
+                live_hud_window.destroy()
             except Exception:
                 pass
 

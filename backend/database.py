@@ -188,6 +188,9 @@ class Database:
                 # Native quick panel, summoned globally by the hotkey below.
                 ("overlay_enabled", "1"),
                 ("overlay_hotkey", "SHIFT+5"),
+                # Passive top-right accuracy HUD.  Kept opt-in because it is
+                # intentionally always visible while a match is running.
+                ("live_hud_enabled", "0"),
                 # Install (if missing) and tray-start Overwolf alongside
                 # VALORANT, so live combat stats work without being set up.
                 ("overwolf_auto", "1"),

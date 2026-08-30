@@ -1824,6 +1824,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "shots": int(event_live.get("shots", 0) or 0),
             "damage": int(event_live.get("damage", 0) or 0),
             "rounds_observed": int(event_live.get("rounds_observed", 0) or 0),
+            "accuracy_history": event_live.get("accuracy_history") or [],
         })
 
     if live:

@@ -277,4 +277,5 @@ class LiveCombatTracker:
                 "rounds_observed": observed_rounds,
                 "adr": round(damage / observed_rounds) if observed_rounds else None,
                 "acs": None,
+                "accuracy_history": list(self._round_reports[-12:]),
             }

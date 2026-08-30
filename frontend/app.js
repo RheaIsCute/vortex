@@ -195,6 +195,7 @@ const DOM = {
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
     settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
     settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
+    settingsLiveHudEnabled: document.getElementById("settings-live-hud-enabled"),
     overlayHotkeyClear: document.getElementById("overlay-hotkey-clear"),
     overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
@@ -2764,6 +2765,7 @@ function openSettingsModal() {
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
     if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || DEFAULT_OVERLAY_HOTKEY;
+    if (DOM.settingsLiveHudEnabled) DOM.settingsLiveHudEnabled.checked = (state.settings.live_hud_enabled || "0") !== "0";
     renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
@@ -3030,7 +3032,8 @@ async function saveSettings() {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
-            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase()
+            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase(),
+            live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0"
         }
     };
 
@@ -3058,11 +3061,23 @@ async function saveSettings() {
         const data = await res.json();
         if (data.success) {
             state.settings = data.settings;
+            void setLiveHudEnabled(!!DOM.settingsLiveHudEnabled?.checked);
             showToast("Settings saved", "success");
             closeModal(DOM.modalSettings);
         }
     } catch (err) {
         showToast("Failed to save settings", "error");
+    }
+}
+
+/** Applies the HUD switch immediately in the desktop build; browser mode just saves it. */
+async function setLiveHudEnabled(enabled) {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || typeof api.setLiveHudEnabled !== "function") return;
+    try {
+        await api.setLiveHudEnabled(!!enabled);
+    } catch (err) {
+        console.warn("Couldn't update the live HUD window", err);
     }
 }
 
@@ -4101,6 +4116,56 @@ function renderDuoBanner(match) {
     `;
 }
 
+/** Compact, round-by-round aim graph for the live player card and HUD. */
+function renderAccuracyGraph(current, share) {
+    const reports = Array.isArray(current.accuracy_history) ? current.accuracy_history.slice(-12) : [];
+    const values = reports.map(report => {
+        const head = Number(report.headshots || 0);
+        const body = Number(report.bodyshots || 0);
+        const leg = Number(report.legshots || 0);
+        const hits = head + body + leg;
+        return hits ? Math.round((head / hits) * 100) : 0;
+    });
+    const chartValues = values.length ? values : [Number(current.hs_pct || 0)];
+    const width = 252;
+    const height = 58;
+    const pad = 7;
+    const step = chartValues.length > 1 ? (width - pad * 2) / (chartValues.length - 1) : 0;
+    const point = (value, index) => {
+        const x = chartValues.length === 1 ? width / 2 : pad + index * step;
+        const y = height - pad - ((Math.max(0, Math.min(100, value)) / 100) * (height - pad * 2));
+        return [x.toFixed(1), y.toFixed(1)];
+    };
+    const points = chartValues.map((value, index) => point(value, index).join(",")).join(" ");
+    const first = point(chartValues[0], 0);
+    const last = point(chartValues[chartValues.length - 1], chartValues.length - 1);
+    const area = `${first[0]},${height - pad} ${points} ${last[0]},${height - pad}`;
+    const hs = current.hs_pct != null ? Number(current.hs_pct).toFixed(1) : "--";
+    const observed = Number(current.rounds_observed || reports.length || 0);
+
+    return '<div class="dash-accuracy-card" title="Headshot accuracy by observed round">' +
+        '<div class="dash-accuracy-heading">' +
+            '<span><i class="fa-solid fa-chart-line"></i> Aim trace</span>' +
+            '<strong>' + hs + '% <small>HS</small></strong>' +
+        '</div>' +
+        '<div class="dash-accuracy-plot">' +
+            '<span class="dash-accuracy-grid g1"></span><span class="dash-accuracy-grid g2"></span><span class="dash-accuracy-grid g3"></span>' +
+            '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+                '<defs><linearGradient id="aim-trace-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb7185" stop-opacity=".42"/><stop offset="1" stop-color="#fb7185" stop-opacity="0"/></linearGradient></defs>' +
+                '<polygon points="' + area + '" fill="url(#aim-trace-fill)"></polygon>' +
+                '<polyline points="' + points + '" fill="none" stroke="#fb7185" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>' +
+                '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="3.1" fill="#fff" stroke="#fb7185" stroke-width="2"></circle>' +
+            '</svg>' +
+        '</div>' +
+        '<div class="dash-accuracy-meta">' +
+            '<span><i class="dot is-head"></i> Head ' + share(current.headshots) + '%</span>' +
+            '<span><i class="dot is-body"></i> Body ' + share(current.bodyshots) + '%</span>' +
+            '<span><i class="dot is-leg"></i> Leg ' + share(current.legshots) + '%</span>' +
+            '<span class="dash-hs-dmg">' + Number(current.damage || 0).toLocaleString() + ' dmg · ' + observed + ' rds</span>' +
+        '</div>' +
+    '</div>';
+}
+
 /**
  * The "you, right now" panel.
  *
@@ -4210,11 +4275,9 @@ function renderMeCard(match) {
         ? '<img src="' + me.tier_icon + '" class="dash-me-rank" alt="" onerror="this.style.display=\'none\';">'
         : "";
 
-    const pendingHtml = gepLive ?
-        '<div class="dash-me-pending is-live-feed">' +
-            '<i class="fa-solid fa-satellite-dish"></i>' +
-            '<span>Exact live K/D/A from Overwolf. Headshot accuracy and ADR use observed round reports; ACS becomes available when Riot publishes the completed match.</span>' +
-        '</div>' : (hasCombat ? "" :
+    // GEP combat is real live data, so don't waste space on a warning banner.
+    // The graph below communicates the source and updates every observed round.
+    const pendingHtml = gepLive ? "" : (hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
             '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
@@ -4222,21 +4285,7 @@ function renderMeCard(match) {
         '</div>');
 
     const hitHtml = (hasCombat && shots)
-        ? '<div class="dash-hs-bar" title="' + cur.headshots + ' head &middot; ' + cur.bodyshots +
-              ' body &middot; ' + cur.legshots + ' leg">' +
-              '<span class="dash-hs-seg is-head" style="width:' + share(cur.headshots) + '%"></span>' +
-              '<span class="dash-hs-seg is-body" style="width:' + share(cur.bodyshots) + '%"></span>' +
-              '<span class="dash-hs-seg is-leg" style="width:' + share(cur.legshots) + '%"></span>' +
-          '</div>' +
-          '<div class="dash-hs-legend">' +
-              '<span><i class="dot is-head"></i> Head ' + share(cur.headshots) + '%</span>' +
-              '<span><i class="dot is-body"></i> Body ' + share(cur.bodyshots) + '%</span>' +
-              '<span><i class="dot is-leg"></i> Leg ' + share(cur.legshots) + '%</span>' +
-              (cur.damage
-                  ? '<span class="dash-hs-dmg">' + cur.damage.toLocaleString() +
-                    ' dmg over ' + (cur.rounds_played || 0) + ' rounds</span>'
-                  : "") +
-          '</div>'
+        ? renderAccuracyGraph(cur, share)
         : "";
 
     const roundChip = inMatch
