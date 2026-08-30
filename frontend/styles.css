@@ -4108,6 +4108,52 @@ select.form-control option {
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
+/* Cumulative win-rate sparkline (replaces the flat meter). */
+.hero-winrate-graph {
+    width: 100%;
+    height: 46px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: var(--radius-sm);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
+    padding: 2px 3px;
+    overflow: hidden;
+}
+
+.wr-graph {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+}
+
+.wr-graph-mid {
+    stroke: rgba(255, 255, 255, 0.14);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.wr-graph-line {
+    fill: none;
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.wr-graph-area { opacity: 0.16; stroke: none; }
+.wr-graph-dot { stroke: rgba(0, 0, 0, 0.5); stroke-width: 1; }
+
+.wr-graph.wr-low  { --wr-c: #f87171; }
+.wr-graph.wr-mid  { --wr-c: #fbbf24; }
+.wr-graph.wr-high { --wr-c: var(--ok); }
+
+.wr-graph .wr-graph-line { stroke: var(--wr-c, var(--a)); }
+.wr-graph .wr-graph-area { fill: var(--wr-c, var(--a)); }
+.wr-graph .wr-graph-dot  { fill: var(--wr-c, var(--a)); }
+
+.wr-graph.wr-high .wr-graph-line { filter: drop-shadow(0 0 4px rgba(var(--ok-rgb), 0.7)); }
+
 .hero-creds-box {
     background: rgba(0, 0, 0, 0.35);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -4198,6 +4244,12 @@ select.form-control option {
     box-shadow: 0 6px 20px -4px rgba(var(--ok-rgb), 0.6);
 }
 
+.btn-hero-play.is-dashboard {
+    background: linear-gradient(135deg, #7c3aed, #a855f7);
+    border-color: rgba(216, 180, 254, 0.75);
+    box-shadow: 0 8px 24px -5px rgba(168, 85, 247, 0.72);
+}
+
 .hero-play-text-wrap {
     display: flex;
     flex-direction: column;
@@ -4247,6 +4299,23 @@ select.form-control option {
     border-color: rgba(255, 255, 255, 0.25);
     color: #fff;
     transform: translateY(-1px);
+}
+
+.hero-matches-btn {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(14, 165, 233, 0.07));
+    border-color: rgba(96, 165, 250, 0.34);
+    color: #bfdbfe;
+}
+
+.hero-matches-btn:hover {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.31), rgba(14, 165, 233, 0.16));
+    border-color: rgba(147, 197, 253, 0.65);
+    color: #eff6ff;
+    box-shadow: 0 0 14px rgba(59, 130, 246, 0.22);
+}
+
+.hero-matches-btn.is-expanded {
+    flex: 2;
 }
 
 .hero-action-btn.hero-dashboard-btn {

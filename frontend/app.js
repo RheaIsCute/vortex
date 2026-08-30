@@ -1265,6 +1265,55 @@ function buildPeakBadge(acc) {
     `;
 }
 
+// Cumulative win-rate sparkline for the hero card: the running win% after
+// each match, oldest -> newest. Falls back to a flat line at the stored
+// winrate when there's no per-match history to trend.
+function buildWinrateGraph(acc, v) {
+    const W = 460, H = 46, PAD = 4;
+    const matches = Array.isArray(acc.match_history) ? acc.match_history.slice() : [];
+    // match_history is newest-first from the scraper; plot oldest -> newest.
+    matches.reverse();
+    const rated = matches.filter(m => {
+        const o = (m.outcome || "").toUpperCase();
+        return o === "VICTORY" || o === "DEFEAT" || o === "DRAW";
+    });
+
+    let series;
+    if (rated.length >= 2) {
+        let wins = 0;
+        series = rated.map((m, i) => {
+            const o = (m.outcome || "").toUpperCase();
+            if (o === "VICTORY") wins += 1;
+            else if (o === "DRAW") wins += 0.5;
+            return wins / (i + 1) * 100;
+        });
+    } else {
+        series = [v.winrate, v.winrate];
+    }
+
+    const stepX = series.length > 1 ? (W - PAD * 2) / (series.length - 1) : 0;
+    const pt = (val, i) => {
+        const x = series.length === 1 ? W / 2 : PAD + i * stepX;
+        const y = H - PAD - Math.max(0, Math.min(100, val)) / 100 * (H - PAD * 2);
+        return [Number(x.toFixed(1)), Number(y.toFixed(1))];
+    };
+    const pts = series.map(pt);
+    const line = pts.map(p => p.join(",")).join(" ");
+    const area = `${pts[0][0]},${H - PAD} ${line} ${pts[pts.length - 1][0]},${H - PAD}`;
+    const last = pts[pts.length - 1];
+    const mid = H - PAD - 0.5 * (H - PAD * 2); // the 50% reference line
+
+    return `
+        <div class="hero-winrate-graph" title="Cumulative win rate over the last ${rated.length || 0} matches">
+            <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="wr-graph ${v.wrClass}">
+                <line class="wr-graph-mid" x1="0" y1="${mid.toFixed(1)}" x2="${W}" y2="${mid.toFixed(1)}"></line>
+                <polygon class="wr-graph-area" points="${area}"></polygon>
+                <polyline class="wr-graph-line" points="${line}"></polyline>
+                <circle class="wr-graph-dot" cx="${last[0]}" cy="${last[1]}" r="2.6"></circle>
+            </svg>
+        </div>`;
+}
+
 function getAccountCombatStats(acc) {
     const matches = Array.isArray(acc.match_history) ? acc.match_history : [];
     if (!matches || matches.length === 0) {
@@ -1491,9 +1540,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                         </div>
                     </div>
 
-                    <div class="hero-winrate-track">
-                        <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
-                    </div>
+                    ${buildWinrateGraph(acc, v)}
 
                     <div class="hero-creds-box">
                         <div class="cred-row">
@@ -1555,10 +1602,10 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                         </div>
                     </button>
                     ` : `
-                    <button class="btn-hero-play ${isValRunning ? 'is-running' : ''}" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
+                    <button class="btn-hero-play ${isValRunning ? 'is-running is-dashboard' : ''}" onclick="${isValRunning ? 'openDashboard()' : `playAccount(${acc.id})`}" title="${isValRunning ? 'Open Live Match Dashboard' : 'Launch VALORANT on this account'}">
                         <div class="hero-play-text-wrap">
-                            <span class="hero-play-title">${isValRunning ? 'VALORANT RUNNING' : 'PLAY VALORANT'}</span>
-                            <span class="hero-play-sub">${isValRunning ? 'Client Active' : 'Launch Game Client'}</span>
+                            <span class="hero-play-title">${isValRunning ? 'DASHBOARD' : 'PLAY VALORANT'}</span>
+                            <span class="hero-play-sub">${isValRunning ? 'Open Live Match Dashboard' : 'Launch Game Client'}</span>
                         </div>
                     </button>
                     `}
@@ -1570,14 +1617,14 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                             <span>Recheck</span>
                         </button>
                         ` : `
-                        <button class="btn btn-secondary hero-action-btn" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
+                        <button class="btn btn-secondary hero-action-btn hero-matches-btn ${isValRunning ? 'is-expanded' : ''}" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
                             <span>Matches (${acc.games_played || 0})</span>
                         </button>
-                        <button class="btn btn-primary hero-action-btn hero-dashboard-btn" onclick="openDashboard()" title="Open Live Match Dashboard">
+                        ${isValRunning ? '' : `<button class="btn btn-primary hero-action-btn hero-dashboard-btn" onclick="openDashboard()" title="Open Live Match Dashboard">
                             <i class="fa-solid fa-gauge-high"></i>
                             <span>Dashboard</span>
-                        </button>
+                        </button>`}
                         `}
                         ${isUnsaved ? "" : `
                         <button class="btn btn-secondary hero-action-btn" onclick="openEditModal(${acc.id})" title="Edit Account">
@@ -3502,8 +3549,8 @@ function updateLiveHeroCardState(live) {
 
     const titleEl = heroCard.querySelector(".hero-play-title");
     const subEl = heroCard.querySelector(".hero-play-sub");
-    if (titleEl) titleEl.textContent = isValRunning ? "VALORANT RUNNING" : "PLAY VALORANT";
-    if (subEl) subEl.textContent = isValRunning ? "Client Active" : "Launch Game Client";
+    if (titleEl) titleEl.textContent = isValRunning ? "DASHBOARD" : "PLAY VALORANT";
+    if (subEl) subEl.textContent = isValRunning ? "Open Live Match Dashboard" : "Launch Game Client";
 
     const chipEl = heroCard.querySelector(".session-state-chip");
     if (chipEl) {
@@ -3514,6 +3561,7 @@ function updateLiveHeroCardState(live) {
     const playBtn = heroCard.querySelector(".btn-hero-play");
     if (playBtn) {
         playBtn.classList.toggle("is-running", isValRunning);
+        playBtn.classList.toggle("is-dashboard", isValRunning);
     }
 }
 
@@ -3539,6 +3587,7 @@ async function pollLiveSessionOnce() {
     }
 
     const previousId = state.activeAccountId;
+    const wasValorantRunning = !!(state.live && state.live.available && state.live.valorant_running);
     const hadHero = !!document.querySelector(".account-card-hero");
     state.live = live;
     state.activeAccountId = live.available ? live.account_id : null;
@@ -3578,7 +3627,8 @@ async function pollLiveSessionOnce() {
     // Re-render when the active card moved, when the hero card needs to
     // appear, or when the signed-in account crossed the banned line in either
     // direction (both change which card is rendered and what it can do).
-    if (previousId !== state.activeAccountId || (live.available && !hadHero) || wasBanned !== nowBanned) {
+    const isValorantRunning = !!(live.available && live.valorant_running);
+    if (previousId !== state.activeAccountId || (live.available && !hadHero) || wasBanned !== nowBanned || wasValorantRunning !== isValorantRunning) {
         renderAccounts();
     }
 
