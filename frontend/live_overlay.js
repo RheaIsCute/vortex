@@ -33,12 +33,26 @@
         el.head.textContent = el.body.textContent = el.leg.textContent = "--"; el.dmg.textContent = "-- DMG"; draw([]);
     }
 
+    // A single poll returning no data shouldn't drop a live HUD straight to
+    // WAITING - the Tracker log and the local service both have brief gaps.
+    // Only fall back after a few consecutive misses.
+    let missStreak = 0;
+    const MISS_LIMIT = 4;
+
     function render(data) {
         const match = data && data.match;
         const current = match && match.me && match.me.current;
-        if (!match || match.phase !== "in_match" || !current || !current.available) {
-            waiting((current && current.reason) || "Waiting for live match telemetry"); return;
+        const live = match && match.phase === "in_match" && current && current.available;
+        if (!live) {
+            missStreak++;
+            if (missStreak >= MISS_LIMIT || !el.root.dataset.wasLive) {
+                delete el.root.dataset.wasLive;
+                waiting((current && current.reason) || "Waiting for live match telemetry");
+            }
+            return;
         }
+        missStreak = 0;
+        el.root.dataset.wasLive = "1";
         const head = n(current.headshots), body = n(current.bodyshots), leg = n(current.legshots), shots = head + body + leg;
         const reports = Array.isArray(current.accuracy_history) ? current.accuracy_history.slice(-12) : [];
         const history = reports.map(r =>
@@ -60,7 +74,13 @@
 
     async function refresh() {
         try { const response = await fetch("/api/live/session", {cache:"no-store"}); render(await response.json()); }
-        catch (_) { waiting("Vortex service reconnecting"); }
+        catch (_) {
+            missStreak++;
+            if (missStreak >= MISS_LIMIT || !el.root.dataset.wasLive) {
+                delete el.root.dataset.wasLive;
+                waiting("Vortex service reconnecting");
+            }
+        }
     }
     refresh(); window.setInterval(refresh, 1000);
 })();

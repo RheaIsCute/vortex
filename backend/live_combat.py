@@ -110,6 +110,11 @@ class LiveCombatTracker:
         self._my_puuid = ""
         self._roster: Dict[str, str] = {}  # player_id -> "Name #TAG"
         self._last_seen_match_id = ""
+        # Once a match has produced real combat data, latch it: the Valorant
+        # Tracker log goes quiet for 30-60s+ between rounds, and without this
+        # the HUD drops to WAITING every gap and fades back in on the next
+        # write. Cleared only when the match_id changes.
+        self._latched_match_id = ""
 
     def _log_dirs(self) -> List[str]:
         if self._log_dir_override:
@@ -140,6 +145,7 @@ class LiveCombatTracker:
         self._active = False
         self._offsets = {}
         self._last_seen_match_id = ""
+        self._latched_match_id = ""
         self._clear_match_state()
 
     def _clear_match_state(self) -> None:
@@ -432,13 +438,31 @@ class LiveCombatTracker:
             have_local = kills is not None or deaths is not None
             available = bool(self._active and (have_local or players))
 
+            # Latch: once this match has genuinely gone live, keep reporting it
+            # available through the log-quiet gaps between rounds (the Tracker
+            # log can be silent for 30-60s+). We still have the retained
+            # totals/round reports in state, so this shows the last-known
+            # numbers rather than dropping the HUD to WAITING and fading back.
+            if available and have_local:
+                self._latched_match_id = match_id
+            # Only hold the latch while we still have retained numbers to show -
+            # if state was genuinely cleared (match boundary) let it fall
+            # through rather than flash 0/0/0.
+            latched = (
+                self._latched_match_id == match_id
+                and match_id != ""
+                and (have_local or observed_rounds > 0 or bool(players))
+            )
+            if latched:
+                available = True
+
             if direct_fresh:
                 reason = "" if self._active else "Waiting for Vortex Telemetry to attach to this match."
             elif not files:
                 reason = "Waiting for Overwolf. Open the Valorant Tracker app (or start Vortex Telemetry) before a match."
-            elif not provider_fresh:
+            elif not provider_fresh and not latched:
                 reason = "Overwolf's live game events look stale - is the Valorant Tracker app running?"
-            elif not self._active:
+            elif not self._active and not latched:
                 reason = "Waiting for the live match to start..."
             else:
                 reason = ""

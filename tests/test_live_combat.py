@@ -176,6 +176,37 @@ class LiveCombatTrackerTests(unittest.TestCase):
         # so they are kept out of the kill-feed scoreboard
         self.assertNotIn("panda marley", out["players"])
 
+    def test_latches_available_through_a_stale_log_gap(self):
+        # A match goes live, then the Valorant Tracker log goes quiet for
+        # longer than the freshness window (rounds have gaps of 30-60s+).
+        # The HUD must not drop to WAITING and fade back - once real combat
+        # for this match has been seen, availability is latched.
+        self._write([
+            self._line("match_info", "match_id", self.MATCH_ID),
+            self._line("kill", "kills", 10),
+            self._line("death", "deaths", 1),
+            self._line("kill", "assists", 2),
+        ])
+        tracker = LiveCombatTracker(self.temp.name)
+
+        live = tracker.snapshot(self.MATCH_ID)
+        self.assertTrue(live["available"])
+        self.assertEqual((10, 1), (live["kills"], live["deaths"]))
+
+        # Age the log well past _FRESH_PROVIDER_AGE; no new lines written.
+        old = os.stat(self.path)
+        os.utime(self.path, (old.st_atime - 600, old.st_mtime - 600))
+
+        stale = tracker.snapshot(self.MATCH_ID)
+        self.assertFalse(stale["provider_fresh"])   # freshness reflects the gap
+        self.assertTrue(stale["available"])          # ...but the HUD stays up
+        self.assertEqual((10, 1), (stale["kills"], stale["deaths"]))
+        self.assertEqual("", stale["reason"])
+
+        # A different match clears the latch.
+        other = tracker.snapshot("11111111-2222-3333-4444-555555555555")
+        self.assertFalse(other["available"])
+
     def test_accepts_direct_vortex_telemetry_events_without_a_log(self):
         tracker = LiveCombatTracker(self.temp.name)
         tracker.ingest({"featureName": "match_info", "key": "match_id", "value": self.MATCH_ID}, self.MATCH_ID)

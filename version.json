@@ -1,5 +1,5 @@
 {
-  "version": "5.5.26",
+  "version": "5.5.27",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.26: a short animated wipe - reusing the boot screen's logo and shimmer - now plays when opening or leaving the live match dashboard, so going from PLAY into the dashboard (and back) reads as one motion."
+  "changelog": "Vortex v5.5.27: the Live Aim HUD no longer flickers between its stats and WAITING during a match. The Valorant Tracker log goes quiet for 30-60s between rounds; once a match has genuinely gone live the HUD now holds its last-known numbers through those gaps instead of fading out and back in."
 }
