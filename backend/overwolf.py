@@ -228,9 +228,52 @@ def ensure_available() -> bool:
     return False
 
 
+def has_valorant_tracker() -> bool:
+    """Returns True if the Valorant Tracker app or GEP events extension is installed."""
+    localapp = os.getenv("LOCALAPPDATA") or ""
+    ext_dir = os.path.join(localapp, "Overwolf", "Extensions")
+    if not os.path.isdir(ext_dir):
+        return False
+    # Valorant Tracker or any extension registering game 21640
+    try:
+        for uid in os.listdir(ext_dir):
+            upath = os.path.join(ext_dir, uid)
+            if not os.path.isdir(upath):
+                continue
+            for v in os.listdir(upath):
+                vpath = os.path.join(upath, v)
+                manifest = os.path.join(vpath, "manifest.json")
+                if os.path.isfile(manifest):
+                    try:
+                        with open(manifest, "r", encoding="utf-8", errors="ignore") as f:
+                            m = f.read()
+                            if "21640" in m or "VALORANT Tracker" in m:
+                                return True
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return False
+
+
+def open_tracker_store() -> Dict[str, Any]:
+    """Opens Overwolf's store page for Valorant Tracker (or web fallback)."""
+    ensure_running()
+    store_url = "overwolf://store/game-details/21640"
+    web_fallback = "https://tracker.gg/valorant/app"
+    try:
+        os.startfile(store_url)
+        return {"success": True, "method": "overwolf_store", "message": "Opening Valorant Tracker in Overwolf..."}
+    except Exception:
+        import webbrowser
+        webbrowser.open(web_fallback)
+        return {"success": True, "method": "web", "message": "Opening Valorant Tracker download page..."}
+
+
 def status() -> Dict[str, Any]:
     return {
         "installed": is_installed(),
         "running": is_running(),
+        "has_tracker": has_valorant_tracker(),
         "install": dict(INSTALL_STATE),
     }

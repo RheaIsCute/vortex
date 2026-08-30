@@ -245,9 +245,9 @@ class LiveCombatTracker:
             available = bool(self._active and (have_local or players))
 
             if not files:
-                reason = "Overwolf isn't installed, so exact live combat data isn't available."
+                reason = "Install Overwolf & Valorant Tracker for live in-match combat stats (KDA, HS%, ADR)."
             elif not provider_fresh:
-                reason = "Start Overwolf before or during the match for exact live combat data."
+                reason = "Overwolf is active, but live combat telemetry requires the free Valorant Tracker app in Overwolf to capture real-time match events."
             elif not self._active:
                 reason = "Waiting for Overwolf's live provider to attach to this match."
             else:

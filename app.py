@@ -88,6 +88,7 @@ LIVE_HUD_TITLE = "Vortex Live Aim HUD"
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_LAYERED = 0x00080000
 WS_EX_NOACTIVATE = 0x08000000
 
 
@@ -223,15 +224,34 @@ def _make_live_hud_controller(hud_window):
     """Returns the desktop bridge used by Settings to show/hide the aim HUD."""
     state = {"hwnd": 0, "visible": False}
 
+    def _apply_clickthrough(h: int):
+        try:
+            ex_style = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
+            new_ex = (ex_style | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+            if ex_style != new_ex:
+                win32gui.SetWindowLong(h, win32con.GWL_EXSTYLE, new_ex)
+        except Exception:
+            pass
+
+    def _apply_all_children(parent_hwnd: int):
+        if not parent_hwnd or not win32gui.IsWindow(parent_hwnd):
+            return
+        _apply_clickthrough(parent_hwnd)
+        try:
+            def _child_cb(chwnd, _):
+                _apply_clickthrough(chwnd)
+                return True
+            win32gui.EnumChildWindows(parent_hwnd, _child_cb, None)
+        except Exception:
+            pass
+
     def _prepare() -> int:
         hwnd = state["hwnd"] or win32gui.FindWindow(None, LIVE_HUD_TITLE)
         if not hwnd:
             return 0
         state["hwnd"] = hwnd
         try:
-            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            ex_style = (ex_style | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+            _apply_all_children(hwnd)
             win32gui.SetWindowPos(
                 hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_FRAMECHANGED | win32con.SWP_NOACTIVATE,
@@ -248,6 +268,7 @@ def _make_live_hud_controller(hud_window):
             hwnd = _prepare()
             if enabled:
                 if hwnd:
+                    _apply_all_children(hwnd)
                     win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
                     win32gui.SetWindowPos(
                         hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
@@ -255,7 +276,13 @@ def _make_live_hud_controller(hud_window):
                     )
                 else:
                     hud_window.show()
-                    _prepare()
+                    hwnd = _prepare()
+                    if hwnd:
+                        _apply_all_children(hwnd)
+                        win32gui.SetWindowPos(
+                            hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE,
+                        )
             else:
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
@@ -265,6 +292,26 @@ def _make_live_hud_controller(hud_window):
         except Exception:
             _startup_log("setLiveHudEnabled failed:\n" + traceback.format_exc())
             return {"success": False, "enabled": enabled}
+
+    # Persistent topmost-keeper daemon to maintain HUD overlay position above VALORANT
+    def _topmost_keeper():
+        while True:
+            time.sleep(0.3)
+            if not state["visible"]:
+                continue
+            try:
+                hwnd = state["hwnd"] or win32gui.FindWindow(None, LIVE_HUD_TITLE)
+                if hwnd and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                    state["hwnd"] = hwnd
+                    _apply_all_children(hwnd)
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
+                    )
+            except Exception:
+                pass
+
+    threading.Thread(target=_topmost_keeper, daemon=True).start()
 
     return setLiveHudEnabled
 
@@ -296,7 +343,17 @@ def _make_overlay_controller(overlay_window, main_window):
             # NOACTIVATE kept VALORANT focused and trapped its cursor. Opening
             # the quick panel is an intentional focus change, so it must be a
             # normal interactive window for buttons and inputs to work.
-            ex_style = (ex_style | WS_EX_TOOLWINDOW) & ~0x08000000 & ~WS_EX_APPWINDOW
+            # The quick panel is the interactive exception to the desktop HUD.
+            # Explicitly clear every click-through/non-activating flag so a
+            # previous HUD style or WebView recreation can never make its
+            # buttons and inputs swallow mouse events.
+            ex_style = (
+                (ex_style | WS_EX_TOOLWINDOW)
+                & ~WS_EX_NOACTIVATE
+                & ~WS_EX_TRANSPARENT
+                & ~WS_EX_LAYERED
+                & ~WS_EX_APPWINDOW
+            )
             win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
             win32gui.SetWindowPos(
                 hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
@@ -359,16 +416,35 @@ def _make_overlay_controller(overlay_window, main_window):
             pass
 
     def showMainApp():
-        # The panel's "Full app" button used to fall back to opening a
-        # browser tab, because this bridge function didn't exist either -
-        # restore() first so a minimized main window actually reappears,
-        # not just repaints somewhere off in the taskbar.
+        # Restore and show the main window, then bring it to the foreground natively
         try:
             main_window.restore()
         except Exception:
             pass
         try:
             main_window.show()
+        except Exception:
+            pass
+        try:
+            main_hwnd = win32gui.FindWindow(None, "Vortex | Valorant Account Manager")
+            if main_hwnd and win32gui.IsWindow(main_hwnd):
+                # Main WebView must never inherit overlay click-through flags.
+                ex_style = win32gui.GetWindowLong(main_hwnd, win32con.GWL_EXSTYLE)
+                ex_style = (
+                    (ex_style | WS_EX_APPWINDOW)
+                    & ~WS_EX_TRANSPARENT
+                    & ~WS_EX_LAYERED
+                    & ~WS_EX_NOACTIVATE
+                )
+                win32gui.SetWindowLong(main_hwnd, win32con.GWL_EXSTYLE, ex_style)
+                win32gui.ShowWindow(main_hwnd, win32con.SW_RESTORE)
+                win32gui.SetWindowPos(
+                    main_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+                )
+                win32gui.BringWindowToTop(main_hwnd)
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                ctypes.windll.user32.SetForegroundWindow(main_hwnd)
         except Exception:
             pass
 

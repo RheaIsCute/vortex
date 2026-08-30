@@ -3094,6 +3094,12 @@ async def overwolf_install():
     return await asyncio.to_thread(overwolf.start_install)
 
 
+@app.post("/api/overwolf/install-tracker")
+async def overwolf_install_tracker():
+    """Opens Overwolf's app store page for the Valorant Tracker app."""
+    return await asyncio.to_thread(overwolf.open_tracker_store)
+
+
 @app.get("/api/live/session")
 async def live_session(force: bool = False):
     """Live snapshot of the signed-in session, polled by the dashboard."""

@@ -3108,6 +3108,18 @@ async function setLiveHudEnabled(enabled) {
     }
 }
 
+async function installOverwolfTracker(e) {
+    if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+    try {
+        const res = await fetch("/api/overwolf/install-tracker", { method: "POST" });
+        const data = await res.json();
+        showToast(data.message || "Opening Overwolf store for Valorant Tracker...", "info");
+    } catch (err) {
+        showToast("Could not launch Overwolf", "error");
+    }
+}
+window.installOverwolfTracker = installOverwolfTracker;
+
 async function autoDetectClientPath() {
     try {
         const res = await fetch("/api/detect-client");
@@ -4304,11 +4316,17 @@ function renderMeCard(match) {
 
     // GEP combat is real live data, so don't waste space on a warning banner.
     // The graph below communicates the source and updates every observed round.
+    const isOverwolfHint = cur.reason && cur.reason.toLowerCase().includes("overwolf");
+    const trackerBtn = isOverwolfHint
+        ? '<button type="button" class="dash-me-install-tracker-btn" onclick="installOverwolfTracker(event)" title="Open Valorant Tracker in Overwolf"><i class="fa-solid fa-cloud-arrow-down"></i> Open Overwolf Tracker</button>'
+        : "";
+
     const pendingHtml = gepLive ? "" : (hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
             '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
             ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS fill in the moment Riot publishes them.</span>' +
+            trackerBtn +
         '</div>');
 
     const hitHtml = (hasCombat && shots)

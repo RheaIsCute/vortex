@@ -7386,7 +7386,7 @@ button.match-card, button.stat-match, button.dash-player {
 
 .dash-me-pending {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 9px;
     margin-top: 9px;
     padding: 9px 11px;
@@ -7401,6 +7401,30 @@ button.match-card, button.stat-match, button.dash-player {
 .dash-me-pending > i {
     margin-top: 2px;
     color: var(--text-dim);
+}
+
+.dash-me-install-tracker-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(168, 85, 247, 0.18);
+    border: 1px solid rgba(168, 85, 247, 0.45);
+    color: #f0abfc;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+
+.dash-me-install-tracker-btn:hover {
+    background: rgba(168, 85, 247, 0.35);
+    border-color: #f0abfc;
+    color: #fff;
+    transform: translateY(-1px);
 }
 
 .dash-me-section.is-recent .dash-me-tiles {
