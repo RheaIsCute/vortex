@@ -60,9 +60,13 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch Vortex"; Flags: nowait pos
 Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName}"; Flags: runhidden; RunOnceId: "KillVortex"
 
 [InstallDelete]
-; Wipe the previous build's _internal before copying the new one, so files
-; dropped between versions cannot linger and get loaded.
-Type: filesandordirs; Name: "{app}\_internal"
+; Clear the old Python bytecode and any stray _internal subfolders so a file
+; removed between versions can't linger and get imported. NOT a full _internal
+; wipe - that ran before the new files were confirmed writable, so a locked
+; file plus a cancel left the install gutted. The [Files] section overwrites
+; everything else in place (ignoreversion).
+Type: filesandordirs; Name: "{app}\_internal\*.pyc"
+Type: filesandordirs; Name: "{app}\_internal\**\__pycache__"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -73,12 +77,27 @@ var
   ResultCode: Integer;
   I: Integer;
 begin
+  { Everything that can hold a file in _internal open. Vortex spawns
+    msedgewebview2 children that outlive it, and Overwolf loads Vortex's
+    VCRUNTIME140.dll via the process-directory DLL search - both lock files
+    this install has to replace, which is what kept the update failing with
+    "DeleteFile failed; code 5". Overwolf is restarted by Vortex on launch. }
   for I := 1 to 3 do
   begin
-    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM {#AppExeName} >nul 2>&1',
+    Exec(ExpandConstant('{cmd}'),
+         '/C taskkill /F /IM {#AppExeName} >nul 2>&1 & ' +
+         'taskkill /F /IM Overwolf.exe /IM OverwolfBrowser.exe /IM OverwolfLauncher.exe >nul 2>&1',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(200);
+    Sleep(300);
   end;
+  { WebView2 children of Vortex, matched by their command line. }
+  Exec('powershell.exe',
+       '-NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process ' +
+       '-Filter ""Name=''msedgewebview2.exe''"" | Where-Object { $_.CommandLine ' +
+       '-match ''Programs.\\?Vortex'' } | ForEach-Object { Stop-Process -Id ' +
+       '$_.ProcessId -Force -ErrorAction SilentlyContinue }"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(400);
   Result := '';
 end;
 

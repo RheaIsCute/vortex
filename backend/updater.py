@@ -5,7 +5,7 @@ and if a newer version is available, downloads the Windows installer from the
 matching GitHub release and launches it so it can replace the running app.
 
 Manifest format (version.json in RheaIsCute/vortex):
-    { "version": "5.5.20", "download_url": "...", "changelog": "..." }
+    { "version": "5.5.21", "download_url": "...", "changelog": "..." }
 where download_url points at the VortexSetup.exe asset of that release, e.g.
     https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe
 """
@@ -339,14 +339,31 @@ if (-not $go) {{
 }}
 Write-Log "Go flag received."
 
-# Step 2: Wait for the parent to actually exit, then clear any stragglers so
-# the installer isn't fighting a locked Vortex.exe.
+# Step 2: Wait for the parent to actually exit, then clear everything that
+# could hold a file in _internal open. Vortex spawns msedgewebview2 children
+# that outlive it, and Overwolf loads Vortex's own VCRUNTIME140.dll via the
+# process-directory DLL search - both lock files the installer must replace,
+# which is why the silent install kept failing and falling back to a visible
+# "DeleteFile failed; code 5" prompt. Overwolf is restarted by Vortex on its
+# next launch.
 for ($i = 0; $i -lt 40; $i++) {{
     if (-not (Get-Process -Id {current_pid} -ErrorAction SilentlyContinue)) {{ break }}
     Start-Sleep -Milliseconds 500
 }}
 Get-Process -Name "Vortex" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 700
+
+# WebView2 children whose command line points at the Vortex install.
+Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.CommandLine -like "*\\Programs\\Vortex\\*" -or $_.CommandLine -like "*\\Vortex\\_internal\\*" }} |
+    ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+
+# Overwolf holds Vortex's VCRUNTIME140.dll. Stop it (and its browser procs);
+# Vortex re-launches it on startup for live combat stats.
+$owWasRunning = [bool](Get-Process -Name "Overwolf" -ErrorAction SilentlyContinue)
+Get-Process -Name "Overwolf","OverwolfLauncher","OverwolfBrowser" -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Write-Log "Cleared Vortex/WebView2/Overwolf (overwolf was running: $owWasRunning)"
+Start-Sleep -Milliseconds 900
 
 # Step 3: Install over the existing copy. /DIR pins it to where Vortex already
 # lives so the update replaces the install instead of adding another one.

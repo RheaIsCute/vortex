@@ -1,5 +1,5 @@
 {
-  "version": "5.5.20",
+  "version": "5.5.21",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.20: the Live Aim HUD only shows during agent select and matches now (not in the menus), and its headshot number now tracks your headshot-kill rate properly instead of getting stuck - Overwolf doesn't expose true per-shot accuracy, so this is the closest reliable metric."
+  "changelog": "Vortex v5.5.21: makes auto-updates reliable - the updater and installer now close Overwolf and any leftover WebView2 processes before installing, which is what kept the update failing with a 'file in use' error and asking you to retry by hand."
 }
