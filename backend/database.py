@@ -188,6 +188,11 @@ class Database:
                 # Native quick panel, summoned globally by the hotkey below.
                 ("overlay_enabled", "1"),
                 ("overlay_hotkey", "CTRL+SHIFT+F8"),
+                # Start Overwolf (in the tray) alongside VALORANT so live
+                # combat stats work. Only ever launches an existing install -
+                # installing it needs overwolf_consent, asked for once.
+                ("overwolf_auto", "1"),
+                ("overwolf_consent", ""),
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -338,6 +343,13 @@ class Database:
                 query += " ORDER BY favorite DESC, username COLLATE NOCASE ASC"
             elif sort_by == "last_updated":
                 query += " ORDER BY favorite DESC, last_updated DESC"
+            elif sort_by == "recent":
+                # Accounts you've actually signed into, newest first. Never
+                # logged in sorts last rather than first, which is what a NULL
+                # would otherwise do under DESC.
+                query += (" ORDER BY favorite DESC,"
+                          " CASE WHEN last_login IS NULL OR last_login = '' THEN 1 ELSE 0 END,"
+                          " last_login DESC, level DESC")
             else:  # "level" or default
                 query += " ORDER BY favorite DESC, level DESC"
 

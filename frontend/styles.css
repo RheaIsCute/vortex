@@ -7108,7 +7108,10 @@ button.match-card, button.stat-match, button.dash-player {
     font: inherit;
 }
 
-.modal-detail-card { width: min(1080px, calc(100vw - 28px)); }
+/* max-width, not just width: the shared .modal-card rule caps everything at
+   580px, which was clamping this card and clipping the scoreboard's right-hand
+   columns (ADR/HS%) clean off. */
+.modal-detail-card { width: min(1080px, calc(100vw - 28px)); max-width: min(1080px, calc(100vw - 28px)); }
 .match-detail-content { padding: 18px 22px 24px; max-height: min(76vh, 780px); overflow: auto; }
 .detail-stat-grid, .profile-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .detail-stat-grid > div, .profile-summary > div { padding: 13px; background: var(--surface-2); border: 1px solid var(--stroke); border-radius: 10px; }
@@ -7129,7 +7132,9 @@ button.match-card, button.stat-match, button.dash-player {
 .detail-history-row > span { color: var(--accent); font-size: 10px; font-weight: 800; }
 .detail-history-row.is-loss > span { color: var(--danger); }
 
-.detail-scoreboard { display: grid; gap: 14px; }
+/* Scrolls inside itself rather than letting a narrow viewport clip the
+   right-hand stat columns. No scrollbar appears when it already fits. */
+.detail-scoreboard { display: grid; gap: 14px; overflow-x: auto; }
 .detail-team { overflow: hidden; border: 1px solid var(--stroke); border-radius: 12px; background: var(--surface-2); }
 .detail-team.is-winner { border-color: rgba(16, 185, 129, .42); box-shadow: inset 3px 0 0 #10b981; }
 .detail-team-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-bottom: 1px solid var(--stroke); background: rgba(255,255,255,.025); }

@@ -13,7 +13,7 @@ const state = {
     stats: {},
     currentRegion: "ALL",
     currentTag: "ALL",
-    currentSort: "level",
+    currentSort: "recent",
     searchQuery: "",
     viewMode: "grid",
     isSyncingAll: false,
@@ -2304,6 +2304,12 @@ function sortAccountsList(accounts, sortBy) {
             return (a.username || "").localeCompare(b.username || "", undefined, { sensitivity: "base" });
         } else if (sortBy === "last_updated") {
             return (b.last_updated || "").localeCompare(a.last_updated || "");
+        } else if (sortBy === "recent") {
+            // Never-logged-in accounts sink to the bottom instead of floating
+            // to the top on an empty string compare.
+            const la = a.last_login || "", lb = b.last_login || "";
+            if (!la !== !lb) return la ? -1 : 1;
+            return lb.localeCompare(la) || (b.level || 0) - (a.level || 0);
         } else {
             return (b.level || 0) - (a.level || 0);
         }
