@@ -3807,43 +3807,110 @@ function highlightAccount(id) {
 // puts everything back.
 // ==========================================================================
 
-async function openDashboard() {
-    if (state.dashboardOpen) return;
-    state.dashboardOpen = true;
+// Short full-cover wipe reusing the boot screen's look, played over a view
+// change so PLAY -> dashboard (and back) reads as one motion instead of a
+// hard cut. `swap` runs while the screen is fully covered; the returned
+// promise resolves once the overlay has left. `reverse` flips the sweep
+// direction so entering and leaving feel mirrored.
+const VORTEX_LOGO_MARKUP = `
+    <svg class="vw-mark" viewBox="0 0 1000 647.9" aria-hidden="true">
+        <g fill="url(#vbGrad)" fill-rule="evenodd">
+            <path class="vb-fill" d="M1.0,4.0 19.1,7.0 80.2,25.1 92.3,27.1 438.3,125.4 292.9,175.5 416.2,342.0 419.3,343.0 441.3,338.0 493.5,322.0 528.6,307.9 575.7,284.9 545.6,309.9 512.5,333.0 473.4,356.1 443.3,371.1 408.2,385.2 382.1,393.2 356.1,398.2 331.0,399.2 249.7,299.9 2.0,5.0Z"/>
+            <path class="vb-fill" d="M995.0,1.0 998.0,1.0 989.0,12.0 788.4,234.7 787.4,216.6 778.3,198.6 761.3,182.5 743.2,172.5 718.2,164.5 697.1,160.5 670.0,158.5 633.9,159.5 686.1,152.5 724.2,152.5 725.2,151.5 723.2,149.4 700.1,140.4 667.0,132.4 619.9,127.4 595.8,127.4 619.9,116.3 678.0,96.3 897.7,29.1 994.0,2.0Z"/>
+            <path class="vb-fill" d="M593.8,179.5 638.9,180.5 667.0,186.6 684.1,192.6 707.1,205.6 724.2,221.7 732.2,233.7 738.2,249.7 739.2,277.8 737.2,287.9 730.2,307.9 721.2,325.0 706.1,347.0 690.1,366.1 666.0,390.2 637.9,413.2 634.9,416.2 635.9,417.3 673.0,396.2 717.2,364.1 746.2,334.0 765.3,304.9 761.3,319.0 752.3,338.0 736.2,362.1 688.1,422.3 503.5,641.9 498.5,645.9 406.2,521.6 446.3,508.5 497.5,487.5 555.7,459.4 557.7,457.4 556.7,456.4 529.6,467.4 486.5,481.4 442.3,493.5 400.2,502.5 340.0,509.5 302.9,509.5 276.8,506.5 311.9,505.5 367.1,496.5 415.2,483.5 459.4,467.4 513.5,441.3 550.7,418.3 586.8,390.2 616.9,361.1 629.9,346.0 645.9,323.0 656.0,300.9 659.0,284.9 657.0,269.8 652.0,257.8 634.9,238.7 625.9,232.7 608.8,224.7 581.7,217.7 537.6,215.6 485.5,223.7 439.3,237.7 420.3,245.7 453.4,224.7 500.5,202.6 550.7,186.6 576.7,181.5 592.8,180.5Z"/>
+            <path class="vb-fill" d="M239.7,368.1 239.7,383.1 241.7,389.2 246.7,398.2 256.8,408.2 263.8,413.2 281.8,421.3 296.9,425.3 320.0,428.3 368.1,427.3 414.2,419.3 474.4,400.2 513.5,382.1 502.5,391.2 459.4,418.3 417.3,439.3 385.2,452.4 361.1,460.4 323.0,469.4 298.9,472.4 263.8,472.4 247.7,469.4 230.7,462.4 218.7,452.4 211.6,438.3 210.6,425.3 216.6,404.2 228.7,382.1 238.7,369.1Z"/>
+        </g>
+    </svg>`;
 
-    document.body.classList.add("dashboard-mode");
-    if (DOM.dashView) {
-        DOM.dashView.classList.add("is-open");
-        DOM.dashView.setAttribute("aria-hidden", "false");
+function runVortexWipe(swap, { reverse = false } = {}) {
+    // A shared gradient def the wipe's logo needs; boot.css defines #vbGrad
+    // only inside the boot SVG, which is gone by now.
+    if (!document.getElementById("vw-grad-defs")) {
+        const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        s.id = "vw-grad-defs";
+        s.setAttribute("width", "0");
+        s.setAttribute("height", "0");
+        s.style.position = "absolute";
+        s.innerHTML = `<defs><linearGradient id="vbGrad" x1="0" y1="0.12" x2="1" y2="0">
+            <stop offset="0" stop-color="#6f5bff"/><stop offset="0.55" stop-color="#8a3bfb"/>
+            <stop offset="1" stop-color="#a020fe"/></linearGradient></defs>`;
+        document.body.appendChild(s);
     }
-    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.add("is-active");
 
-    if (!state.agents.length) await loadLiveAgents();
-    renderModeGrid();
-    renderAgentGrid();
-    refreshInstalockStatus(true);
-    moveTabGlide();
+    const el = document.createElement("div");
+    el.className = "vortex-wipe" + (reverse ? " is-reverse" : "");
+    el.innerHTML = VORTEX_LOGO_MARKUP + '<span class="vw-track"></span>';
+    document.body.appendChild(el);
 
-    if (state.live) renderDashboard(state.live);
-    scheduleLivePoll(0);
-    // The roster collapses out from under the page, so anchor back to the
-    // top rather than leaving the view stranded mid-document.
-    window.scrollTo({ top: 0, behavior: PREFERS_REDUCED_MOTION ? "auto" : "smooth" });
+    const reduced = PREFERS_REDUCED_MOTION;
+    const coverMs = reduced ? 180 : 360;   // matches vw-in / vw-fade
+    const holdMs = reduced ? 0 : 120;
+    const revealMs = reduced ? 180 : 340;  // matches vw-out / vw-fade-out
+
+    return new Promise(resolve => {
+        window.setTimeout(async () => {
+            try { await swap(); } catch (_) {}
+            window.setTimeout(() => {
+                el.classList.add("is-out");
+                window.setTimeout(() => {
+                    el.remove();
+                    resolve();
+                }, revealMs);
+            }, holdMs);
+        }, coverMs);
+    });
+}
+
+async function openDashboard() {
+    if (state.dashboardOpen || state._dashTransitioning) return;
+    state._dashTransitioning = true;
+
+    await runVortexWipe(async () => {
+        state.dashboardOpen = true;
+
+        document.body.classList.add("dashboard-mode");
+        if (DOM.dashView) {
+            DOM.dashView.classList.add("is-open");
+            DOM.dashView.setAttribute("aria-hidden", "false");
+        }
+        if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.add("is-active");
+
+        if (!state.agents.length) await loadLiveAgents();
+        renderModeGrid();
+        renderAgentGrid();
+        refreshInstalockStatus(true);
+        moveTabGlide();
+
+        if (state.live) renderDashboard(state.live);
+        scheduleLivePoll(0);
+        // The roster collapses out from under the page, so anchor back to the
+        // top rather than leaving the view stranded mid-document.
+        window.scrollTo({ top: 0, behavior: "auto" });
+    });
+
+    state._dashTransitioning = false;
 }
 
 function closeDashboard() {
-    if (!state.dashboardOpen) return;
-    state.dashboardOpen = false;
+    if (!state.dashboardOpen || state._dashTransitioning) return;
+    state._dashTransitioning = true;
 
-    document.body.classList.remove("dashboard-mode");
-    if (DOM.dashView) {
-        DOM.dashView.classList.remove("is-open");
-        DOM.dashView.setAttribute("aria-hidden", "true");
-    }
-    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.remove("is-active");
+    runVortexWipe(() => {
+        state.dashboardOpen = false;
 
-    stopLiveTimers();
-    clearTimeout(state._statsTimer);
+        document.body.classList.remove("dashboard-mode");
+        if (DOM.dashView) {
+            DOM.dashView.classList.remove("is-open");
+            DOM.dashView.setAttribute("aria-hidden", "true");
+        }
+        if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.remove("is-active");
+
+        stopLiveTimers();
+        clearTimeout(state._statsTimer);
+        window.scrollTo({ top: 0, behavior: "auto" });
+    }, { reverse: true }).then(() => {
+        state._dashTransitioning = false;
+    });
 }
 
 function toggleDashboard() {

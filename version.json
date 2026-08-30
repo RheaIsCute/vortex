@@ -1,5 +1,5 @@
 {
-  "version": "5.5.25",
+  "version": "5.5.26",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.25: the win rate bar on the signed-in account card is now a cumulative win-rate graph over recent matches instead of a flat meter."
+  "changelog": "Vortex v5.5.26: a short animated wipe - reusing the boot screen's logo and shimmer - now plays when opening or leaving the live match dashboard, so going from PLAY into the dashboard (and back) reads as one motion."
 }
