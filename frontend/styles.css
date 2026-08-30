@@ -316,7 +316,6 @@ body.effects-paused .bg-glow {
     will-change: auto;
 }
 
-body.effects-paused .brand-mark i,
 body.effects-paused .brand-wordmark {
     animation-play-state: paused;
 }
@@ -407,30 +406,21 @@ body.effects-paused .scroll-top-btn {
 }
 
 .brand-mark {
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
+    width: 34px;
+    height: 34px;
     display: grid;
     place-items: center;
-    background: var(--grad-primary);
-    color: #fff;
-    font-size: 14px;
-    box-shadow: 0 6px 18px -6px rgba(var(--a-rgb), 0.9), var(--bevel);
     position: relative;
-    overflow: hidden;
     flex-shrink: 0;
 }
 
-.brand-mark::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.4), transparent 55%);
-}
-
-.brand-mark i {
-    position: relative;
-    z-index: 1;
+.brand-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 4px 12px rgba(var(--a-rgb), 0.55));
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .brand-text {

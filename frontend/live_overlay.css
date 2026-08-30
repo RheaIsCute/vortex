@@ -20,7 +20,7 @@ body { padding: 8px; user-select: none; -webkit-font-smoothing: antialiased; }
 .hud-head,.hud-score,.hud-chart-wrap,.hud-foot { position:relative; z-index:1; }
 .hud-head { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 0; font-family:Consolas,"Cascadia Mono",monospace; font-size:9px; font-weight:800; letter-spacing:.14em; }
 .hud-brand { display:flex; align-items:center; gap:7px; color:#ddd6fe; }
-.hud-brand b { width:8px; height:8px; border-radius:3px; background:linear-gradient(135deg,#f0abfc,#8b5cf6); box-shadow:0 0 12px #a855f7; }
+.hud-brand img { width:13px; height:13px; object-fit:contain; filter:drop-shadow(0 0 6px rgba(168,85,247,.55)); }
 .hud-brand small { color:#7dd3fc; font-size:8px; }
 .hud-round { padding:4px 7px; border:1px solid rgba(125,211,252,.28); border-radius:999px; color:#7dd3fc; background:rgba(14,165,233,.08); font-size:8px; }
 .hud-score { display:flex; justify-content:space-between; gap:14px; padding:10px 13px 8px; }

@@ -135,39 +135,15 @@ input {
     width: 34px;
     height: 34px;
     place-items: center;
-    overflow: hidden;
-    border: 1px solid rgba(190, 145, 255, 0.34);
-    border-radius: 10px;
-    background: linear-gradient(145deg, rgba(172, 102, 255, 0.24), rgba(74, 36, 122, 0.12));
-    box-shadow: inset 0 0 18px rgba(159, 98, 255, 0.09), 0 0 18px rgba(159, 98, 255, 0.08);
+    flex-shrink: 0;
 }
 
-.brand-mark::before,
-.brand-mark::after,
-.brand-mark span {
-    content: "";
-    position: absolute;
-    width: 5px;
-    border-radius: 99px;
-    background: linear-gradient(to bottom, #d7baff, #8f4df2);
-    box-shadow: 0 0 8px rgba(173, 112, 255, 0.42);
-    transform-origin: bottom;
-}
-
-.brand-mark::before {
-    height: 17px;
-    transform: translate(-6px, -1px) rotate(-27deg);
-}
-
-.brand-mark::after {
-    height: 17px;
-    transform: translate(6px, -1px) rotate(27deg);
-}
-
-.brand-mark span {
-    width: 4px;
-    height: 11px;
-    transform: translateY(5px);
+.brand-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 0 12px rgba(159, 98, 255, 0.4));
+    user-select: none;
 }
 
 .brand-copy {
