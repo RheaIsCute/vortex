@@ -2510,10 +2510,12 @@ def build_live_snapshot() -> Dict[str, Any]:
 
     # Overwolf's event provider only records what it saw while running, so it
     # has to be up before the match starts - by the time a scoreboard would be
-    # useful it is already too late to launch it. Installs it if missing.
+    # useful it is already too late to launch it. Installs Overwolf and the
+    # VALORANT Tracker app if either is missing; both fire at most once a run.
     if db.get_settings().get("overwolf_auto", "1") == "1":
         try:
             overwolf.ensure_available()
+            overwolf.ensure_tracker()
         except Exception:
             pass
 
@@ -3111,8 +3113,8 @@ async def overwolf_install():
 
 @app.post("/api/overwolf/install-tracker")
 async def overwolf_install_tracker():
-    """Opens Overwolf's app store page for the Valorant Tracker app."""
-    return await asyncio.to_thread(overwolf.open_tracker_store)
+    """Silently installs the Valorant Tracker Overwolf app (live combat stats)."""
+    return await asyncio.to_thread(overwolf.start_tracker_install)
 
 
 @app.get("/api/live/session")

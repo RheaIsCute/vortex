@@ -19,6 +19,7 @@ installer on every poll.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import threading
@@ -41,6 +42,19 @@ _INSTALLER_URL = "https://download.overwolf.com/install/Download?Channel=vortex"
 # The uninstaller is registered as `OWUninstaller.exe /S`, so the package is
 # NSIS and the installer takes the same silent switch.
 _INSTALL_ARGS = ["/S"]
+
+# VALORANT Tracker's Overwolf app UID. The install/Download endpoint with an
+# ExtensionId returns a small stub ("Valorant Tracker - Installer.exe") that
+# adds the app to an existing Overwolf, or installs Overwolf + the app if it
+# is missing. Same NSIS package, same silent switch.
+_TRACKER_UID = "ipmlnnogholfmdmenfijjifldcpjoecappfccceh"
+_TRACKER_INSTALLER_URL = (
+    "https://download.overwolf.com/install/Download"
+    f"?ExtensionId={_TRACKER_UID}&Channel=vortex"
+)
+# The VALORANT GEP game id. An extension that can actually produce VALORANT
+# match events lists this in its manifest's data.game_events.
+_VALORANT_GEP_ID = 21640
 
 _REG_PATHS = (
     (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Overwolf", "InstallFolder"),
@@ -66,6 +80,17 @@ INSTALL_STATE: Dict[str, Any] = {
     "message": "",
     "percent": 0,
 }
+
+TRACKER_INSTALL_STATE: Dict[str, Any] = {
+    "active": False,
+    "stage": "idle",
+    "message": "",
+    "percent": 0,
+}
+
+# The tracker install is attempted once per run too - it can fail for the same
+# reasons (offline, Overwolf store hiccup) and shouldn't loop on a poll.
+_tracker_install_attempted = False
 
 
 def _reg_install_folder() -> str:
@@ -229,45 +254,159 @@ def ensure_available() -> bool:
 
 
 def has_valorant_tracker() -> bool:
-    """Returns True if the Valorant Tracker app or GEP events extension is installed."""
+    """Whether an Overwolf extension that actually captures VALORANT match
+    events is installed.
+
+    The old check just looked for the string "21640" anywhere in any
+    manifest - which matched Overwolf's built-in "promotions" extension
+    (it lists every game id) and reported a tracker that wasn't there.
+    Now: the extension must be the VALORANT Tracker app by UID, or list the
+    VALORANT GEP id in its manifest's data.game_events array.
+    """
     localapp = os.getenv("LOCALAPPDATA") or ""
     ext_dir = os.path.join(localapp, "Overwolf", "Extensions")
     if not os.path.isdir(ext_dir):
         return False
-    # Valorant Tracker or any extension registering game 21640
     try:
         for uid in os.listdir(ext_dir):
             upath = os.path.join(ext_dir, uid)
             if not os.path.isdir(upath):
                 continue
+            if uid == _TRACKER_UID:
+                return True
             for v in os.listdir(upath):
-                vpath = os.path.join(upath, v)
-                manifest = os.path.join(vpath, "manifest.json")
-                if os.path.isfile(manifest):
-                    try:
-                        with open(manifest, "r", encoding="utf-8", errors="ignore") as f:
-                            m = f.read()
-                            if "21640" in m or "VALORANT Tracker" in m:
-                                return True
-                    except Exception:
-                        pass
+                manifest = os.path.join(upath, v, "manifest.json")
+                if not os.path.isfile(manifest):
+                    continue
+                try:
+                    with open(manifest, "r", encoding="utf-8", errors="ignore") as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+                events = (data.get("data") or {}).get("game_events") or []
+                try:
+                    ids = {int(e) for e in events}
+                except (TypeError, ValueError):
+                    ids = set()
+                # A real provider lists VALORANT in game_events. Exclude the
+                # promotions catalogue, which lists dozens of games it does
+                # not actually provide events for.
+                name = (data.get("meta") or {}).get("name", "")
+                if _VALORANT_GEP_ID in ids and len(ids) < 20 and "promotion" not in name.lower():
+                    return True
     except Exception:
         pass
     return False
 
 
-def open_tracker_store() -> Dict[str, Any]:
-    """Opens Overwolf's store page for Valorant Tracker (or web fallback)."""
-    ensure_running()
-    store_url = "overwolf://store/game-details/21640"
-    web_fallback = "https://tracker.gg/valorant/app"
+def _tracker_set(stage: str, message: str, percent: int = 0, active: bool = True) -> None:
+    TRACKER_INSTALL_STATE.update(
+        {"stage": stage, "message": message, "percent": percent, "active": active}
+    )
+
+
+def _tracker_install_worker() -> None:
+    tmp = os.path.join(
+        os.environ.get("TEMP") or os.getcwd(), "ValorantTrackerSetup-vortex.exe"
+    )
     try:
-        os.startfile(store_url)
-        return {"success": True, "method": "overwolf_store", "message": "Opening Valorant Tracker in Overwolf..."}
-    except Exception:
-        import webbrowser
-        webbrowser.open(web_fallback)
-        return {"success": True, "method": "web", "message": "Opening Valorant Tracker download page..."}
+        _tracker_set("downloading", "Downloading Valorant Tracker...", 0)
+        with requests.get(_TRACKER_INSTALLER_URL, stream=True, timeout=60) as res:
+            if res.status_code != 200:
+                _tracker_set("failed", f"Download failed (HTTP {res.status_code}).",
+                             0, active=False)
+                return
+            total = int(res.headers.get("Content-Length", 0))
+            done = 0
+            with open(tmp, "wb") as f:
+                for chunk in res.iter_content(chunk_size=1024 * 256):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        _tracker_set("downloading", "Downloading Valorant Tracker...",
+                                     min(90, int(done / total * 90)))
+
+        with open(tmp, "rb") as f:
+            if f.read(2) != b"MZ":
+                _tracker_set("failed", "The Tracker installer didn't download cleanly.",
+                             0, active=False)
+                return
+
+        _tracker_set("installing", "Installing Valorant Tracker...", 92)
+        proc = subprocess.Popen(
+            [tmp] + _INSTALL_ARGS,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        proc.wait(timeout=600)
+
+        # The stub returns before Overwolf has finished registering the
+        # extension, so wait for it to actually appear.
+        for _ in range(40):
+            if has_valorant_tracker():
+                break
+            time.sleep(1.5)
+
+        if not has_valorant_tracker():
+            _tracker_set(
+                "failed",
+                "Valorant Tracker didn't finish installing - open Overwolf and add it once.",
+                0, active=False,
+            )
+            return
+
+        ensure_running()
+        _tracker_set("done", "Valorant Tracker is installed - live combat stats will work now.",
+                     100, active=False)
+        login_logger.info("Valorant Tracker installed for live combat stats")
+    except Exception as e:
+        login_logger.exception("Valorant Tracker install failed")
+        _tracker_set("failed", f"Valorant Tracker install failed: {e}", 0, active=False)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def start_tracker_install() -> Dict[str, Any]:
+    """Silently install the VALORANT Tracker Overwolf app in the background."""
+    global _tracker_install_attempted
+
+    if has_valorant_tracker():
+        ensure_running()
+        return {"success": True, "message": "Valorant Tracker is already installed."}
+    if TRACKER_INSTALL_STATE["active"]:
+        return {"success": False, "message": "A Valorant Tracker install is already running."}
+
+    _tracker_install_attempted = True
+    _tracker_set("downloading", "Starting the Valorant Tracker download...", 0)
+    threading.Thread(target=_tracker_install_worker, daemon=True).start()
+    return {"success": True, "message": "Installing Valorant Tracker..."}
+
+
+# Back-compat alias: the endpoint used to just open the store page.
+def open_tracker_store() -> Dict[str, Any]:
+    return start_tracker_install()
+
+
+def ensure_tracker() -> None:
+    """Make sure the VALORANT event provider exists, installing it once if not.
+
+    Called alongside ensure_available() from the live-session poll so a fresh
+    machine ends up with Overwolf + the Tracker with no user setup. Both
+    installs fire at most once per run.
+    """
+    global _tracker_install_attempted
+    if not is_installed():
+        return  # Overwolf itself comes first; ensure_available() handles that.
+    if has_valorant_tracker():
+        return
+    if not _tracker_install_attempted and not TRACKER_INSTALL_STATE["active"]:
+        login_logger.info("Valorant Tracker missing - installing it for live combat stats")
+        start_tracker_install()
 
 
 def status() -> Dict[str, Any]:
@@ -276,4 +415,5 @@ def status() -> Dict[str, Any]:
         "running": is_running(),
         "has_tracker": has_valorant_tracker(),
         "install": dict(INSTALL_STATE),
+        "tracker_install": dict(TRACKER_INSTALL_STATE),
     }

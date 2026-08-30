@@ -3137,9 +3137,9 @@ async function installOverwolfTracker(e) {
     try {
         const res = await fetch("/api/overwolf/install-tracker", { method: "POST" });
         const data = await res.json();
-        showToast(data.message || "Opening Overwolf store for Valorant Tracker...", "info");
+        showToast(data.message || "Installing Valorant Tracker...", "info");
     } catch (err) {
-        showToast("Could not launch Overwolf", "error");
+        showToast("Could not start the Valorant Tracker install", "error");
     }
 }
 window.installOverwolfTracker = installOverwolfTracker;
@@ -4340,9 +4340,12 @@ function renderMeCard(match) {
 
     // GEP combat is real live data, so don't waste space on a warning banner.
     // The graph below communicates the source and updates every observed round.
-    const isOverwolfHint = cur.reason && cur.reason.toLowerCase().includes("overwolf");
+    const isOverwolfHint = cur.reason && (
+        cur.reason.toLowerCase().includes("overwolf") ||
+        cur.reason.toLowerCase().includes("tracker")
+    );
     const trackerBtn = isOverwolfHint
-        ? '<button type="button" class="dash-me-install-tracker-btn" onclick="installOverwolfTracker(event)" title="Open Valorant Tracker in Overwolf"><i class="fa-solid fa-cloud-arrow-down"></i> Open Overwolf Tracker</button>'
+        ? '<button type="button" class="dash-me-install-tracker-btn" onclick="installOverwolfTracker(event)" title="Install Valorant Tracker for live combat stats"><i class="fa-solid fa-cloud-arrow-down"></i> Install Valorant Tracker</button>'
         : "";
 
     const pendingHtml = gepLive ? "" : (hasCombat ? "" :

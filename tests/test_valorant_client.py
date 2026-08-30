@@ -441,5 +441,61 @@ class RegionCacheTests(unittest.TestCase):
         self.assertIsNone(vc._region_from_cache("player-a", 4321, "secret-a"))
 
 
+class PresenceFlattenTests(unittest.TestCase):
+    """Riot moved the match/party fields into nested objects around client
+    13.04 and left a top-level provisioningFlow:'Invalid' behind. The flatten
+    has to lift the real values back to the legacy top-level shape."""
+
+    def test_nested_13_04_presence_is_flattened(self):
+        nested = {
+            "isValid": True,
+            "provisioningFlow": "Invalid",
+            "queueId": "competitive",
+            "partyOwnerMatchScoreAllyTeam": 3,
+            "partyOwnerMatchScoreEnemyTeam": 2,
+            "matchPresenceData": {
+                "matchMap": "/Game/Maps/Jam/Jam",
+                "provisioningFlow": "Matchmaking",
+                "queueId": "competitive",
+                "sessionLoopState": "INGAME",
+            },
+            "partyPresenceData": {
+                "partyState": "DEFAULT",
+                "partyOwnerSessionLoopState": "INGAME",
+                "partyOwnerProvisioningFlow": "Matchmaking",
+                "partyOwnerMatchMap": "/Game/Maps/Jam/Jam",
+            },
+        }
+        flat = vc.ValorantLiveClient._flatten_presence(nested)
+        self.assertEqual(flat["sessionLoopState"], "INGAME")
+        self.assertEqual(flat["provisioningFlow"], "Matchmaking")
+        self.assertEqual(flat["matchMap"], "/Game/Maps/Jam/Jam")
+        self.assertEqual(flat["partyState"], "DEFAULT")
+        self.assertEqual(flat["partyOwnerMatchScoreAllyTeam"], 3)
+
+    def test_legacy_flat_presence_is_left_alone(self):
+        legacy = {
+            "sessionLoopState": "PREGAME",
+            "provisioningFlow": "Matchmaking",
+            "queueId": "unrated",
+            "partyOwnerMatchCurrentTeam": "Blue",
+        }
+        flat = vc.ValorantLiveClient._flatten_presence(legacy)
+        self.assertEqual(flat["sessionLoopState"], "PREGAME")
+        self.assertEqual(flat["provisioningFlow"], "Matchmaking")
+        self.assertEqual(flat["partyOwnerMatchCurrentTeam"], "Blue")
+
+    def test_menus_presence_has_no_loop_state(self):
+        menus = {
+            "isValid": True,
+            "provisioningFlow": "Invalid",
+            "matchPresenceData": {"sessionLoopState": "", "provisioningFlow": "Invalid"},
+            "partyPresenceData": {"partyState": "DEFAULT"},
+        }
+        flat = vc.ValorantLiveClient._flatten_presence(menus)
+        self.assertEqual(flat["sessionLoopState"], "")
+        self.assertEqual(flat["provisioningFlow"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

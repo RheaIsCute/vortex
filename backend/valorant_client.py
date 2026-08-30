@@ -503,11 +503,68 @@ class ValorantLiveClient:
 
     # -- presence (session state + live score) ---------------------------
 
+    @staticmethod
+    def _flatten_presence(decoded: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalise Riot's private presence to the flat shape the rest of the
+        app reads.
+
+        Around client release 13.04 Riot moved the match/party fields out of
+        the top level into nested `matchPresenceData` / `partyPresenceData`
+        objects, and left a top-level `provisioningFlow: "Invalid"` behind.
+        Everything downstream still expects `sessionLoopState`,
+        `provisioningFlow`, `matchMap`, `partyState`, `partyOwnerMatchCurrentTeam`
+        at the top level, so lift them back up (old layout wins if present).
+        """
+        if not isinstance(decoded, dict):
+            return {}
+        match = decoded.get("matchPresenceData") or {}
+        party = decoded.get("partyPresenceData") or {}
+
+        # "Invalid" is Riot's placeholder for "no value" - never surface it.
+        def pick(*values):
+            for v in values:
+                if v not in (None, "", "Invalid"):
+                    return v
+            return ""
+
+        flat = dict(decoded)
+        flat["sessionLoopState"] = pick(
+            decoded.get("sessionLoopState"),
+            match.get("sessionLoopState"),
+            party.get("partyOwnerSessionLoopState"),
+        )
+        flat["provisioningFlow"] = pick(
+            decoded.get("provisioningFlow") if decoded.get("provisioningFlow") != "Invalid" else None,
+            match.get("provisioningFlow"),
+            party.get("partyOwnerProvisioningFlow"),
+        )
+        flat["queueId"] = pick(
+            decoded.get("queueId"), match.get("queueId"), party.get("queueId")
+        )
+        flat["matchMap"] = pick(
+            decoded.get("matchMap"), match.get("matchMap"), party.get("partyOwnerMatchMap")
+        )
+        flat["partyState"] = pick(decoded.get("partyState"), party.get("partyState"))
+        flat["partyOwnerMatchCurrentTeam"] = pick(
+            decoded.get("partyOwnerMatchCurrentTeam"),
+            match.get("partyOwnerMatchCurrentTeam"),
+            party.get("partyOwnerMatchCurrentTeam"),
+        )
+        for key in (
+            "partyOwnerMatchScoreAllyTeam",
+            "partyOwnerMatchScoreEnemyTeam",
+            "partyOwnerProvisioningStartTime",
+        ):
+            if not flat.get(key):
+                flat[key] = decoded.get(key) or party.get(key) or match.get(key) or 0
+        return flat
+
     def presence(self) -> Dict[str, Any]:
         """
-        Decoded private presence payload for this account. This is where the
-        live round score and the menus/pregame/ingame state live - the match
-        endpoints don't expose a running score.
+        Decoded private presence payload for this account, flattened to the
+        legacy field layout. This is where the live round score and the
+        menus/pregame/ingame state live - the match endpoints don't expose a
+        running score.
         """
         res = self._local("/chat/v4/presences")
         if not res or res.status_code != 200:
@@ -525,11 +582,18 @@ class ValorantLiveClient:
                     decoded = json.loads(base64.b64decode(raw).decode("utf-8", errors="ignore"))
                 except Exception:
                     continue
-                # If this presence payload contains valorant session state or party info, return immediately
-                if decoded.get("sessionLoopState") or decoded.get("partyOwnerMatchCurrentTeam") or decoded.get("provisioningFlow"):
-                    return decoded
+                flat = self._flatten_presence(decoded)
+                # Return as soon as a payload carries real session/match/party state.
+                if (
+                    flat.get("sessionLoopState")
+                    or flat.get("partyOwnerMatchCurrentTeam")
+                    or flat.get("provisioningFlow")
+                    or decoded.get("matchPresenceData")
+                    or decoded.get("partyPresenceData")
+                ):
+                    return flat
                 if not best_payload:
-                    best_payload = decoded
+                    best_payload = flat
         except Exception:
             pass
         return best_payload
@@ -564,11 +628,28 @@ class ValorantLiveClient:
 
     # -- party / queue ---------------------------------------------------
 
-    def party_id(self) -> Optional[str]:
-        res = self._remote("GET", f"{self.glz}/parties/v1/players/{self.puuid}", timeout=4.0)
-        if res.status_code != 200:
-            return None
-        return res.json().get("CurrentPartyID")
+    def party_id(self, retries: int = 3) -> Optional[str]:
+        """The account's current party id.
+
+        Retried a few times: right after the client reaches the menus the
+        party service can 404 or time out for a second or two, and a single
+        miss there is what made "Start match" fail with "No party found"
+        even though the player was sitting in the lobby.
+        """
+        for attempt in range(max(1, retries)):
+            try:
+                res = self._remote(
+                    "GET", f"{self.glz}/parties/v1/players/{self.puuid}", timeout=4.0
+                )
+            except LiveClientError:
+                res = None
+            if res is not None and res.status_code == 200:
+                pid = res.json().get("CurrentPartyID")
+                if pid:
+                    return pid
+            if attempt < retries - 1:
+                time.sleep(0.6)
+        return None
 
     def party(self) -> Dict[str, Any]:
         pid = self.party_id()
@@ -998,11 +1079,36 @@ _NEVER_SET = threading.Event()
 
 
 def _pregame_self(match: Dict[str, Any], puuid: str) -> Dict[str, Any]:
-    """Our own entry in a pregame match payload."""
-    for p in (match.get("AllyTeam") or {}).get("Players", []) or []:
-        if p.get("Subject") == puuid:
-            return p
+    """Our own entry in a pregame match payload.
+
+    Normally we are on AllyTeam, but check every player container Riot has
+    used (AllyTeam.Players, a flat Players list, EnemyTeam for customs) so a
+    payload-shape change can't hide our own pick state.
+    """
+    if not isinstance(match, dict):
+        return {}
+    buckets = [
+        (match.get("AllyTeam") or {}).get("Players", []),
+        (match.get("EnemyTeam") or {}).get("Players", []),
+        match.get("Players", []),
+    ]
+    for players in buckets:
+        for p in players or []:
+            if p.get("Subject") == puuid:
+                return p
     return {}
+
+
+def _pregame_phase(match: Dict[str, Any]) -> str:
+    """The agent-select phase string, lowercased, tolerant of field renames."""
+    if not isinstance(match, dict):
+        return ""
+    return (
+        match.get("PregameState")
+        or match.get("PregameStateName")
+        or match.get("Phase")
+        or ""
+    ).lower()
 
 
 def _pick_state(match: Dict[str, Any], puuid: str) -> Tuple[str, str]:
@@ -1029,6 +1135,7 @@ def _wait_for_agent_select(
     deadline = time.time() + timeout
     match: Dict[str, Any] = {}
     ready = False
+    saw_match = False
 
     while time.time() < deadline and not stop_evt.is_set():
         try:
@@ -1036,12 +1143,26 @@ def _wait_for_agent_select(
         except LiveClientError:
             match = {}
 
-        if (match.get("PregameState") or "").lower() == "character_select_active":
+        phase = _pregame_phase(match)
+        if phase == "character_select_active":
             ready = True
             break
         # Already past the picker - we (or the client) locked something.
         if _pick_state(match, client.puuid)[1] == "locked":
             return match
+        # Fallback for a phase-string rename: the payload has our player entry
+        # and an unlocked pick and some non-terminal phase - treat that as
+        # "select is open" rather than timing out for 25s on a name we don't
+        # recognise.
+        if _pregame_self(match, client.puuid) and phase and phase not in (
+            "provisioned", "match_provisioned", "closed", "complete",
+        ):
+            if not saw_match:
+                saw_match = True
+                stop_evt.wait(0.5)  # give the real phase one more poll to appear
+                continue
+            ready = True
+            break
         stop_evt.wait(0.25)
 
     if ready:
