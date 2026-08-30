@@ -48,7 +48,8 @@
         el.root.classList.remove("is-waiting");
         el.round.textContent = `ROUND ${current.round_number || match.round || "--"}`;
         el.hs.innerHTML = `${current.hs_pct == null ? "--" : Number(current.hs_pct).toFixed(1)}<em>%</em>`;
-        el.sub.textContent = current.source === "overwolf_gep" ? "Exact live match data" : "Current match data";
+        el.sub.textContent = (current.source === "overwolf_gep" || current.source === "vortex_telemetry")
+            ? "Exact live match data" : "Current match data";
         el.kda.textContent = current.kda_line || "-- / -- / --";
         el.kd.textContent = current.kd == null ? "-- KD" : `${Number(current.kd).toFixed(2)} KD`;
         el.observed.textContent = `${current.rounds_observed || reports.length || 0} ROUNDS`;

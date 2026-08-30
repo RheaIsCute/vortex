@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -45,6 +46,12 @@ from backend.version import APP_VERSION
 from backend import updater
 
 app = FastAPI(title="Vortex Valorant Account Manager API", version=APP_VERSION)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type"],
+)
 
 db = Database()
 launcher = ClientLauncher()
@@ -1297,6 +1304,12 @@ class OverlaySwitchRequest(BaseModel):
     confirm_close_game: bool = False
 
 
+class TelemetryEventRequest(BaseModel):
+    """One GEP info update from the no-UI Vortex Telemetry extension."""
+    match_id: str
+    event: Dict[str, Any]
+
+
 # Matchmaking start time. The party payload carries one, but it's only
 # trustworthy while the party is actually queueing - the fallback is the
 # moment this process first saw the party flip into MATCHMAKING.
@@ -1827,10 +1840,13 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         kills = int(event_live.get("kills", 0) or 0)
         deaths = int(event_live.get("deaths", 0) or 0)
         assists = int(event_live.get("assists", 0) or 0)
+        combat_source = event_live.get("source") or "overwolf_gep"
         current.update({
             "available": True,
-            "source": "overwolf_gep",
-            "reason": "Exact current-game data from Overwolf's VALORANT event provider.",
+            "source": combat_source,
+            "reason": "Exact current-game data from Vortex Telemetry."
+            if combat_source == "vortex_telemetry"
+            else "Exact current-game data from Overwolf's VALORANT event provider.",
             "kills": kills,
             "deaths": deaths,
             "assists": assists,
@@ -2259,6 +2275,7 @@ def _attach_live_combat(roster: List[Dict[str, Any]], live_combat: Dict[str, Any
     if not live_combat.get("available"):
         return
 
+    source = live_combat.get("source") or "overwolf_gep"
     feed = live_combat.get("players") or {}
     name_counts: Dict[str, int] = {}
     for entry in roster:
@@ -2275,7 +2292,7 @@ def _attach_live_combat(roster: List[Dict[str, Any]], live_combat: Dict[str, Any
                 "kills": live_combat.get("kills"),
                 "deaths": live_combat.get("deaths"),
                 "assists": live_combat.get("assists"),
-                "source": "overwolf_gep",
+                "source": source,
             }
             continue
 
@@ -2288,7 +2305,7 @@ def _attach_live_combat(roster: List[Dict[str, Any]], live_combat: Dict[str, Any
             "kills": line.get("kills"),
             "deaths": line.get("deaths"),
             "assists": None,  # kill feed can't attribute assists to other players
-            "source": "overwolf_gep",
+            "source": source,
         }
 
 
@@ -2366,7 +2383,7 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         "stacks": stacks,
         "me": _self_block(client, match_id, me, queue_id, progress, live_combat),
         "live_provider": {
-            "name": "Overwolf VALORANT Game Events",
+            "name": "Vortex Telemetry (Overwolf Game Events)",
             "available": bool(live_combat.get("available")),
             "fresh": bool(live_combat.get("provider_fresh")),
             "reason": live_combat.get("reason", ""),
@@ -2522,14 +2539,12 @@ def build_live_snapshot() -> Dict[str, Any]:
     if not snapshot["valorant_running"]:
         return snapshot
 
-    # Overwolf's event provider only records what it saw while running, so it
-    # has to be up before the match starts - by the time a scoreboard would be
-    # useful it is already too late to launch it. Installs Overwolf and the
-    # VALORANT Tracker app if either is missing; both fire at most once a run.
+    # Vortex Telemetry needs Overwolf's event provider running before a match.
+    # Do not install or launch Valorant Tracker: its visible overlay is not
+    # part of Vortex.
     if db.get_settings().get("overwolf_auto", "1") == "1":
         try:
             overwolf.ensure_available()
-            overwolf.ensure_tracker()
         except Exception:
             pass
 
@@ -3128,10 +3143,29 @@ async def overwolf_install():
     return await asyncio.to_thread(overwolf.start_install)
 
 
-@app.post("/api/overwolf/install-tracker")
-async def overwolf_install_tracker():
-    """Silently installs the Valorant Tracker Overwolf app (live combat stats)."""
-    return await asyncio.to_thread(overwolf.start_tracker_install)
+@app.post("/api/telemetry/gep")
+async def telemetry_gep_event(req: TelemetryEventRequest):
+    """Receive a live VALORANT GEP update from Vortex Telemetry.
+
+    app.py binds the API to 127.0.0.1, so this bridge cannot be reached from
+    another computer. Normalize the event to the format used by the fallback
+    reader before passing it to the combat tracker.
+    """
+    raw = req.event if isinstance(req.event, dict) else {}
+    feature = str(raw.get("featureName") or raw.get("feature") or "")
+    key = str(raw.get("key") or "")
+    if not feature or not key:
+        raise HTTPException(status_code=422, detail="Telemetry event needs feature and key.")
+    event = {
+        "featureName": feature,
+        "categoryName": str(raw.get("categoryName") or raw.get("category") or feature),
+        "key": key,
+        "value": raw.get("value"),
+    }
+    accepted = await asyncio.to_thread(_LIVE_COMBAT.ingest, event, req.match_id)
+    if accepted:
+        invalidate_live_snapshot()
+    return {"accepted": accepted}
 
 
 @app.get("/api/live/session")

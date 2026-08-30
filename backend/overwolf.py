@@ -1,10 +1,9 @@
-"""Keep Overwolf's VALORANT event provider running, quietly, in the background.
+"""Keep Overwolf running quietly in the background for Vortex Telemetry.
 
-Live combat stats (see live_combat.py) come from Overwolf's Game Events
-Provider, which only emits while Overwolf itself is running. Riot ships no
-live-data API for VALORANT and its own game log carries no combat events, so
-Overwolf - a Riot-approved partner that Vanguard explicitly permits - is the
-only sanctioned source. This module makes that dependency invisible:
+Live combat stats (see live_combat.py) are supplied by Vortex Telemetry, a
+background-only Overwolf companion. Its GEP subscription only works while
+Overwolf itself is running. Riot ships no public live-data API for VALORANT,
+so this module starts Overwolf itself quietly in the tray:
 
   * find an existing Overwolf install (registry first, then the usual paths)
   * install it silently if it's missing
@@ -413,7 +412,8 @@ def status() -> Dict[str, Any]:
     return {
         "installed": is_installed(),
         "running": is_running(),
-        "has_tracker": has_valorant_tracker(),
+        # Vortex no longer installs or needs Valorant Tracker. The side-loaded
+        # Vortex Telemetry app is documented in overwolf/vortex-telemetry.
+        "telemetry": {"setup": "manual", "source_dir": "overwolf/vortex-telemetry"},
         "install": dict(INSTALL_STATE),
-        "tracker_install": dict(TRACKER_INSTALL_STATE),
     }

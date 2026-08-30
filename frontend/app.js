@@ -3132,18 +3132,6 @@ async function setLiveHudEnabled(enabled) {
     }
 }
 
-async function installOverwolfTracker(e) {
-    if (e && typeof e.stopPropagation === "function") e.stopPropagation();
-    try {
-        const res = await fetch("/api/overwolf/install-tracker", { method: "POST" });
-        const data = await res.json();
-        showToast(data.message || "Installing Valorant Tracker...", "info");
-    } catch (err) {
-        showToast("Could not start the Valorant Tracker install", "error");
-    }
-}
-window.installOverwolfTracker = installOverwolfTracker;
-
 async function autoDetectClientPath() {
     try {
         const res = await fetch("/api/detect-client");
@@ -4259,7 +4247,7 @@ function renderMeCard(match) {
     const recent = me.recent || {};
     const hasCombat = !!cur.available;
     const inMatch = match.phase === "in_match";
-    const gepLive = cur.source === "overwolf_gep";
+    const gepLive = cur.source === "overwolf_gep" || cur.source === "vortex_telemetry";
 
     const num = (v, digits) => (v === null || v === undefined)
         ? "--"
@@ -4340,20 +4328,11 @@ function renderMeCard(match) {
 
     // GEP combat is real live data, so don't waste space on a warning banner.
     // The graph below communicates the source and updates every observed round.
-    const isOverwolfHint = cur.reason && (
-        cur.reason.toLowerCase().includes("overwolf") ||
-        cur.reason.toLowerCase().includes("tracker")
-    );
-    const trackerBtn = isOverwolfHint
-        ? '<button type="button" class="dash-me-install-tracker-btn" onclick="installOverwolfTracker(event)" title="Install Valorant Tracker for live combat stats"><i class="fa-solid fa-cloud-arrow-down"></i> Install Valorant Tracker</button>'
-        : "";
-
     const pendingHtml = gepLive ? "" : (hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
             '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
-            ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS fill in the moment Riot publishes them.</span>' +
-            trackerBtn +
+            ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS appear when Vortex Telemetry is connected.</span>' +
         '</div>');
 
     const hitHtml = (hasCombat && shots)

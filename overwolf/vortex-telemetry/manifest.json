@@ -1,0 +1,37 @@
+{
+  "manifest_version": 1,
+  "type": "WebApp",
+  "meta": {
+    "name": "Vortex Telemetry",
+    "author": "Vortex",
+    "version": "0.1.0",
+    "minimum-overwolf-version": "0.170.0",
+    "description": "Background-only VALORANT event bridge for Vortex.",
+    "icon": "assets/icon.svg"
+  },
+  "permissions": ["GameInfo", "Web"],
+  "data": {
+    "start_window": "background",
+    "game_targeting": {
+      "type": "dedicated",
+      "game_ids": [21640]
+    },
+    "game_events": [21640],
+    "launch_events": [
+      {
+        "event": "GameLaunch",
+        "event_data": {
+          "game_ids": [21640],
+          "wait_for_stable_framerate": 30
+        },
+        "start_minimized": true
+      }
+    ],
+    "windows": {
+      "background": {
+        "file": "windows/background.html",
+        "is_background_page": true
+      }
+    }
+  }
+}

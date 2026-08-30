@@ -130,7 +130,21 @@ class LiveCombatTrackerTests(unittest.TestCase):
     def test_unavailable_when_no_provider_log(self):
         out = LiveCombatTracker(self.temp.name).snapshot(self.MATCH_ID)
         self.assertFalse(out["available"])
-        self.assertIn("Overwolf", out["reason"])
+        self.assertIn("Vortex Telemetry", out["reason"])
+
+    def test_accepts_direct_vortex_telemetry_events_without_a_log(self):
+        tracker = LiveCombatTracker(self.temp.name)
+        tracker.ingest({"featureName": "match_info", "key": "match_id", "value": self.MATCH_ID}, self.MATCH_ID)
+        tracker.ingest({"featureName": "kill", "key": "kills", "value": 3}, self.MATCH_ID)
+        tracker.ingest({"featureName": "kill", "key": "headshots", "value": 2}, self.MATCH_ID)
+        tracker.ingest({"featureName": "death", "key": "deaths", "value": 1}, self.MATCH_ID)
+
+        out = tracker.snapshot(self.MATCH_ID)
+        self.assertTrue(out["available"])
+        self.assertTrue(out["provider_fresh"])
+        self.assertEqual("vortex_telemetry", out["provider"])
+        self.assertEqual((3, 1, 2), (out["kills"], out["deaths"], out["headshot_kills"]))
+        self.assertEqual(66.7, out["hs_pct"])
 
 
 if __name__ == "__main__":

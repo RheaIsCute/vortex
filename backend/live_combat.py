@@ -1,11 +1,12 @@
-"""Read exact live VALORANT combat data from Overwolf's first-party GEP log.
+"""Consume live VALORANT combat data from Vortex's Overwolf GEP companion.
 
 Riot's local core-game endpoint exposes the live roster but not its scoreboard,
 and match-details normally stays empty until the game ends. Overwolf's official
-VALORANT Game Events Provider (GEP) writes a log while you play that carries
-your own running kills/deaths/assists/headshots, a per-round hit report, and a
-kill feed. This module tails that log - no game memory, no injected input, no
-scraping another app's UI.
+Vortex Telemetry subscribes to Overwolf's Game Events Provider (GEP) and POSTs
+a player's own running kills/deaths/assists/headshots, per-round hit report,
+and kill feed straight to the local Vortex backend. There is no game-memory
+access, input injection, or screen scraping. The legacy log tailer remains as
+a migration fallback for users who already have Valorant Tracker installed.
 
 What GEP actually gives us (verified against real logs):
   featureName "kill"       key "kills" / "assists" / "headshots"  -> your totals
@@ -72,7 +73,7 @@ def _hs_pct(head_shots: int, total_shots: int, hs_kills, kills):
 
 
 class LiveCombatTracker:
-    """Stateful tailer for Overwolf's current VALORANT GEP session."""
+    """Stateful receiver for Vortex Telemetry's current VALORANT GEP session."""
 
     def __init__(self, log_dir: str = "") -> None:
         self._lock = threading.Lock()
@@ -85,6 +86,8 @@ class LiveCombatTracker:
         self._feed: Dict[str, Dict[str, int]] = {}
         self._round_reports: List[Dict[str, Any]] = []
         self._latest_event_at = 0.0
+        self._direct_match_id = ""
+        self._direct_last_event_at = 0.0
 
     def _log_dir(self) -> str:
         if self._log_dir_override:
@@ -116,6 +119,18 @@ class LiveCombatTracker:
         self._feed = {}
         self._round_reports = []
         self._latest_event_at = 0.0
+
+    def ingest(self, payload: Dict[str, Any], match_id: str) -> bool:
+        """Accept one normalized GEP update from the hidden Vortex companion."""
+        if not isinstance(payload, dict) or not match_id:
+            return False
+        with self._lock:
+            if self._match_id != match_id:
+                self._reset(match_id)
+            self._direct_match_id = match_id
+            self._direct_last_event_at = time.time()
+            self._consume_update(payload, match_id)
+        return True
 
     def _feed_for(self, name: str) -> Dict[str, int]:
         return self._feed.setdefault(name, _blank_scoreline())
@@ -249,7 +264,12 @@ class LiveCombatTracker:
         with self._lock:
             if self._match_id != match_id:
                 self._reset(match_id)
-            files = self._read_updates(match_id)
+            direct_fresh = bool(
+                self._direct_match_id.lower() == match_id.lower()
+                and time.time() - self._direct_last_event_at <= _FRESH_PROVIDER_AGE
+            )
+            # Do not mix Vortex Telemetry with stale Valorant Tracker logs.
+            files = [] if direct_fresh else self._read_updates(match_id)
 
             provider_mtime = 0.0
             for path in files:
@@ -257,7 +277,8 @@ class LiveCombatTracker:
                     provider_mtime = max(provider_mtime, os.path.getmtime(path))
                 except OSError:
                     pass
-            provider_fresh = bool(provider_mtime and time.time() - provider_mtime <= _FRESH_PROVIDER_AGE)
+            log_provider_fresh = bool(provider_mtime and time.time() - provider_mtime <= _FRESH_PROVIDER_AGE)
+            provider_fresh = direct_fresh or log_provider_fresh
 
             kills = self._local["kills"]
             deaths = self._local["deaths"]
@@ -284,10 +305,12 @@ class LiveCombatTracker:
             have_local = kills is not None or deaths is not None
             available = bool(self._active and (have_local or players))
 
-            if not files:
-                reason = "Setting up the live combat provider (Overwolf + Valorant Tracker) - this installs itself in the background and works from your next match."
+            if direct_fresh:
+                reason = "" if self._active else "Waiting for Vortex Telemetry to attach to this match."
+            elif not files:
+                reason = "Waiting for Vortex Telemetry. Install and start the Vortex Telemetry Overwolf companion before a match."
             elif not provider_fresh:
-                reason = "Valorant Tracker is installing / warming up - live K/D/A, HS% and ADR start from your next match."
+                reason = "The legacy Overwolf log provider is stale. Start Vortex Telemetry before your next match."
             elif not self._active:
                 reason = "Waiting for the live provider to attach to this match."
             else:
@@ -295,8 +318,8 @@ class LiveCombatTracker:
 
             return {
                 "available": available,
-                "provider": "overwolf_gep",
-                "source": "overwolf_gep",
+                "provider": "vortex_telemetry" if direct_fresh else "overwolf_gep",
+                "source": "vortex_telemetry" if direct_fresh else "overwolf_gep",
                 "provider_fresh": provider_fresh,
                 "reason": reason,
                 "players": players,
