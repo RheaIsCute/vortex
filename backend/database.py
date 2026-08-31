@@ -8,6 +8,7 @@ import sqlite3
 import json
 import os
 import sys
+import glob
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -42,11 +43,40 @@ class Database:
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self.init_db()
+        # Keep a small, automatic history outside the live SQLite files.  A
+        # snapshot is made at most once per day and before every restore.
+        self.create_backup(daily=True)
+
+    def create_backup(self, daily: bool = False) -> str:
+        """Create a consistent SQLite snapshot and retain the newest 10."""
+        backup_dir = os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        prefix = datetime.now().strftime("vortex-%Y%m%d")
+        if daily:
+            existing = glob.glob(os.path.join(backup_dir, prefix + "*.sqlite"))
+            if existing:
+                return existing[0]
+        path = os.path.join(backup_dir, datetime.now().strftime("vortex-%Y%m%d-%H%M%S-%f.sqlite"))
+        source = sqlite3.connect(self.db_path, timeout=15.0)
+        target = sqlite3.connect(path)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        snapshots = sorted(glob.glob(os.path.join(backup_dir, "vortex-*.sqlite")),
+                           key=os.path.getmtime, reverse=True)
+        for old in snapshots[10:]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        return path
 
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=15.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
@@ -54,6 +84,9 @@ class Database:
         """Initializes database tables and runs non-destructive migrations."""
         conn = self.get_connection()
         try:
+            # WAL is persistent for the database. Setting it once avoids a
+            # journal-mode negotiation (and possible lock) on every read.
+            conn.execute("PRAGMA journal_mode=WAL;")
             cursor = conn.cursor()
 
             
@@ -173,6 +206,12 @@ class Database:
                 )
             """)
 
+            # Most matching paths normalize usernames; expression indexes
+            # keep those lookups fast as the roster grows.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_username_norm ON accounts(LOWER(TRIM(username)))")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_banned_username_norm ON banned_accounts(LOWER(TRIM(username)))")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status)")
+
             # Default settings
             defaults = [
                 ("riot_client_path", r"C:\Riot Games\Riot Client\RiotClientServices.exe"),
@@ -193,7 +232,10 @@ class Database:
                 ("live_hud_enabled", "0"),
                 # Install (if missing) and tray-start Overwolf alongside
                 # VALORANT, so live combat stats work without being set up.
-                ("overwolf_auto", "1"),
+                # Optional live-combat integrations. Both are opt-in: account
+                # management and the Riot dashboard work without either.
+                ("overwolf_enabled", "0"),
+                ("valorant_tracker_enabled", "0"),
                 # Personal: launch a chosen program automatically the moment
                 # VALORANT closes. Off by default; the path defaults to a file
                 # named ldr.novgk.exe on the current user's Desktop\Private.
@@ -202,6 +244,13 @@ class Database:
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
+            # Removed settings-profile/preset feature and its legacy automatic
+            # Overwolf switch. New telemetry preferences above are opt-in.
+            cursor.execute(
+                "DELETE FROM settings WHERE key IN "
+                "('settings_autoapply', 'settings_profile_account_id', 'overwolf_auto')"
+            )
 
             # (A migration used to rewrite SHIFT+5 to CTRL+SHIFT+F8 here. It is
             # gone because SHIFT+5 is the wanted default again, and a migration
@@ -279,26 +328,9 @@ class Database:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-
-            # Sweep any lingering banned accounts from accounts table into banned_accounts
-            cursor.execute("SELECT id FROM accounts WHERE UPPER(status) IN ('BANNED', 'SUSPENDED')")
-            lingering_rows = cursor.fetchall()
-            if lingering_rows:
-                for l_row in lingering_rows:
-                    b_id = l_row["id"]
-                    cursor.execute("SELECT * FROM accounts WHERE id = ?", (b_id,))
-                    acc_row = cursor.fetchone()
-                    if acc_row:
-                        acc_dict = dict(acc_row)
-                        cols = self._ACCOUNT_COLUMNS
-                        placeholders = ", ".join(["?"] * (len(cols) + 1))
-                        cursor.execute("DELETE FROM banned_accounts WHERE LOWER(TRIM(username)) = LOWER(?)", (acc_dict.get("username", "").strip(),))
-                        cursor.execute(
-                            f"INSERT INTO banned_accounts ({', '.join(cols)}, banned_at) VALUES ({placeholders})",
-                            [acc_dict.get(c) for c in cols] + [acc_dict.get("last_updated") or datetime.now().isoformat()]
-                        )
-                        cursor.execute("DELETE FROM accounts WHERE id = ?", (b_id,))
-                conn.commit()
+            # Banned rows are migrated at startup and immediately whenever a
+            # status update flags one.  Re-running that migration query on
+            # every roster read made this hottest DB path needlessly writable.
 
             # NULL-safe: a row with a NULL/blank status is still an active
             # account, not a hidden one.
@@ -485,6 +517,7 @@ class Database:
     # failure. Without this guard, a single failed background sync would
     # wipe out a peak rank that was correctly fetched moments earlier.
     STICKY_NON_EMPTY_FIELDS = {
+        "password",
         "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season",
         "match_history", "top_champs", "puuid"
     }
@@ -750,8 +783,15 @@ class Database:
         finally:
             conn.close()
 
-    def export_all(self) -> List[Dict[str, Any]]:
-        return self.get_all_accounts(sort_by="name")
+    def export_all(self) -> Dict[str, Any]:
+        """Return a complete, portable backup (including hidden/banned rows)."""
+        return {
+            "format": "vortex-backup",
+            "version": 2,
+            "exported_at": datetime.now().isoformat(),
+            "accounts": self.get_all_accounts(sort_by="name"),
+            "banned_accounts": self.get_banned_accounts(),
+        }
 
     def import_all(self, accounts_list: List[Dict[str, Any]]) -> Dict[str, int]:
         """
@@ -761,6 +801,7 @@ class Database:
         count = 0
         skipped_existing = 0
         skipped_banned = 0
+        repaired_passwords = 0
         seen_in_batch = set()
 
         for acc in accounts_list:
@@ -774,9 +815,27 @@ class Database:
 
             existing = self.account_exists(acc["username"])
             if existing == "banned":
+                # A backup can repair credentials that an older build erased.
+                if (acc.get("password") or "").strip():
+                    conn = self.get_connection()
+                    try:
+                        row = conn.execute("SELECT id, password FROM banned_accounts WHERE LOWER(TRIM(username))=LOWER(?)", (acc["username"].strip(),)).fetchone()
+                    finally:
+                        conn.close()
+                    if row and not (row["password"] or "").strip():
+                        self.update_banned_account(row["id"], {"password": acc["password"]})
+                        repaired_passwords += 1
                 skipped_banned += 1
                 continue
             if existing == "active":
+                conn = self.get_connection()
+                try:
+                    row = conn.execute("SELECT id, password FROM accounts WHERE LOWER(TRIM(username))=LOWER(?)", (acc["username"].strip(),)).fetchone()
+                finally:
+                    conn.close()
+                if row and not (row["password"] or "").strip() and (acc.get("password") or "").strip():
+                    self.update_account(row["id"], {"password": acc["password"]})
+                    repaired_passwords += 1
                 skipped_existing += 1
                 continue
 
@@ -787,8 +846,22 @@ class Database:
         return {
             "imported": count,
             "skipped_existing": skipped_existing,
-            "skipped_banned": skipped_banned
+            "skipped_banned": skipped_banned,
+            "repaired_passwords": repaired_passwords,
         }
+
+    def import_backup(self, payload: Dict[str, Any]) -> Dict[str, int]:
+        """Merge a v2 backup without deleting anything already stored."""
+        self.create_backup()
+        result = self.import_all(payload.get("accounts") or [])
+        banned = payload.get("banned_accounts") or []
+        banned_result = self.import_all(banned)
+        # add_account automatically routes records carrying a banned status.
+        result["imported"] += banned_result["imported"]
+        result["skipped_existing"] += banned_result["skipped_existing"]
+        result["skipped_banned"] += banned_result["skipped_banned"]
+        result["repaired_passwords"] += banned_result["repaired_passwords"]
+        return result
 
     def import_from_text(self, raw_text: str) -> Dict[str, Any]:
         """

@@ -389,7 +389,7 @@ class LiveCombatTracker:
             }
         return out
 
-    def snapshot(self, match_id: str) -> Dict[str, object]:
+    def snapshot(self, match_id: str, allow_tracker: bool = True) -> Dict[str, object]:
         """Current-game local combat totals plus a best-effort kill-feed scoreboard."""
         if not match_id:
             return {"available": False, "provider": "overwolf_gep"}
@@ -402,7 +402,7 @@ class LiveCombatTracker:
                 and time.time() - self._direct_last_event_at <= _FRESH_PROVIDER_AGE
             )
             # Do not mix Vortex Telemetry with stale Valorant Tracker logs.
-            files = [] if direct_fresh else self._read_updates(match_id)
+            files = [] if direct_fresh or not allow_tracker else self._read_updates(match_id)
 
             provider_mtime = 0.0
             for path in files:
@@ -458,8 +458,10 @@ class LiveCombatTracker:
 
             if direct_fresh:
                 reason = "" if self._active else "Waiting for Vortex Telemetry to attach to this match."
+            elif not allow_tracker:
+                reason = "Waiting for Vortex Telemetry. Valorant Tracker fallback is disabled in Settings."
             elif not files:
-                reason = "Waiting for Overwolf. Open the Valorant Tracker app (or start Vortex Telemetry) before a match."
+                reason = "Waiting for Overwolf. Open Valorant Tracker or start Vortex Telemetry before a match."
             elif not provider_fresh and not latched:
                 reason = "Overwolf's live game events look stale - is the Valorant Tracker app running?"
             elif not self._active and not latched:

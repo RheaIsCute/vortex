@@ -223,26 +223,13 @@ const DOM = {
     settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
     settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
     settingsLiveHudEnabled: document.getElementById("settings-live-hud-enabled"),
+    settingsOverwolfEnabled: document.getElementById("settings-overwolf-enabled"),
+    settingsValorantTrackerEnabled: document.getElementById("settings-valorant-tracker-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
     overlayHotkeyClear: document.getElementById("overlay-hotkey-clear"),
     overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
-    settingsProfileAccount: document.getElementById("settings-profile-account"),
-    settingsProfileAutoapply: document.getElementById("settings-profile-autoapply"),
-    settingsCopyTarget: document.getElementById("settings-copy-target"),
-    btnCopySettingsNow: document.getElementById("btn-copy-settings-now"),
-    btnCopySettingsAll: document.getElementById("btn-copy-settings-all"),
-    presetSummary: document.getElementById("preset-summary"),
-    presetWhen: document.getElementById("preset-when"),
-    presetLog: document.getElementById("preset-log"),
-    presetLogTitle: document.getElementById("preset-log-title"),
-    presetLogBody: document.getElementById("preset-log-body"),
-    presetLogClose: document.getElementById("preset-log-close"),
-    btnPresetCapture: document.getElementById("btn-preset-capture"),
-    btnPresetApply: document.getElementById("btn-preset-apply"),
-    btnPresetApplyAll: document.getElementById("btn-preset-apply-all"),
-    settingsProfileStatus: document.getElementById("settings-profile-status"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -390,15 +377,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // Pick up the backend's periodic full roster refresh (rank/level/history
     // updates and ghost-account repairs) without needing a manual sync.
     setInterval(() => {
+        if (document.hidden) return;
         fetchAccounts();
         fetchStatsSummary();
         fetchBannedAccounts();
     }, 5 * 60 * 1000);
 });
 
-const ACTIVE_SYNC_INTERVAL = 15000;
-const ACTIVE_SYNC_RECHECK_WHILE_MATCHING = 5000;
-const ACTIVE_SYNC_RECHECK_WHILE_HIDDEN = 30000;
+const ACTIVE_SYNC_INTERVAL = 60000;
+const ACTIVE_SYNC_RECHECK_WHILE_MATCHING = 30000;
+const ACTIVE_SYNC_RECHECK_WHILE_HIDDEN = 2 * 60 * 1000;
 
 function startContinuousSync() {
     scheduleContinuousSync(2500);
@@ -414,9 +402,7 @@ function isLiveMatchActive() {
 function continuousSyncDelay() {
     if (document.hidden) return ACTIVE_SYNC_RECHECK_WHILE_HIDDEN;
     if (isLiveMatchActive()) return ACTIVE_SYNC_RECHECK_WHILE_MATCHING;
-    return state.live && state.live.valorant_running
-        ? ACTIVE_SYNC_INTERVAL
-        : ACTIVE_SYNC_INTERVAL + 5000;
+    return ACTIVE_SYNC_INTERVAL;
 }
 
 function scheduleContinuousSync(delay = continuousSyncDelay()) {
@@ -759,21 +745,9 @@ function initEventListeners() {
     DOM.btnAutoDetectClient.addEventListener("click", autoDetectClientPath);
     if (DOM.btnCheckUpdate) DOM.btnCheckUpdate.addEventListener("click", () => checkForUpdate(true));
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
-    if (DOM.btnCopySettingsNow) DOM.btnCopySettingsNow.addEventListener("click", copySettingsNow);
-    if (DOM.btnCopySettingsAll) DOM.btnCopySettingsAll.addEventListener("click", copySettingsToAll);
     if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
+    if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.addEventListener("change", updateTelemetryControls);
     bindHotkeyRecorder();
-    if (DOM.btnPresetCapture) DOM.btnPresetCapture.addEventListener("click", capturePreset);
-    if (DOM.btnPresetApply) DOM.btnPresetApply.addEventListener("click", applyPresetToCurrent);
-    if (DOM.btnPresetApplyAll) DOM.btnPresetApplyAll.addEventListener("click", applyPresetToAll);
-    if (DOM.presetLogClose) DOM.presetLogClose.addEventListener("click", () => {
-        DOM.presetLog.style.display = "none";
-    });
-    // Picking a different profile changes what a copy would carry, so the
-    // description under the picker has to follow the selection.
-    if (DOM.settingsProfileAccount) {
-        DOM.settingsProfileAccount.addEventListener("change", onProfileAccountChange);
-    }
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -1228,6 +1202,7 @@ async function selectTheme(themeName) {
 
 function buildImportMessage(data) {
     const imported = data.imported_count || 0;
+    const repaired = data.repaired_passwords || 0;
     const dupes = data.skipped_existing || 0;
     const banned = data.skipped_banned || 0;
 
@@ -1235,6 +1210,9 @@ function buildImportMessage(data) {
     if (dupes) skips.push(`${dupes} already added`);
     if (banned) skips.push(`${banned} banned`);
 
+    if (repaired) {
+        return `Imported ${imported}; restored ${repaired} missing password${repaired === 1 ? "" : "s"}.`;
+    }
     if (imported === 0 && skips.length) {
         return `No new accounts — skipped ${skips.join(" and ")}.`;
     }
@@ -1710,9 +1688,16 @@ function renderGridView() {
                 <!-- Header -->
                 <div class="card-header">
                     <div class="card-badges">
-                        <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
-                        <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
-                        ${v.statusBadge}
+                        ${v.needsCheck ? `
+                            <span class="badge-unset" title="Log in once to verify these credentials and pull live account data">
+                                <span class="mini-spinner"></span> Unverified
+                            </span>
+                            <span class="badge-region is-muted" title="Region not confirmed yet">${escapeHtml(acc.region || 'NA')} · not set</span>
+                        ` : `
+                            <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
+                            <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
+                            ${v.statusBadge}
+                        `}
                         ${v.liveBadge}
                     </div>
                     <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
@@ -1723,8 +1708,8 @@ function renderGridView() {
                 <!-- Profile Info & Official Emblem -->
                 <div class="card-profile">
                     <div class="rank-emblem-wrap ${v.tierClass}" title="Current Rank: ${v.rankTitle}">
-                        <img src="${v.rankIconSrc}" alt="${v.rankTitle}" class="rank-emblem-img" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
-                        <span class="level-bubble">LV ${acc.level || "-"}</span>
+                        <img src="${v.rankIconSrc}" alt="${v.rankTitle}" class="rank-emblem-img" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
+                        <span class="level-bubble${v.needsCheck ? ' is-unset' : ''}">${v.needsCheck ? '<span class="mini-spinner"></span> LV ?' : 'LV ' + (acc.level || "-")}</span>
                     </div>
                     <div class="profile-info">
                         <div class="summoner-name-row">
@@ -1735,21 +1720,33 @@ function renderGridView() {
                                 </button>
                             ` : ''}
                         </div>
-                        <span class="rank-tier-title ${v.rankInfo.colorClass}">${v.rankTitle}</span>
-                        ${peakBadge}
+                        ${v.needsCheck
+                            ? `<span class="rank-tier-title is-unset"><span class="mini-spinner"></span> No rank data</span>`
+                            : `<span class="rank-tier-title ${v.rankInfo.colorClass}">${v.rankTitle}</span>`}
+                        ${v.needsCheck ? '' : peakBadge}
                         ${acc.notes ? `<p class="account-notes" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</p>` : ''}
                     </div>
                 </div>
 
                 <!-- Winrate & Matches -->
                 <div class="card-stats-row">
-                    <div class="winrate-meta">
-                        <span>Winrate <strong>${v.winrate}%</strong></span>
-                        <span>Matches <strong>${acc.games_played || 0}</strong></span>
-                    </div>
-                    <div class="winrate-bar-track">
-                        <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
-                    </div>
+                    ${v.needsCheck ? `
+                        <div class="winrate-meta is-unset">
+                            <span><span class="mini-spinner"></span> Winrate no data</span>
+                            <span>Matches <strong>—</strong></span>
+                        </div>
+                        <div class="winrate-bar-track">
+                            <div class="winrate-bar-fill is-unset" style="width: 100%;"></div>
+                        </div>
+                    ` : `
+                        <div class="winrate-meta">
+                            <span>Winrate <strong>${v.winrate}%</strong></span>
+                            <span>Matches <strong>${acc.games_played || 0}</strong></span>
+                        </div>
+                        <div class="winrate-bar-track">
+                            <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
+                        </div>
+                    `}
                 </div>
 
                 <!-- Credentials (Masked) -->
@@ -1783,20 +1780,15 @@ function renderGridView() {
                     ${v.lastLoginFormatted}
                 </div>
 
-                <!-- Verify prompt for accounts Riot hasn't confirmed yet -->
-                ${v.needsCheck ? `
-                    <button class="btn-check-card" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Log in once to confirm the username and password work, and pull the real Riot ID, level and rank">
-                        <i class="fa-solid fa-shield-halved"></i>
-                        <span class="check-card-label">Check Account</span>
-                        <span class="check-card-hint">Not verified yet</span>
-                    </button>
-                ` : ''}
-
                 <!-- Actions Footer -->
                 <div class="card-actions">
                     ${v.isActive ? `
                         <button class="btn-launch-card is-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
                             <i class="fa-solid fa-play"></i> PLAY
+                        </button>
+                    ` : v.needsCheck ? `
+                        <button class="btn-launch-card btn-check-inline" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Log in once to confirm the username and password work, and pull the real Riot ID, level and rank">
+                            <i class="fa-solid fa-shield-halved"></i> CHECK ACCOUNT
                         </button>
                     ` : `
                         <button class="btn-launch-card" onclick="launchAccount(${acc.id})" title="Auto-fill login into Riot Client">
@@ -1872,14 +1864,14 @@ function renderTableView() {
                 <td><span class="badge-region">${escapeHtml(acc.region || 'NA')}</span></td>
                 <td>
                     <div class="table-rank-cell">
-                        <img src="${v.rankIconSrc}" class="table-rank-icon" alt="${v.rankTitle}" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
+                        <img src="${v.rankIconSrc}" class="table-rank-icon" alt="${v.rankTitle}" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
                         <span class="${v.rankInfo.colorClass}"><strong>${v.rankTitle}</strong></span>
                     </div>
                 </td>
                 <td>
                     ${acc.peak_rank_tier ? `
                         <div class="table-rank-cell">
-                            ${v.peakIconSrc ? `<img src="${v.peakIconSrc}" class="table-rank-icon" alt="Peak" onerror="this.style.display='none';">` : '<i class="fa-solid fa-trophy text-gold"></i>'}
+                            ${v.peakIconSrc ? `<img src="${v.peakIconSrc}" class="table-rank-icon" alt="Peak" loading="lazy" decoding="async" onerror="this.style.display='none';">` : '<i class="fa-solid fa-trophy text-gold"></i>'}
                             <span class="text-gold"><strong>${escapeHtml(acc.peak_rank_tier)} ${escapeHtml(acc.peak_rank_division || '')}</strong></span>
                         </div>
                     ` : '<span class="text-dim">---</span>'}
@@ -2860,12 +2852,22 @@ function renderOverlayHotkeyValidity() {
     return !problem;
 }
 
+function updateTelemetryControls() {
+    if (!DOM.settingsValorantTrackerEnabled) return;
+    const overwolfEnabled = !!DOM.settingsOverwolfEnabled?.checked;
+    DOM.settingsValorantTrackerEnabled.disabled = !overwolfEnabled;
+    if (!overwolfEnabled) DOM.settingsValorantTrackerEnabled.checked = false;
+}
+
 function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
     if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
     if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || DEFAULT_OVERLAY_HOTKEY;
     if (DOM.settingsLiveHudEnabled) DOM.settingsLiveHudEnabled.checked = (state.settings.live_hud_enabled || "0") !== "0";
+    if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.checked = state.settings.overwolf_enabled === "1";
+    if (DOM.settingsValorantTrackerEnabled) DOM.settingsValorantTrackerEnabled.checked = state.settings.valorant_tracker_enabled === "1";
+    updateTelemetryControls();
     if (DOM.settingsPostValorantEnabled) DOM.settingsPostValorantEnabled.checked = (state.settings.post_valorant_launch_enabled || "0") !== "0";
     if (DOM.settingsPostValorantPath) {
         DOM.settingsPostValorantPath.value = state.settings.post_valorant_launch_path || "";
@@ -2877,90 +2879,10 @@ function openSettingsModal() {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
     loadLoginLogPath();
-    loadGameConfigSettings();
+    if (DOM.settingsForceBorderless) DOM.settingsForceBorderless.checked = (state.settings.force_borderless || "1") !== "0";
+    if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = (state.settings.stay_signed_in || "1") !== "0";
+    if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = state.settings.auto_launch_after_login === "1";
     openModal(DOM.modalSettings);
-}
-
-// -- launch display mode + settings profile -------------------------------
-
-async function loadGameConfigSettings() {
-    if (DOM.settingsProfileStatus) DOM.settingsProfileStatus.textContent = "";
-    try {
-        const res = await fetch("/api/game-config/settings");
-        const data = await res.json();
-        state.gameConfig = data;
-
-        if (DOM.settingsForceBorderless) DOM.settingsForceBorderless.checked = !!data.force_borderless;
-        if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = !!data.stay_signed_in;
-        if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = !!data.auto_launch_after_login;
-        if (DOM.settingsProfileAutoapply) DOM.settingsProfileAutoapply.checked = !!data.autoapply;
-
-        const accounts = data.accounts || [];
-        const ready = accounts.filter(a => a.has_config);
-
-        fillAccountSelect(DOM.settingsProfileAccount, accounts, data.profile_account_id,
-            "No profile account selected");
-        fillAccountSelect(DOM.settingsCopyTarget, accounts, null,
-            "Copy to: whoever's signed in now");
-
-        renderProfileStatus(data, accounts, ready);
-    } catch (err) {
-        state.gameConfig = null;
-    }
-    loadPreset();
-}
-
-/**
- * Spells out what the profile actually holds and how many accounts can take
- * a copy right now. Accounts become usable on their own: signing into one
- * with Vortex open records its Riot id, and playing one match on this PC
- * creates the settings folder a copy reads from and writes to.
- */
-function renderProfileStatus(data, accounts, ready) {
-    const el = DOM.settingsProfileStatus;
-    if (!el) return;
-
-    const bits = [];
-    const detail = data.profile_detail;
-    if (detail && detail.found) {
-        const present = (detail.files || []).filter(f => f.present).map(f => f.label);
-        bits.push(present.length
-            ? `Profile carries: ${present.join(", ")}.`
-            : "That profile account has no settings files on this PC yet.");
-    }
-
-    const unidentified = accounts.filter(a => !a.has_puuid).length;
-
-    if (!accounts.length) {
-        bits.push("No accounts stored yet.");
-    } else if (!ready.length) {
-        bits.push("No account has VALORANT settings on this PC yet. Sign into one with Vortex open, play a match, and it becomes usable here.");
-    } else {
-        bits.push(`${ready.length} of ${accounts.length} accounts can send or receive settings.`);
-        if (unidentified) {
-            bits.push(`${unidentified} still need to be signed into once with Vortex open so it can identify them - "Check Accounts" does all of them in one pass.`);
-        }
-    }
-
-    el.textContent = bits.join(" ");
-}
-
-/**
- * Saves the newly picked profile and re-reads what it holds, so the summary
- * under the picker describes the account actually selected.
- */
-async function onProfileAccountChange() {
-    const id = parseInt(DOM.settingsProfileAccount?.value || "", 10) || 0;
-    try {
-        await fetch("/api/game-config/settings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ profile_account_id: id })
-        });
-    } catch (err) {
-        // A failed save just means the summary stays as it was.
-    }
-    loadGameConfigSettings();
 }
 
 /** Forces windowed borderless on every account that has settings on this PC. */
@@ -2985,123 +2907,6 @@ async function applyBorderlessToAll() {
         if (btn) {
             btn.disabled = false;
             btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> Set every account to borderless now`;
-        }
-    }
-}
-
-/** Copies the profile's whole setup onto every account that can take it. */
-async function copySettingsToAll() {
-    const profileId = parseInt(DOM.settingsProfileAccount?.value || "", 10);
-    if (!profileId) {
-        showToast("Pick a profile account to copy from first.", "info");
-        return;
-    }
-
-    const cfg = state.gameConfig || {};
-    const others = (cfg.accounts || []).filter(a => a.id !== profileId && a.has_config);
-    const name = (cfg.accounts || []).find(a => a.id === profileId);
-    const label = name ? name.display_name : "this account";
-
-    if (!others.length) {
-        showToast("No other account has settings on this PC yet, so there's nothing to copy onto.", "info");
-        return;
-    }
-    if (!confirm(
-        `Copy ${label}'s crosshair, sensitivity, HUD, keybinds and video settings onto ` +
-        `${others.length} other account${others.length === 1 ? "" : "s"}?
-
-` +
-        `This overwrites their current settings and can't be undone.`)) {
-        return;
-    }
-
-    const btn = DOM.btnCopySettingsAll;
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Applying...`;
-    }
-    try {
-        const res = await fetch("/api/game-config/copy-all", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source_account_id: profileId, gameplay: true, video: true })
-        });
-        const data = await res.json();
-        showToast(data.message || (data.success ? "Applied." : "Couldn't apply settings."),
-                  data.success ? "success" : "error");
-
-        if (DOM.settingsProfileStatus) {
-            const lines = [data.message || ""];
-            if (data.applied && data.applied.length) {
-                lines.push(`Applied to: ${data.applied.join(", ")}.`);
-            }
-            if (data.skipped && data.skipped.length) {
-                lines.push("Skipped: " + data.skipped.map(sk => `${sk.name} (${sk.why})`).join(", ") + ".");
-            }
-            DOM.settingsProfileStatus.textContent = lines.filter(Boolean).join(" ");
-        }
-    } catch (err) {
-        showToast("Failed to reach the app's backend.", "error");
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = `<i class="fa-solid fa-users-gear"></i> Apply to All Accounts`;
-        }
-    }
-}
-
-/**
- * Fills a <select> with accounts.
- *
- * Options are never `disabled`. They used to be, for any account with no
- * local config detected - and since the app had no way to identify accounts
- * at all, that was every account, which made the whole dropdown unclickable
- * with no explanation. Accounts that aren't ready are now selectable and
- * labelled with the reason, and the copy action explains what to do instead
- * of the list silently refusing to respond.
- */
-function fillAccountSelect(selectEl, accounts, selectedId, placeholder) {
-    if (!selectEl) return;
-    const opts = [`<option value="">${escapeHtml(placeholder)}</option>`];
-    for (const acc of accounts) {
-        const suffix = acc.has_config === false
-            ? ` - ${acc.reason || "no settings on this PC yet"}`
-            : "";
-        opts.push(`<option value="${acc.id}" ${selectedId === acc.id ? "selected" : ""}>` +
-                  `${escapeHtml(acc.display_name)}${escapeHtml(suffix)}</option>`);
-    }
-    selectEl.innerHTML = opts.join("");
-}
-
-async function copySettingsNow() {
-    const profileId = parseInt(DOM.settingsProfileAccount?.value || "", 10);
-    if (!profileId) {
-        showToast("Pick a profile account to copy from first.", "info");
-        return;
-    }
-    const targetId = parseInt(DOM.settingsCopyTarget?.value || "", 10) || null;
-
-    if (DOM.btnCopySettingsNow) {
-        DOM.btnCopySettingsNow.disabled = true;
-        DOM.btnCopySettingsNow.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Copying...`;
-    }
-    try {
-        const res = await fetch("/api/game-config/copy", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source_account_id: profileId, target_account_id: targetId })
-        });
-        const data = await res.json();
-        showToast(data.message || (data.success ? "Copied." : "Couldn't copy settings."),
-                  data.success ? "success" : "error");
-        if (DOM.settingsProfileStatus) DOM.settingsProfileStatus.textContent = data.message || "";
-        if (data.success) loadGameConfigSettings();
-    } catch (err) {
-        showToast("Failed to reach the app's backend.", "error");
-    } finally {
-        if (DOM.btnCopySettingsNow) {
-            DOM.btnCopySettingsNow.disabled = false;
-            DOM.btnCopySettingsNow.innerHTML = `<i class="fa-solid fa-copy"></i> Copy Now`;
         }
     }
 }
@@ -3140,32 +2945,22 @@ async function saveSettings() {
             overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
             overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase(),
             live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0",
+            overwolf_enabled: DOM.settingsOverwolfEnabled?.checked ? "1" : "0",
+            valorant_tracker_enabled: (DOM.settingsOverwolfEnabled?.checked && DOM.settingsValorantTrackerEnabled?.checked) ? "1" : "0",
+            force_borderless: DOM.settingsForceBorderless?.checked ? "1" : "0",
+            stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
+            auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
             post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim()
         }
     };
 
-    const gameConfigPayload = {
-        force_borderless: !!DOM.settingsForceBorderless?.checked,
-        stay_signed_in: !!DOM.settingsStaySignedIn?.checked,
-        auto_launch_after_login: !!DOM.settingsAutoLaunch?.checked,
-        autoapply: !!DOM.settingsProfileAutoapply?.checked,
-        profile_account_id: parseInt(DOM.settingsProfileAccount?.value || "", 10) || 0
-    };
-
     try {
-        const [res] = await Promise.all([
-            fetch("/api/settings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            }),
-            fetch("/api/game-config/settings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(gameConfigPayload)
-            })
-        ]);
+        const res = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
         const data = await res.json();
         if (data.success) {
             state.settings = data.settings;
@@ -3183,7 +2978,10 @@ async function setLiveHudEnabled(enabled) {
     const api = window.pywebview && window.pywebview.api;
     if (!api || typeof api.setLiveHudEnabled !== "function") return;
     try {
-        await api.setLiveHudEnabled(!!enabled);
+        const result = await api.setLiveHudEnabled(!!enabled);
+        if (result && result.restart_required) {
+            showToast("Restart Vortex once to enable the Live Aim HUD.", "info");
+        }
     } catch (err) {
         console.warn("Couldn't update the live HUD window", err);
     }
@@ -3231,8 +3029,9 @@ async function handleImportBackup(e) {
         try {
             const parsed = JSON.parse(event.target.result);
             const accountsList = Array.isArray(parsed) ? parsed : (parsed.accounts || []);
+            const bannedList = Array.isArray(parsed) ? [] : (parsed.banned_accounts || []);
 
-            if (accountsList.length === 0) {
+            if (accountsList.length === 0 && bannedList.length === 0) {
                 showToast("No accounts found in backup", "error");
                 return;
             }
@@ -3240,7 +3039,10 @@ async function handleImportBackup(e) {
             const res = await fetch("/api/import", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ accounts: accountsList })
+                body: JSON.stringify({
+                    ...parsed,
+                    accounts: accountsList
+                })
             });
 
             const data = await res.json();
@@ -3507,10 +3309,10 @@ const SESSION_STATES = {
 // VALORANT. Menus, closed clients and hidden idle windows can back off hard.
 const LIVE_POLL_CRITICAL = 1100;
 const LIVE_POLL_DASHBOARD = 1200;
-const LIVE_POLL_MENUS = 3500;
-const LIVE_POLL_SIGNED_IN = 7000;
-const LIVE_POLL_IDLE = 10000;
-const LIVE_POLL_HIDDEN = 15000;
+const LIVE_POLL_MENUS = 5000;
+const LIVE_POLL_SIGNED_IN = 20000;
+const LIVE_POLL_IDLE = 30000;
+const LIVE_POLL_HIDDEN = 60000;
 
 function getLivePollDelay() {
     if (isLiveMatchActive()) return LIVE_POLL_CRITICAL;
@@ -4667,7 +4469,7 @@ function renderRoster(el, players) {
               stat("is-wr", "fa-chart-simple", wrValue, wrTitle) + formPips;
 
         return `
-            <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'))" title="Check this player's match history">
+            <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'), decodeURIComponent('${encodeURIComponent(p.puuid || "")}'))" title="Check this player's match history">
                 <div class="dash-player-lead">
                     ${p.agent_icon
                         ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
@@ -5419,214 +5221,3 @@ function initLiveEventListeners() {
 }
 
 // ==========================================================================
-// SETTINGS PRESET
-//
-// The preset is captured from whichever account is signed in right now, not
-// from a stored account. That's the whole point: most accounts have real
-// settings sitting on this PC but no puuid stored, so they can't be picked
-// from a list - but the live Riot Client always knows who is signed in.
-//
-// Every action reports exactly what it moved, so "it copied" can be checked
-// against real values rather than taken on trust.
-// ==========================================================================
-
-/** Loads the saved preset and renders its summary. */
-async function loadPreset() {
-    if (!DOM.presetSummary) return;
-    try {
-        const res = await fetch("/api/game-config/preset");
-        state.preset = await res.json();
-    } catch (err) {
-        state.preset = null;
-    }
-    renderPresetSummary();
-}
-
-function renderPresetSummary() {
-    if (!DOM.presetSummary) return;
-    const p = state.preset;
-
-    if (!p || !p.exists) {
-        DOM.presetSummary.innerHTML =
-            '<span class="preset-empty">Nothing saved yet. Sign into the account whose settings you want, ' +
-            'then press <strong>Save Current Account As Preset</strong>.</span>';
-        if (DOM.presetWhen) DOM.presetWhen.textContent = "";
-        return;
-    }
-
-    const d = p.details || {};
-    const meta = p.meta || {};
-    if (DOM.presetWhen) {
-        DOM.presetWhen.textContent = meta.captured_at
-            ? `from ${meta.label || "an account"} · ${formatPresetDate(meta.captured_at)}`
-            : (meta.label ? `from ${meta.label}` : "");
-    }
-
-    const rows = [
-        ["Crosshair profile", d.crosshair_profile],
-        ["Sensitivity", d.sensitivity],
-        ["Scoped sensitivity", d.scoped_sensitivity],
-        ["Keybinds", d.keybind_count != null ? `${d.keybind_count} bound` : ""],
-        ["Display mode", d.display_mode],
-        ["Resolution", d.resolution]
-    ].filter(r => r[1] !== undefined && r[1] !== null && String(r[1]).trim() !== "");
-
-    const fileRows = (p.files || []).map(f =>
-        `<li class="${f.present ? "is-present" : "is-missing"}">
-            <i class="fa-solid ${f.present ? "fa-circle-check" : "fa-circle-xmark"}"></i>
-            <span class="preset-file-label">${escapeHtml(f.label)}</span>
-            <span class="preset-file-meta">${f.present ? formatBytes(f.size) : "not captured"}</span>
-         </li>`).join("");
-
-    DOM.presetSummary.innerHTML =
-        `<ul class="preset-files">${fileRows}</ul>` +
-        (rows.length
-            ? `<div class="preset-values">${rows.map(([k, v]) =>
-                `<div class="preset-value"><span>${escapeHtml(k)}</span><strong>${escapeHtml(String(v))}</strong></div>`
-              ).join("")}</div>`
-            : "");
-}
-
-function formatPresetDate(iso) {
-    try {
-        const d = new Date(iso);
-        return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-    } catch (e) {
-        return iso;
-    }
-}
-
-function formatBytes(n) {
-    if (!n) return "0 B";
-    return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
-}
-
-/** Shows the result panel: what moved, what didn't, and the values that landed. */
-function showPresetLog(title, data, ok) {
-    if (!DOM.presetLog) return;
-    DOM.presetLog.style.display = "block";
-    DOM.presetLog.classList.toggle("is-error", !ok);
-    DOM.presetLogTitle.innerHTML =
-        `<i class="fa-solid ${ok ? "fa-clipboard-check" : "fa-triangle-exclamation"}"></i> ${escapeHtml(title)}`;
-
-    const parts = [];
-    if (data.message) parts.push(`<p class="preset-log-msg">${escapeHtml(data.message)}</p>`);
-
-    // Per-file outcome, for a capture or a single-account load.
-    if (data.files && data.files.length) {
-        parts.push(`<div class="preset-log-section">Files</div><ul class="preset-files">` +
-            data.files.map(f =>
-                `<li class="${f.present ? "is-present" : "is-missing"}">
-                    <i class="fa-solid ${f.present ? "fa-circle-check" : "fa-circle-xmark"}"></i>
-                    <span class="preset-file-label">${escapeHtml(f.label)}</span>
-                    <span class="preset-file-meta">${f.present ? formatBytes(f.size) : "not found"}</span>
-                 </li>`).join("") + `</ul>`);
-    }
-
-    if (data.details && Object.keys(data.details).length) {
-        const labels = {
-            crosshair_profile: "Crosshair profile",
-            sensitivity: "Sensitivity",
-            scoped_sensitivity: "Scoped sensitivity",
-            settings_lines: "Settings entries",
-            keybind_count: "Keybinds",
-            agent_keybinds: "Per-agent keybinds",
-            display_mode: "Display mode",
-            resolution: "Resolution"
-        };
-        const rows = Object.entries(data.details)
-            .filter(([, v]) => v !== "" && v !== null && v !== undefined)
-            .map(([k, v]) =>
-                `<div class="preset-value"><span>${escapeHtml(labels[k] || k)}</span><strong>${escapeHtml(String(v))}</strong></div>`);
-        if (rows.length) {
-            parts.push(`<div class="preset-log-section">Values now stored</div>
-                        <div class="preset-values">${rows.join("")}</div>`);
-        }
-    }
-
-    // Per-account outcome, for a load-onto-all.
-    if (data.applied && data.applied.length && typeof data.applied[0] === "object") {
-        parts.push(`<div class="preset-log-section">Applied to ${data.applied.length}</div>
-            <ul class="preset-accounts">` + data.applied.map(a =>
-                `<li class="is-present"><i class="fa-solid fa-circle-check"></i>
-                    <span>${escapeHtml(a.name)}</span>
-                    <span class="preset-file-meta">${escapeHtml((a.files || []).length + " files")}</span></li>`
-            ).join("") + `</ul>`);
-    }
-
-    if (data.skipped && data.skipped.length) {
-        parts.push(`<div class="preset-log-section">Skipped ${data.skipped.length}</div>
-            <ul class="preset-accounts">` + data.skipped.map(sk =>
-                `<li class="is-missing"><i class="fa-solid fa-circle-minus"></i>
-                    <span>${escapeHtml(sk.name)}</span>
-                    <span class="preset-file-meta">${escapeHtml(sk.why || "")}</span></li>`
-            ).join("") + `</ul>`);
-    }
-
-    if (data.failed && data.failed.length) {
-        parts.push(`<div class="preset-log-section">Couldn't write</div>
-            <ul class="preset-accounts">` + data.failed.map(f =>
-                `<li class="is-missing"><i class="fa-solid fa-circle-xmark"></i><span>${escapeHtml(String(f))}</span></li>`
-            ).join("") + `</ul>`);
-    }
-
-    DOM.presetLogBody.innerHTML = parts.join("");
-}
-
-async function presetRequest(btn, url, body, busyLabel, title) {
-    const original = btn ? btn.innerHTML : "";
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> ${busyLabel}`;
-    }
-    try {
-        const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        showPresetLog(title, data, !!data.success);
-        showToast(data.message || (data.success ? "Done." : "Didn't work."),
-                  data.success ? "success" : "error");
-        if (data.success) {
-            loadPreset();
-            loadGameConfigSettings();
-        }
-        return data;
-    } catch (err) {
-        showToast("Failed to reach the app's backend.", "error");
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = original;
-        }
-    }
-}
-
-function capturePreset() {
-    return presetRequest(
-        DOM.btnPresetCapture, "/api/game-config/preset/capture", {},
-        "Saving...", "Saved from the signed-in account"
-    );
-}
-
-function applyPresetToCurrent() {
-    return presetRequest(
-        DOM.btnPresetApply, "/api/game-config/preset/apply", {},
-        "Loading...", "Loaded onto the signed-in account"
-    );
-}
-
-async function applyPresetToAll() {
-    const n = ((state.gameConfig || {}).accounts || []).filter(a => a.has_puuid).length;
-    if (!confirm(
-        `Load the saved preset onto every account Vortex has identified (${n} right now)?\n\n` +
-        `This overwrites their crosshair, sensitivity, keybinds and video settings and can't be undone.`)) {
-        return;
-    }
-    return presetRequest(
-        DOM.btnPresetApplyAll, "/api/game-config/preset/apply", { all_accounts: true },
-        "Loading...", "Loaded onto all accounts"
-    );
-}

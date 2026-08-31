@@ -72,8 +72,16 @@
         draw(history.length ? history : [n(current.hs_pct)]);
     }
 
+    let timer = null;
     async function refresh() {
-        try { const response = await fetch("/api/live/session", {cache:"no-store"}); render(await response.json()); }
+        let delay = 10000;
+        try {
+            const response = await fetch("/api/live/session", {cache:"no-store"});
+            const data = await response.json();
+            render(data);
+            const phase = data && data.match && data.match.phase;
+            delay = phase === "in_match" ? 1000 : (data && data.valorant_running ? 4000 : 15000);
+        }
         catch (_) {
             missStreak++;
             if (missStreak >= MISS_LIMIT || !el.root.dataset.wasLive) {
@@ -81,6 +89,8 @@
                 waiting("Vortex service reconnecting");
             }
         }
+        clearTimeout(timer);
+        timer = window.setTimeout(refresh, delay);
     }
-    refresh(); window.setInterval(refresh, 1000);
+    refresh();
 })();

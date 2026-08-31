@@ -132,6 +132,22 @@ class LiveCombatTrackerTests(unittest.TestCase):
         self.assertFalse(out["available"])
         self.assertIn("Vortex Telemetry", out["reason"])
 
+    def test_does_not_read_valorant_tracker_logs_when_fallback_disabled(self):
+        self._write([
+            self._line("match_info", "match_id", self.MATCH_ID),
+            self._line("kill", "kills", 7),
+            self._line("death", "deaths", 2),
+        ])
+        tracker = LiveCombatTracker(self.temp.name)
+
+        disabled = tracker.snapshot(self.MATCH_ID, allow_tracker=False)
+        self.assertFalse(disabled["available"])
+        self.assertIn("disabled in Settings", disabled["reason"])
+
+        enabled = tracker.snapshot(self.MATCH_ID, allow_tracker=True)
+        self.assertTrue(enabled["available"])
+        self.assertEqual((7, 2), (enabled["kills"], enabled["deaths"]))
+
     def test_reads_valorant_tracker_nested_log_format(self):
         # The current Valorant Tracker app logs GEP updates in a nested shape
         # to background.html*.log, not the old flat "[GEP] info update" line.

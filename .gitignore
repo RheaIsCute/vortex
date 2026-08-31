@@ -10,6 +10,7 @@ env/
 database.sqlite
 database.sqlite-wal
 database.sqlite-shm
+backups/
 login_debug.log*
 
 # Build artifacts
@@ -28,4 +29,3 @@ lol-account-manager-main/
 .idea/
 Thumbs.db
 .DS_Store
-settings_preset/

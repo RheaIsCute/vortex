@@ -585,17 +585,25 @@ def main():
         _startup_log("main WebView created")
         overlay_window = _create_overlay_window()
         _startup_log("hidden Quick Panel WebView created")
-        live_hud_window = _create_live_hud_window()
-        _startup_log("hidden Live Aim HUD WebView created")
+        hud_enabled_at_start = db.get_settings().get("live_hud_enabled", "0") != "0"
+        live_hud_window = _create_live_hud_window() if hud_enabled_at_start else None
+        _startup_log("Live Aim HUD WebView " + ("created" if live_hud_window else "skipped (disabled)"))
         toggle_overlay = _make_overlay_controller(overlay_window, window)
-        set_live_hud_enabled = _make_live_hud_controller(live_hud_window)
+        if live_hud_window:
+            set_live_hud_enabled = _make_live_hud_controller(live_hud_window)
+        else:
+            def set_live_hud_enabled(enabled):
+                # Avoid keeping a full WebView2 renderer alive for an opt-in
+                # HUD. Enabling persists immediately and takes effect after a
+                # restart, when the HUD window will actually be constructed.
+                return {"success": not bool(enabled), "enabled": False,
+                        "restart_required": bool(enabled)}
         window.expose(set_live_hud_enabled)
 
-        def _restore_live_hud_after_load(*_args):
-            enabled = db.get_settings().get("live_hud_enabled", "0") != "0"
-            set_live_hud_enabled(enabled)
-
-        live_hud_window.events.loaded += _restore_live_hud_after_load
+        if live_hud_window:
+            def _restore_live_hud_after_load(*_args):
+                set_live_hud_enabled(True)
+            live_hud_window.events.loaded += _restore_live_hud_after_load
         _start_overlay_hotkey(toggle_overlay)
         _startup_log("overlay controller, Live Aim HUD, and hotkey initialized")
 
@@ -609,10 +617,11 @@ def main():
                 overlay_window.destroy()
             except Exception:
                 pass
-            try:
-                live_hud_window.destroy()
-            except Exception:
-                pass
+            if live_hud_window:
+                try:
+                    live_hud_window.destroy()
+                except Exception:
+                    pass
 
         window.events.closing += _on_main_closing
         _startup_log("entering WebView event loop")

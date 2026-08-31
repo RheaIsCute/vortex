@@ -10,8 +10,8 @@ so this module starts Overwolf itself quietly in the tray:
   * start it the same way Overwolf's own startup entry does, so it goes
     straight to the tray with no window
 
-All of it hangs off the `overwolf_auto` setting, which is the single switch
-for the whole behaviour. Install is attempted once per run: a machine that
+The server gates all of it behind the visible `overwolf_enabled` and
+`valorant_tracker_enabled` settings. Install is attempted once per run: a machine that
 can't install it (offline, no admin rights) shouldn't re-download a 200MB
 installer on every poll.
 """
@@ -412,8 +412,10 @@ def status() -> Dict[str, Any]:
     return {
         "installed": is_installed(),
         "running": is_running(),
-        # Vortex no longer installs or needs Valorant Tracker. The side-loaded
-        # Vortex Telemetry app is documented in overwolf/vortex-telemetry.
         "telemetry": {"setup": "manual", "source_dir": "overwolf/vortex-telemetry"},
+        "valorant_tracker": {
+            "installed": has_valorant_tracker(),
+            "install": dict(TRACKER_INSTALL_STATE),
+        },
         "install": dict(INSTALL_STATE),
     }

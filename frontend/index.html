@@ -796,6 +796,33 @@
                 </div>
 
                 <div class="form-group">
+                    <label><i class="fa-solid fa-satellite-dish"></i> Optional Live Telemetry</label>
+                    <p class="field-help">
+                        Vortex works normally without Overwolf or Valorant Tracker. Enable only the provider you want for exact current-match combat data.
+                    </p>
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-overwolf-enabled">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Enable Overwolf / Vortex Telemetry</strong>
+                            <span>Allows Vortex to start or install Overwolf when VALORANT runs and accept its live event feed.</span>
+                        </div>
+                    </div>
+                    <div class="switch-row">
+                        <label class="switch">
+                            <input type="checkbox" id="settings-valorant-tracker-enabled">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                        <div class="switch-row-text">
+                            <strong>Use Valorant Tracker as a fallback</strong>
+                            <span>Allows Vortex to install it if missing and read its local event log. Requires the Overwolf option above.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label><i class="fa-solid fa-window-restore"></i> After VALORANT Closes</label>
                     <p class="field-help">
                         Automatically start a chosen program the moment VALORANT exits.
@@ -857,87 +884,6 @@
                     </button>
                 </div>
 
-                <div class="form-group">
-                    <label><i class="fa-solid fa-clone"></i> Settings Profile</label>
-                    <p class="field-help">
-                        Crosshair, sensitivity, keybinds and video settings live on this PC per-account -
-                        Riot doesn't sync them. Pick one account as the template and copy its settings onto others,
-                        automatically on every launch or on demand.
-                    </p>
-
-                    <div class="custom-select-wrapper">
-                        <i class="fa-solid fa-user select-icon"></i>
-                        <select id="settings-profile-account">
-                            <option value="">No profile account selected</option>
-                        </select>
-                    </div>
-
-                    <div class="switch-row">
-                        <label class="switch">
-                            <input type="checkbox" id="settings-profile-autoapply">
-                            <span class="switch-track"><span class="switch-thumb"></span></span>
-                        </label>
-                        <div class="switch-row-text">
-                            <strong>Auto-apply on every launch</strong>
-                            <span>Copies the profile account's settings onto whichever account is about to play, right before VALORANT starts.</span>
-                        </div>
-                    </div>
-
-                    <!-- Saved preset -->
-                    <div class="preset-card" id="preset-card">
-                        <div class="preset-card-head">
-                            <span class="preset-card-title"><i class="fa-solid fa-floppy-disk"></i> Saved preset</span>
-                            <span class="preset-card-when" id="preset-when"></span>
-                        </div>
-                        <div id="preset-summary" class="preset-summary">
-                            <span class="preset-empty">Nothing saved yet.</span>
-                        </div>
-                    </div>
-
-                    <div class="preset-actions">
-                        <button type="button" class="btn btn-primary" id="btn-preset-capture">
-                            <i class="fa-solid fa-camera"></i> Save Current Account As Preset
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="btn-preset-apply">
-                            <i class="fa-solid fa-download"></i> Load Onto Current Account
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="btn-preset-apply-all">
-                            <i class="fa-solid fa-users-gear"></i> Load Onto All Accounts
-                        </button>
-                    </div>
-
-                    <!-- Result log -->
-                    <div class="preset-log" id="preset-log" style="display:none;">
-                        <div class="preset-log-head">
-                            <span id="preset-log-title"><i class="fa-solid fa-clipboard-check"></i> Result</span>
-                            <button type="button" class="preset-log-close" id="preset-log-close">
-                                <i class="fa-solid fa-xmark"></i>
-                            </button>
-                        </div>
-                        <div class="preset-log-body" id="preset-log-body"></div>
-                    </div>
-
-                    <details class="preset-advanced">
-                        <summary>Copy directly between two accounts</summary>
-                        <div class="settings-profile-copy-now">
-                            <div class="custom-select-wrapper">
-                                <i class="fa-solid fa-arrow-right-to-bracket select-icon"></i>
-                                <select id="settings-copy-target">
-                                    <option value="">Copy to: whoever's signed in now</option>
-                                </select>
-                            </div>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-settings-now">
-                                <i class="fa-solid fa-copy"></i> Copy Now
-                            </button>
-                        </div>
-                        <button type="button" class="btn btn-secondary btn-copy-all" id="btn-copy-settings-all">
-                            <i class="fa-solid fa-users-gear"></i> Copy profile account to all
-                        </button>
-                    </details>
-
-                    <p class="field-help" id="settings-profile-status"></p>
-                </div>
-
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
                     <button type="button" class="btn btn-primary" id="btn-save-settings">
@@ -966,7 +912,7 @@
                     </div>
                     <div>
                         <h2>Backup and Restore</h2>
-                        <p class="modal-sub">Export or import your roster as JSON</p>
+                        <p class="modal-sub">Move your complete account roster between Windows installs</p>
                     </div>
                 </div>
                 <button class="modal-close" id="modal-backup-close"><i class="fa-solid fa-xmark"></i></button>
@@ -976,7 +922,7 @@
                 <div class="backup-card">
                     <div class="backup-card-icon"><i class="fa-solid fa-file-export"></i></div>
                     <h3>Export Accounts</h3>
-                    <p>Save a JSON backup of all accounts on your PC.</p>
+                    <p>Save all active and banned accounts and passwords. App settings stay local.</p>
                     <button class="btn btn-primary" id="btn-do-export">
                         <i class="fa-solid fa-download"></i> Export JSON
                     </button>

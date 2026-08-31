@@ -327,6 +327,7 @@ class CachedNamesTests(unittest.TestCase):
         from backend import server
         self.server = server
         server._NAME_CACHE.clear()
+        server._PLAYER_MMR_CACHE.clear()
 
     class _ScriptedClient:
         def __init__(self, script):
@@ -367,6 +368,50 @@ class CachedNamesTests(unittest.TestCase):
             if "m2" in self.server._NAME_CACHE:
                 self.server._NAME_CACHE["m2"]["next_at"] = 0.0  # ignore the retry gap
         self.assertEqual(self.server._NAME_MAX_TRIES, client.calls)
+
+    def test_names_settled_tracks_resolution_and_giving_up(self):
+        puuids = ["a", "b"]
+
+        # Nothing asked yet -> unsettled.
+        self.assertFalse(self.server._names_settled("m3", puuids))
+
+        client = self._ScriptedClient([{"a": "A#1"}])  # "b" never resolves
+        self.server._cached_names(client, "m3", puuids)
+        # "b" still blank and retries left -> a blank name is "not yet".
+        self.assertFalse(self.server._names_settled("m3", puuids))
+
+        # Everyone named -> settled immediately, no need to burn the budget.
+        client2 = self._ScriptedClient([{"a": "A#1", "b": "B#2"}])
+        self.server._NAME_CACHE["m4"] = {"names": {}, "tries": 0, "next_at": 0.0}
+        self.server._cached_names(client2, "m4", puuids)
+        self.assertTrue(self.server._names_settled("m4", puuids))
+
+        # Budget spent without "b" -> settled (a blank name now means hidden).
+        for _ in range(self.server._NAME_MAX_TRIES + 2):
+            self.server._cached_names(client, "m3", puuids)
+            self.server._NAME_CACHE["m3"]["next_at"] = 0.0
+        self.assertTrue(self.server._names_settled("m3", puuids))
+
+    def test_roster_entry_trusts_name_service_over_payload_incognito(self):
+        names = {"seen": "Seen#NA"}
+        incognito_payload = {
+            "Subject": "seen",
+            "PlayerIdentity": {"Incognito": True, "AccountLevel": 42},
+        }
+        # Name service resolved this player -> show the name, drop the flag,
+        # even though the match payload marks them Incognito.
+        entry = self.server._roster_entry(None, incognito_payload, names, "me", True)
+        self.assertEqual("Seen#NA", entry["name"])
+        self.assertFalse(entry["incognito"])
+
+        unresolved = {"Subject": "ghost", "PlayerIdentity": {"Incognito": True}}
+        # Still resolving -> blank name, not yet flagged hidden.
+        pending = self.server._roster_entry(None, unresolved, names, "me", False)
+        self.assertEqual("", pending["name"])
+        self.assertFalse(pending["incognito"])
+        # Name service gave up -> now genuinely hidden.
+        hidden = self.server._roster_entry(None, unresolved, names, "me", True)
+        self.assertTrue(hidden["incognito"])
 
 
 class MatchScoreboardTests(unittest.TestCase):

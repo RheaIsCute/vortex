@@ -127,6 +127,9 @@ class SettingsUpdate(BaseModel):
 
 class ImportRequest(BaseModel):
     accounts: List[Dict[str, Any]]
+    banned_accounts: Optional[List[Dict[str, Any]]] = None
+    format: Optional[str] = None
+    version: Optional[int] = None
 
 
 class ImportTextRequest(BaseModel):
@@ -151,6 +154,7 @@ def account_needs_check(acc: Dict[str, Any]) -> bool:
 # actually changes - otherwise it would just track "last seen" and rewrite the
 # row (and re-render the roster) on every single tick.
 _ACTIVE_SESSION: Dict[str, Any] = {"account_id": None}
+_ACTIVE_SYNC_CACHE: Dict[str, Any] = {"identity": "", "full_at": 0.0}
 
 
 def _mark_session_login(account_id: int, stored_last_login: Optional[str]) -> bool:
@@ -653,7 +657,7 @@ async def kill_riot_client():
 
 
 
-async def run_full_refresh() -> int:
+async def run_full_refresh(stale_only: bool = False) -> int:
     """
     Refreshes every active account against Riot: live rank/RR, level, peak
     rank, match history, and ban status. Also repairs "ghost" accounts that
@@ -683,14 +687,25 @@ async def run_full_refresh() -> int:
     settings = db.get_settings()
     scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
 
+    refresh_limit = asyncio.Semaphore(2)
+
     async def process_acc(acc):
         if not acc.get("display_name"):
             return
-        stats = await scraper.fetch_account_stats(acc["display_name"], acc["region"])
-        stats["last_updated"] = datetime.now().isoformat()
-        apply_account_update(acc["id"], stats)
+        async with refresh_limit:
+            stats = await scraper.fetch_account_stats(acc["display_name"], acc["region"])
+            stats["last_updated"] = datetime.now().isoformat()
+            apply_account_update(acc["id"], stats)
 
     accounts = db.get_all_accounts()
+    if stale_only:
+        cutoff = time.time() - (6 * 60 * 60)
+        def is_stale(acc):
+            try:
+                return datetime.fromisoformat(acc.get("last_updated") or "").timestamp() < cutoff
+            except (TypeError, ValueError):
+                return True
+        accounts = [acc for acc in accounts if is_stale(acc)]
     tasks = [process_acc(acc) for acc in accounts if acc.get("display_name")]
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -705,17 +720,17 @@ async def refresh_all_accounts():
 
 
 # How often the background auto-refresh sweeps the whole roster.
-AUTO_REFRESH_INTERVAL_SECONDS = 30 * 60
+AUTO_REFRESH_INTERVAL_SECONDS = 6 * 60 * 60
 _auto_refresh_task = None
 
 
 async def _auto_refresh_loop():
     """Periodically runs a full roster refresh in the background."""
     # Small initial delay so it doesn't fight the first-launch UI load.
-    await asyncio.sleep(90)
+    await asyncio.sleep(15 * 60)
     while True:
         try:
-            await run_full_refresh()
+            await run_full_refresh(stale_only=True)
         except Exception:
             pass
         await asyncio.sleep(AUTO_REFRESH_INTERVAL_SECONDS)
@@ -820,6 +835,7 @@ def _post_valorant_watch_loop() -> None:
 @app.on_event("startup")
 async def _start_background_workers():
     global _auto_refresh_task
+    game_config.remove_legacy_profile_data()
     # Repair ghost accounts immediately on boot, even before the first sweep.
     try:
         db.repair_ghost_accounts()
@@ -830,19 +846,9 @@ async def _start_background_workers():
     threading.Thread(target=_post_valorant_watch_loop,
                      name="vortex-post-valorant-watch", daemon=True).start()
 
-    # An update kills Overwolf (it holds Vortex's VCRUNTIME140.dll open, which
-    # blocked the install) but nothing brought it back unless the live HUD
-    # happened to poll with VALORANT already running. Restart it here on every
-    # launch so a fresh update doesn't silently leave live combat stats dead.
-    def _restore_overwolf() -> None:
-        try:
-            if db.get_settings().get("overwolf_auto", "1") == "1":
-                overwolf.ensure_available()
-        except Exception:
-            client_launcher.login_logger.exception("startup Overwolf restore failed")
-
-    threading.Thread(target=_restore_overwolf,
-                     name="vortex-overwolf-restore", daemon=True).start()
+    # Overwolf is intentionally not launched at Vortex startup. The live
+    # snapshot wakes it when VALORANT actually starts, avoiding hundreds of
+    # MB of idle helper processes for users who are only managing accounts.
 
 
 # DYNAMIC PARAMETERIZED ROUTES
@@ -1017,12 +1023,27 @@ async def lookup_player_history(request: PlayerLookup):
 @app.get("/api/sync-active-account")
 async def sync_active_account():
     """
-    Called every 4-5s by frontend to automatically sync the currently logged-in
+    Called periodically by the frontend to sync the currently logged-in
     Riot Client session with the corresponding account in SQLite.
     """
+    # Identity/session discovery is local and cheap. XP/MMR/rank discovery is
+    # several Riot HTTP calls, so only pay for it when the account changes or
+    # the previous full refresh is five minutes old.
+    session = await asyncio.to_thread(launcher.get_active_riot_session)
+    if not session or not session.get("found"):
+        return {"success": True, "synced": False, "message": "No active logged-in Riot Client session."}
+
+    identity = ((session.get("puuid") or session.get("username") or
+                 session.get("display_name") or "").strip().lower())
+    now = time.monotonic()
+    if (identity and identity == _ACTIVE_SYNC_CACHE["identity"] and
+            now - _ACTIVE_SYNC_CACHE["full_at"] < 5 * 60):
+        return {"success": True, "synced": False, "unchanged": True}
+
     info = await asyncio.to_thread(launcher.get_active_riot_account)
     if not info or not info.get("found"):
-        return {"success": True, "synced": False, "message": "No active logged-in Riot Client session."}
+        return {"success": True, "synced": False, "message": "Riot session is still settling."}
+    _ACTIVE_SYNC_CACHE.update({"identity": identity, "full_at": time.monotonic()})
 
     accounts = db.get_all_accounts()
     act_user = (info.get("username") or "").lower()
@@ -1280,21 +1301,22 @@ async def download_and_install_update():
 
 @app.get("/api/export")
 async def export_accounts():
-    accounts = db.export_all()
+    backup = db.export_all()
     return JSONResponse(
-        content={"accounts": accounts, "exported_at": datetime.now().isoformat()},
-        headers={"Content-Disposition": "attachment; filename=valorant_accounts_backup.json"}
+        content=backup,
+        headers={"Content-Disposition": "attachment; filename=vortex_complete_backup.json"}
     )
 
 
 @app.post("/api/import")
 async def import_accounts(req: ImportRequest):
-    result = db.import_all(req.accounts)
+    result = db.import_backup(req.dict())
     return {
         "success": True,
         "imported_count": result["imported"],
         "skipped_existing": result["skipped_existing"],
-        "skipped_banned": result["skipped_banned"]
+        "skipped_banned": result["skipped_banned"],
+        "repaired_passwords": result["repaired_passwords"]
     }
 
 
@@ -1331,6 +1353,23 @@ async def import_text_accounts(req: ImportTextRequest, background_tasks: Backgro
 # fresh set of Riot requests per caller.
 _LIVE_SNAPSHOT: Dict[str, Any] = {"data": None, "built_at": 0.0}
 _LIVE_SNAPSHOT_TTL = 1.2
+_OVERWOLF_WAKE: Dict[str, float] = {"checked_at": 0.0}
+
+
+def _live_combat_snapshot(match_id: str) -> Dict[str, Any]:
+    """Return telemetry only when the corresponding integrations are enabled."""
+    settings = db.get_settings()
+    if settings.get("overwolf_enabled", "0") != "1":
+        return {
+            "available": False,
+            "provider": "disabled",
+            "source": "disabled",
+            "reason": "Optional Overwolf telemetry is disabled in Settings.",
+        }
+    return _LIVE_COMBAT.snapshot(
+        match_id,
+        allow_tracker=settings.get("valorant_tracker_enabled", "0") == "1",
+    )
 
 # Set by build_live_snapshot(): True only in agent select or a live match.
 # app.py's Live Aim HUD keeper reads this to stay hidden in the menus.
@@ -1372,37 +1411,6 @@ class InstalockRequest(BaseModel):
 
 class LockNowRequest(BaseModel):
     agent_id: str
-
-
-class GameConfigSettingsRequest(BaseModel):
-    force_borderless: Optional[bool] = None
-    autoapply: Optional[bool] = None
-    profile_account_id: Optional[int] = None  # 0 clears it
-    stay_signed_in: Optional[bool] = None
-    auto_launch_after_login: Optional[bool] = None
-
-
-class GameConfigCopyRequest(BaseModel):
-    source_account_id: int
-    target_account_id: Optional[int] = None  # omitted = whoever's signed in now
-    gameplay: bool = True
-    video: bool = True
-
-
-class PresetCaptureRequest(BaseModel):
-    account_id: Optional[int] = None   # omitted = whoever's signed in now
-    set_as_profile: bool = True
-
-
-class PresetApplyRequest(BaseModel):
-    account_id: Optional[int] = None   # omitted = whoever's signed in now
-    all_accounts: bool = False
-
-
-class GameConfigCopyAllRequest(BaseModel):
-    source_account_id: int
-    gameplay: bool = True
-    video: bool = True
 
 
 class GameConfigBorderlessRequest(BaseModel):
@@ -1578,7 +1586,8 @@ def _get_player_stats(client, puuid: str, fallback_tier: int = 0) -> Dict[str, A
     return stats
 
 
-def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_puuid: str) -> Dict[str, Any]:
+def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_puuid: str,
+                  names_settled: bool = False) -> Dict[str, Any]:
     agent = valorant_client.agent_by_id(player.get("CharacterID", ""))
     seasonal_tier = (player.get("SeasonalBadgeInfo") or {}).get("Rank") or player.get("CompetitiveTier") or 0
     subject = player.get("Subject", "")
@@ -1591,12 +1600,18 @@ def _roster_entry(client, player: Dict[str, Any], names: Dict[str, str], self_pu
     tier_label = stats.get("tier_label") or valorant_client.tier_label(tier)
     tier_icon = stats.get("tier_icon") or valorant_client.tier_icon(tier)
 
-    incognito = bool(identity.get("Incognito"))
+    # The match payload flags essentially everyone `Incognito` during agent
+    # select and the loading screen, so it can't stand in for streamer mode.
+    # Riot's name service is the real gate: if it hands us a Name#TAG the name
+    # is meant to be visible, whatever the payload says. A genuinely hidden
+    # player never resolves and stays blank here - flagged incognito only once
+    # the name service has given up (`names_settled`), so the UI shows
+    # "Resolving…" until then rather than a premature "Hidden".
+    resolved_name = names.get(subject, "")
+    incognito = not resolved_name and names_settled
     return {
         "puuid": subject,
-        # Streamer mode wins even if the name service still hands us the real
-        # name; otherwise it's blank until a later poll resolves it.
-        "name": "Hidden" if incognito else names.get(subject, ""),
+        "name": resolved_name,
         "incognito": incognito,
         "agent": agent.get("name", ""),
         "agent_icon": agent.get("icon", ""),
@@ -1672,6 +1687,21 @@ def _cached_names(client, match_id: str, puuids: List[str]) -> Dict[str, str]:
             names.update(fresh)  # never drop a name that already resolved
 
     return names
+
+
+def _names_settled(match_id: str, puuids: List[str]) -> bool:
+    """
+    True once the name service has named everyone, or has been asked its full
+    retry budget of times without ever naming a given player. Only then does a
+    still-blank name mean "genuinely hidden" rather than "hasn't resolved yet".
+    """
+    entry = _NAME_CACHE.get(match_id)
+    if entry is None:
+        return False
+    names = entry["names"]
+    if all(names.get(p) for p in puuids if p):
+        return True
+    return entry["tries"] >= _NAME_MAX_TRIES
 
 
 # --------------------------------------------------------------------------
@@ -1905,7 +1935,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
     rounds_played = int(progress.get("rounds_played", -1) or 0) if progress else -1
     live = _live_probe(client, match_id, rounds_played) if match_id else None
     event_live = live_combat if live_combat is not None else (
-        _LIVE_COMBAT.snapshot(match_id) if match_id else {"available": False}
+        _live_combat_snapshot(match_id) if match_id else {"available": False}
     )
 
     # What the round ledger alone can tell us about this match. This part is
@@ -2349,8 +2379,9 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
     queue_id = (presence.get("queueId", "") or "").lower()
 
     _warm_player_stats(client, ally + enemy)
-    team = [_roster_entry(client, p, names, client.puuid) for p in ally]
-    enemy_roster = [_roster_entry(client, p, names, client.puuid) for p in enemy]
+    settled = _names_settled(match_id, puuids)
+    team = [_roster_entry(client, p, names, client.puuid, settled) for p in ally]
+    enemy_roster = [_roster_entry(client, p, names, client.puuid, settled) for p in enemy]
     _apply_parties(team + enemy_roster, _my_party_members(client))
     me = next((r for r in team if r.get("is_self")), None)
 
@@ -2446,8 +2477,9 @@ def _build_coregame_block(client, presence: Dict[str, Any], match_id: Optional[s
         self_team = "Blue"
 
     _warm_player_stats(client, players)
-    roster = [_roster_entry(client, p, names, client.puuid) for p in players]
-    live_combat = _LIVE_COMBAT.snapshot(match_id)
+    settled = _names_settled(match_id, puuids)
+    roster = [_roster_entry(client, p, names, client.puuid, settled) for p in players]
+    live_combat = _live_combat_snapshot(match_id)
     _attach_live_combat(roster, live_combat)
     ally = [r for r in roster if r["team"] == self_team]
     enemy = [r for r in roster if r["team"] != self_team]
@@ -2654,12 +2686,16 @@ def build_live_snapshot() -> Dict[str, Any]:
     if not snapshot["valorant_running"]:
         return snapshot
 
-    # Vortex Telemetry needs Overwolf's event provider running before a match.
-    # Do not install or launch Valorant Tracker: its visible overlay is not
-    # part of Vortex.
-    if db.get_settings().get("overwolf_auto", "1") == "1":
+    # Optional telemetry providers are only started when their Settings
+    # switches are enabled.
+    now = time.monotonic()
+    if (db.get_settings().get("overwolf_enabled", "0") == "1" and
+            now - _OVERWOLF_WAKE["checked_at"] >= 60.0):
+        _OVERWOLF_WAKE["checked_at"] = now
         try:
             overwolf.ensure_available()
+            if db.get_settings().get("valorant_tracker_enabled", "0") == "1":
+                overwolf.ensure_tracker()
         except Exception:
             pass
 
@@ -2874,334 +2910,15 @@ def _borderless_when_in_lobby(puuid: str) -> None:
     threading.Thread(target=watch, daemon=True).start()
 
 
-async def _apply_launch_prefs(puuid: str) -> None:
-    """
-    Applies the settings preset to the account that is about to play, when
-    auto-apply is armed.
-
-    Runs synchronously when the account's local config folder already exists
-    (a returning account - this is a couple of small file writes, well under
-    a launch's normal latency). When it doesn't - a first-ever login for this
-    account on this PC, where Riot hasn't created the folder yet - the launch
-    is never blocked on it; a background watcher applies it the moment the
-    folder shows up instead.
-
-    Forced borderless is handled separately by _borderless_when_in_lobby().
-    """
-    if not puuid:
-        return
-
-    settings = db.get_settings()
-    autoapply = settings.get("settings_autoapply", "0") == "1"
-
-    # Forced borderless deliberately does NOT happen here any more. VALORANT
-    # reads its video config at startup and writes it back out from memory
-    # afterwards, so anything set before launch is liable to be overwritten by
-    # the game's own idea of the settings. It's applied once the game is up
-    # and sitting in the menus instead - see _borderless_when_in_lobby().
-    if not autoapply:
-        return
-
-    def apply_now() -> None:
-        if game_config.describe_preset().get("exists"):
-            game_config.apply_preset(puuid)
-
-    if game_config.account_dir(puuid):
-        await asyncio.to_thread(apply_now)
-        return
-
-    def watch():
-        if game_config.wait_for_account(puuid, timeout=90.0):
-            apply_now()
-
-    threading.Thread(target=watch, daemon=True).start()
-
-
 async def _arm_launch_prefs(puuid: str) -> None:
-    """Everything that should happen around a launch: preset first, then the
-    in-lobby borderless pass."""
-    await _apply_launch_prefs(puuid)
+    """Apply the optional in-lobby borderless preference around a launch."""
     if db.get_settings().get("force_borderless", "1") != "0":
         _borderless_when_in_lobby(puuid)
 
 
 # --------------------------------------------------------------------------
-# LOCAL GAME CONFIG - forced borderless + copying settings between accounts
-#
-# Riot doesn't expose crosshair/sensitivity/keybinds/video through any API,
-# so these act directly on the per-account config files under
-# %LOCALAPPDATA%\VALORANT\Saved\Config - see backend/game_config.py.
+# LOCAL GAME CONFIG - optional forced borderless
 # --------------------------------------------------------------------------
-
-@app.get("/api/game-config/settings")
-async def get_game_config_settings():
-    """
-    Current borderless/profile preferences, plus which stored accounts have
-    actually signed into VALORANT on this PC - the only ones that can serve
-    as a settings source or receive a copy right now.
-    """
-    settings = db.get_settings()
-    accounts = db.get_all_accounts()
-
-    def has_config(puuid: str) -> bool:
-        try:
-            return bool(puuid) and game_config.has_config(puuid)
-        except Exception:
-            return False
-
-    def build_status() -> List[Dict[str, Any]]:
-        out = []
-        for acc in accounts:
-            puuid = (acc.get("puuid") or "").strip()
-            ready = has_config(puuid)
-            # Two genuinely different reasons an account can't be used, which
-            # the old UI collapsed into one unexplained greyed-out row.
-            if ready:
-                reason = ""
-            elif not puuid:
-                reason = "not identified yet - log in once with Vortex open"
-            else:
-                reason = "no settings on this PC yet - play one match on it"
-            out.append({
-                "id": acc["id"],
-                "display_name": acc.get("display_name") or acc.get("username", ""),
-                "username": acc.get("username", ""),
-                "has_config": ready,
-                "has_puuid": bool(puuid),
-                "reason": reason,
-            })
-        return out
-
-    account_status = await asyncio.to_thread(build_status)
-    profile_id = settings.get("settings_profile_account_id", "") or ""
-
-    # Exactly what the chosen profile has on disk, so the UI can spell out
-    # what a copy would actually carry across instead of leaving it to guesswork.
-    profile_detail = None
-    if profile_id.isdigit():
-        prof = db.get_account_by_id(int(profile_id))
-        if prof and (prof.get("puuid") or "").strip():
-            profile_detail = await asyncio.to_thread(game_config.describe, prof["puuid"].strip())
-
-    return {
-        "force_borderless": settings.get("force_borderless", "1") != "0",
-        "autoapply": settings.get("settings_autoapply", "0") == "1",
-        "stay_signed_in": settings.get("stay_signed_in", "1") != "0",
-        "auto_launch_after_login": settings.get("auto_launch_after_login", "0") == "1",
-        "profile_account_id": int(profile_id) if profile_id.isdigit() else None,
-        "accounts": account_status,
-        "ready_count": sum(1 for a in account_status if a["has_config"]),
-        "total_count": len(account_status),
-        "profile_detail": profile_detail,
-    }
-
-
-@app.post("/api/game-config/settings")
-async def update_game_config_settings(req: GameConfigSettingsRequest):
-    updates: Dict[str, str] = {}
-    if req.force_borderless is not None:
-        updates["force_borderless"] = "1" if req.force_borderless else "0"
-    if req.autoapply is not None:
-        updates["settings_autoapply"] = "1" if req.autoapply else "0"
-    if req.profile_account_id is not None:
-        updates["settings_profile_account_id"] = str(req.profile_account_id) if req.profile_account_id else ""
-    if req.stay_signed_in is not None:
-        updates["stay_signed_in"] = "1" if req.stay_signed_in else "0"
-    if req.auto_launch_after_login is not None:
-        updates["auto_launch_after_login"] = "1" if req.auto_launch_after_login else "0"
-    if updates:
-        db.update_settings(updates)
-    return await get_game_config_settings()
-
-
-@app.post("/api/game-config/copy")
-async def copy_game_config(req: GameConfigCopyRequest):
-    """Copies crosshair/sensitivity/keybinds and/or video settings between two
-    stored accounts' local config, right now."""
-    src = db.get_account_by_id(req.source_account_id)
-    if not src or not src.get("puuid"):
-        return {"success": False, "message": "Source account not found or has no known PUUID yet - check it in once first."}
-
-    if req.target_account_id:
-        dst = db.get_account_by_id(req.target_account_id)
-        if not dst or not dst.get("puuid"):
-            return {"success": False, "message": "Target account not found or has no known PUUID yet - check it in once first."}
-        dst_puuid = dst["puuid"]
-    else:
-        dst_puuid = await asyncio.to_thread(_current_puuid)
-        if not dst_puuid:
-            return {"success": False, "message": "No account is signed into the Riot Client right now."}
-
-    result = await asyncio.to_thread(
-        game_config.copy_settings, src["puuid"], dst_puuid, req.gameplay, req.video
-    )
-    return result
-
-
-@app.get("/api/game-config/preset")
-async def get_settings_preset():
-    """What's currently saved as the settings preset."""
-    return await asyncio.to_thread(game_config.describe_preset)
-
-
-@app.post("/api/game-config/preset/capture")
-async def capture_settings_preset(req: PresetCaptureRequest):
-    """
-    Saves the signed-in account's settings as the preset.
-
-    Capturing from the live session rather than a stored account is what makes
-    this usable at all: the puuid comes from the Riot Client directly, so an
-    account Vortex has never identified can still be used as the source. Most
-    accounts are in exactly that state - they have real settings sitting on
-    this PC, but no stored puuid to find them by.
-    """
-    puuid = ""
-    label = ""
-
-    if req.account_id:
-        acc = db.get_account_by_id(req.account_id)
-        if not acc:
-            return {"success": False, "message": "Account not found."}
-        puuid = (acc.get("puuid") or "").strip()
-        label = acc.get("display_name") or acc.get("username", "")
-        if not puuid:
-            return {"success": False, "message":
-                    f"Vortex hasn't identified {label} yet - sign into it and capture from the live session."}
-    else:
-        puuid = await asyncio.to_thread(_current_puuid)
-        info = await asyncio.to_thread(launcher.get_active_riot_account)
-        label = (info or {}).get("display_name") or (info or {}).get("username") or ""
-        if not puuid:
-            return {"success": False, "message":
-                    "No account is signed into the Riot Client right now."}
-        # Learn this account's puuid while we have it, so it can be a copy
-        # target later without needing another sign-in.
-        matched = _match_account_to_session((info or {}).get("username", ""), label)
-        if matched and (matched.get("puuid") or "") != puuid:
-            try:
-                db.update_account(matched["id"], {"puuid": puuid})
-            except Exception:
-                pass
-
-    result = await asyncio.to_thread(game_config.capture_preset, puuid, label)
-    if result.get("success") and req.set_as_profile:
-        matched = db.get_account_by_puuid(puuid)
-        if matched:
-            db.update_settings({"settings_profile_account_id": str(matched["id"])})
-    return result
-
-
-@app.post("/api/game-config/preset/apply")
-async def apply_settings_preset(req: PresetApplyRequest):
-    """Writes the saved preset onto one account, or onto every account that can take it."""
-    if req.all_accounts:
-        def run_all() -> Dict[str, Any]:
-            applied, skipped = [], []
-            for acc in db.get_all_accounts():
-                name = acc.get("display_name") or acc.get("username", "")
-                pu = (acc.get("puuid") or "").strip()
-                if not pu:
-                    skipped.append({"name": name, "why": "not identified on this PC yet"})
-                    continue
-                res = game_config.apply_preset(pu, name)
-                if res.get("success"):
-                    applied.append({"name": name, "files": res.get("applied", [])})
-                else:
-                    skipped.append({"name": name, "why": res.get("message", "failed")})
-            return {"applied": applied, "skipped": skipped}
-
-        res = await asyncio.to_thread(run_all)
-        applied, skipped = res["applied"], res["skipped"]
-        if not applied:
-            return {"success": False, "message":
-                    "No account was ready to receive the preset yet.", **res}
-        msg = f"Applied the preset to {len(applied)} account{'s' if len(applied) != 1 else ''}."
-        if skipped:
-            msg += f" {len(skipped)} skipped."
-        return {"success": True, "message": msg, **res}
-
-    if req.account_id:
-        acc = db.get_account_by_id(req.account_id)
-        if not acc:
-            return {"success": False, "message": "Account not found."}
-        puuid = (acc.get("puuid") or "").strip()
-        label = acc.get("display_name") or acc.get("username", "")
-        if not puuid:
-            return {"success": False, "message":
-                    f"Vortex hasn't identified {label} yet - sign into it once, then apply."}
-    else:
-        puuid = await asyncio.to_thread(_current_puuid)
-        info = await asyncio.to_thread(launcher.get_active_riot_account)
-        label = (info or {}).get("display_name") or (info or {}).get("username") or ""
-        if not puuid:
-            return {"success": False, "message": "No account is signed into the Riot Client right now."}
-
-    return await asyncio.to_thread(game_config.apply_preset, puuid, label)
-
-
-@app.post("/api/game-config/copy-all")
-async def copy_game_config_to_all(req: GameConfigCopyAllRequest):
-    """
-    Copies the profile account's whole local setup onto every other account
-    that has settings on this PC, in one go.
-
-    This is the "make all my accounts identical" button - doing it one target
-    at a time through the single-target copy was the only way before, which
-    is not an obvious way to say "apply this everywhere".
-    """
-    src = db.get_account_by_id(req.source_account_id)
-    if not src:
-        return {"success": False, "message": "Profile account not found."}
-    src_puuid = (src.get("puuid") or "").strip()
-    if not src_puuid:
-        return {"success": False, "message":
-                "That account hasn't been identified yet - sign into it once with Vortex open, then try again."}
-
-    def run() -> Dict[str, Any]:
-        if not game_config.has_config(src_puuid):
-            return {"success": False, "message":
-                    "The profile account has no VALORANT settings on this PC yet - "
-                    "play one match on it, then copy."}
-
-        applied, skipped = [], []
-        for acc in db.get_all_accounts():
-            if acc["id"] == src["id"]:
-                continue
-            name = acc.get("display_name") or acc.get("username", "")
-            puuid = (acc.get("puuid") or "").strip()
-            if not puuid:
-                skipped.append({"name": name, "why": "not identified on this PC yet"})
-                continue
-            if puuid == src_puuid:
-                continue
-            if not game_config.has_config(puuid):
-                skipped.append({"name": name, "why": "has never played on this PC"})
-                continue
-            res = game_config.copy_settings(src_puuid, puuid, req.gameplay, req.video)
-            if res.get("success"):
-                applied.append(name)
-            else:
-                skipped.append({"name": name, "why": res.get("message", "copy failed")})
-        return {"applied": applied, "skipped": skipped}
-
-    result = await asyncio.to_thread(run)
-    if "success" in result:
-        return result
-
-    applied, skipped = result["applied"], result["skipped"]
-    src_name = src.get("display_name") or src.get("username", "")
-    if not applied:
-        return {
-            "success": False,
-            "message": "No account was ready to receive the settings yet.",
-            "applied": [], "skipped": skipped,
-        }
-
-    msg = f"Copied {src_name}'s settings onto {len(applied)} account{'s' if len(applied) != 1 else ''}."
-    if skipped:
-        msg += f" {len(skipped)} skipped."
-    return {"success": True, "message": msg, "applied": applied, "skipped": skipped}
-
 
 @app.post("/api/game-config/force-borderless")
 async def force_borderless_now(req: GameConfigBorderlessRequest):
@@ -3255,6 +2972,8 @@ async def overwolf_status():
 @app.post("/api/overwolf/install")
 async def overwolf_install():
     """Installs Overwolf now, rather than waiting for VALORANT to start."""
+    if db.get_settings().get("overwolf_enabled", "0") != "1":
+        return {"success": False, "message": "Enable Overwolf telemetry in Settings first."}
     return await asyncio.to_thread(overwolf.start_install)
 
 
@@ -3266,6 +2985,8 @@ async def telemetry_gep_event(req: TelemetryEventRequest):
     another computer. Normalize the event to the format used by the fallback
     reader before passing it to the combat tracker.
     """
+    if db.get_settings().get("overwolf_enabled", "0") != "1":
+        return {"accepted": False, "disabled": True}
     raw = req.event if isinstance(req.event, dict) else {}
     feature = str(raw.get("featureName") or raw.get("feature") or "")
     key = str(raw.get("key") or "")
@@ -3522,8 +3243,8 @@ async def overlay_switch_account(account_id: int, req: OverlaySwitchRequest, bac
 
 async def _launch_game_for_current_session() -> None:
     """
-    Starts VALORANT for whoever just signed in, applying the launch
-    preferences (forced borderless, settings profile) first.
+    Starts VALORANT for whoever just signed in, applying the optional
+    forced-borderless preference first.
 
     Used by "start the game after a plain Login". Never raises - it runs
     detached from any request, so a failure here must not take down the
