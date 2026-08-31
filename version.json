@@ -1,5 +1,5 @@
 {
-  "version": "5.5.27",
+  "version": "5.5.28",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.27: the Live Aim HUD no longer flickers between its stats and WAITING during a match. The Valorant Tracker log goes quiet for 30-60s between rounds; once a match has genuinely gone live the HUD now holds its last-known numbers through those gaps instead of fading out and back in."
+  "changelog": "Vortex v5.5.28: live match rosters stop showing every player as \"Hidden\" - Riot flags almost everyone Incognito during agent select and the loading screen, so Vortex now trusts the name service and only marks a player hidden once it has genuinely given up resolving them (\"Resolving...\" until then). Hidden players are still clickable for their session rank and combat. Also: automatic local database backups with portable export/import, live telemetry (Overwolf and the Valorant Tracker fallback) is now a pair of default-off switches in Settings, and the settings-preset/copy-config feature has been removed."
 }
