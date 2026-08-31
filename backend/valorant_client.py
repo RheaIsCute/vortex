@@ -55,7 +55,6 @@ GAME_MODES = [
     {"id": "deathmatch", "name": "Deathmatch", "icon": "fa-solid fa-skull", "ranked": False},
     {"id": "hurm", "name": "Team Deathmatch", "icon": "fa-solid fa-users-rectangle", "ranked": False},
     {"id": "ggteam", "name": "Escalation", "icon": "fa-solid fa-arrow-trend-up", "ranked": False},
-    {"id": "onefa", "name": "Replication", "icon": "fa-solid fa-clone", "ranked": False},
 ]
 
 MODE_LABELS = {
@@ -230,6 +229,32 @@ def agent_by_id(agent_id: str) -> Dict[str, str]:
         if a["id"].lower() == target:
             return a
     return {"id": agent_id or "", "name": "", "icon": "", "portrait": "", "role": ""}
+
+
+# Agents every account can play without unlocking them.  The store entitlements
+# endpoint only lists agents unlocked through a contract or bought outright, so
+# these have to be folded in by hand.
+DEFAULT_AGENT_IDS = {
+    "9f0d8ba9-4140-b941-57d3-a7ad57c6b417",  # Brimstone
+    "add6443a-41bd-e414-f6ad-e58d267f4e95",  # Jett
+    "eb93336a-449b-9c1b-0a54-a891f7921d69",  # Phoenix
+    "569fdd95-4d10-43ab-ca70-79becc718b46",  # Sage
+    "320b2a48-4d9b-a075-30f1-1f93a9b638fa",  # Sova
+}
+
+
+def owned_agent_ids() -> Optional[set]:
+    """Lowercased ids of agents the signed-in account can play, or None when the
+    Riot Client can't be reached to ask (so callers should assume all)."""
+    client = ValorantLiveClient()
+    if not client.connect():
+        return None
+    raw = client.entitlements(ITEM_AGENT)
+    if not raw:
+        # Either the request failed or the account has unlocked nothing yet -
+        # don't gray out the whole roster on a guess.
+        return None
+    return {a.lower() for a in raw if a} | DEFAULT_AGENT_IDS
 
 
 def get_maps() -> Dict[str, Dict[str, str]]:

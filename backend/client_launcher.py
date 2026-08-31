@@ -27,6 +27,8 @@ import win32process
 import win32api
 from typing import Optional, Dict, Any, Tuple
 
+from backend import elevation
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pyautogui.PAUSE = 0.04
 
@@ -174,6 +176,10 @@ LOGIN_PROGRESS: Dict[str, Any] = {
     "stage_at": 0.0,   # when the current stage was entered - drives the watchdog
     "attempt": 0,
     "can_retry": False,
+    # Set when a login failed specifically because the Riot Client is running
+    # elevated and Vortex is not. The UI turns this into a "Restart as
+    # administrator" action instead of a plain retry.
+    "needs_elevation": False,
 }
 
 # A login that hangs - a wedged UI Automation call, a Riot Client that never
@@ -200,12 +206,38 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
     if stage in ("done", "error", "idle"):
         LOGIN_PROGRESS["active"] = False
     LOGIN_PROGRESS["can_retry"] = (stage == "error")
+    if stage != "error":
+        # Only an elevation-block error keeps this set; anything else clears it.
+        LOGIN_PROGRESS["needs_elevation"] = False
 
     # Every stage transition is logged so a failure can be diagnosed after
     # the fact - the UI only ever shows the last message, this keeps the
     # full sequence that led up to it.
     level = logging.ERROR if stage == "error" else logging.INFO
     login_logger.log(level, "[%s] stage=%s msg=%s", LOGIN_PROGRESS.get("username", ""), stage, message)
+
+
+def _elevation_blocked_login(username: Optional[str] = None) -> bool:
+    """
+    Call this when a login has failed to see or focus the Riot Client window.
+    If the reason is that the Riot Client is elevated and Vortex is not, set a
+    dedicated error + the needs_elevation flag and return True. Otherwise
+    return False and let the caller report its own error.
+    """
+    try:
+        if not elevation.riot_client_is_elevated():
+            return False
+    except Exception:
+        return False
+    _set_login_stage(
+        "error",
+        "The Riot Client is running as administrator, so Windows won't let "
+        "Vortex fill its login window. Restart Vortex as administrator to continue.",
+        username,
+    )
+    LOGIN_PROGRESS["needs_elevation"] = True
+    login_logger.warning("[%s] login blocked - Riot Client is elevated, Vortex is not", username or "")
+    return True
 
 # Riot writes the persisted-login blob here when "Stay signed in" was ticked.
 # `riot-login.persist` stays null when it wasn't - which is the only way to
@@ -1258,9 +1290,15 @@ class ClientLauncher:
             return
 
         if result is None:
-            # No readable form at all. Either UI Automation isn't usable in
-            # this build, or the client never reached a sign-in screen. The
-            # timing-based path can still handle the first of those.
+            # No readable form at all. Most often this is Riot running elevated
+            # while Vortex is not - UI Automation then can't see into its window
+            # at all. Say so plainly instead of falling through to a blind path
+            # that will only fail to focus the window a few seconds later.
+            if _elevation_blocked_login(username):
+                return
+            # Otherwise: UI Automation isn't usable in this build, or the
+            # client never reached a sign-in screen. The timing-based path can
+            # still handle the first of those.
             login_logger.info(
                 "[%s] no readable login form - falling back to the timing-based entry path", username
             )
@@ -1352,6 +1390,8 @@ class ClientLauncher:
                 except Exception:
                     pass
             if not focused_ok:
+                if _elevation_blocked_login(username):
+                    return
                 _set_login_stage("error", "Could not focus the Riot Client window.", username)
                 return
         else:
@@ -1457,6 +1497,7 @@ class ClientLauncher:
             LOGIN_PROGRESS["started_at"] = time.time()
             LOGIN_PROGRESS["attempt"] = LOGIN_PROGRESS.get("attempt", 0) + 1
             LOGIN_PROGRESS["stay_signed_in"] = None
+            LOGIN_PROGRESS["needs_elevation"] = False
             LOGIN_PROGRESS["active"] = True
         _set_login_stage("opening", "Preparing to sign in...", username)
 

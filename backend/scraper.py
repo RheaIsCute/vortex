@@ -243,8 +243,6 @@ class StatScraper:
                 mode = metadata.get("mode", "Competitive")
                 game_start = metadata.get("game_start_patched", "") or metadata.get("game_start", "")
 
-                # Keep a compact roster with the saved history. It makes each
-                # match expandable without persisting the entire raw response.
                 roster = []
                 for participant in players:
                     participant_stats = participant.get("stats", {}) or {}
@@ -258,11 +256,13 @@ class StatScraper:
                     participant_leg = int(participant_stats.get("legshots", 0) or 0)
                     participant_shots = participant_head + participant_body + participant_leg
                     participant_damage = int(participant_stats.get("damage_made", 0) or 0)
+                    raw_team = participant.get("team", "") or ""
+                    team_clean = raw_team.title() if raw_team else ("Blue" if player_team == "blue" else "Red")
                     roster.append({
                         "puuid": participant.get("puuid", "") or "",
                         "riot_id": f"{participant_name}#{participant_tag}" if participant_tag else participant_name,
                         "name": f"{participant_name}#{participant_tag}" if participant_tag else participant_name,
-                        "team": participant.get("team", ""),
+                        "team": team_clean,
                         "is_self": (
                             participant_name.lower().strip() == target_name_lower
                             and (not target_tag_lower or participant_tag.lower().strip() == target_tag_lower)
@@ -284,7 +284,7 @@ class StatScraper:
                 for team_name, summary in teams.items():
                     summary = summary or {}
                     team_summaries.append({
-                        "team": team_name,
+                        "team": str(team_name).title(),
                         "rounds_won": int(summary.get("rounds_won", 0) or 0),
                         "won": bool(summary.get("has_won", False)),
                     })

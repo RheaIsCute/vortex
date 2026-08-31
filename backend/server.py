@@ -39,6 +39,7 @@ from backend.database import Database
 from backend.scraper import StatScraper
 from backend.client_launcher import ClientLauncher
 from backend import client_launcher
+from backend import elevation
 from backend import valorant_client
 from backend import game_config
 from backend import overwolf
@@ -63,7 +64,9 @@ CHECK_PROGRESS = {
     "current": 0,
     "total": 0,
     "account": "",
-    "message": ""
+    "message": "",
+    "verified": 0,
+    "failed": 0,
 }
 
 
@@ -301,6 +304,76 @@ async def background_auto_detect_and_link(account_id: int):
 
 
 
+async def _wait_for_checked_account(username: str, timeout: float = 120.0) -> Dict[str, Any]:
+    """Wait for the asynchronous Riot login worker to actually finish.
+
+    ``login_account`` returns as soon as its UI-automation thread starts.  The
+    old batch checker treated seven seconds without an active session as dead
+    credentials, even when that worker had not reached the username field yet.
+    This waiter follows the worker's stages and distinguishes a confirmed Riot
+    credential rejection from a retryable window/automation failure.
+    """
+    wanted = (username or "").strip().lower()
+    deadline = time.monotonic() + timeout
+    saw_credentials = False
+
+    while time.monotonic() < deadline:
+        if not CHECK_PROGRESS.get("running"):
+            return {"info": None, "cancelled": True, "invalid_credentials": False,
+                    "message": "Verification cancelled."}
+
+        progress = dict(client_launcher.LOGIN_PROGRESS)
+        progress_user = (progress.get("username") or "").strip().lower()
+        stage = progress.get("stage") if progress_user == wanted else ""
+        message = progress.get("message") if progress_user == wanted else ""
+        if stage in ("typing", "submitted", "done"):
+            saw_credentials = True
+
+        if message:
+            CHECK_PROGRESS["message"] = f"{username}: {message}"
+
+        info = await asyncio.to_thread(launcher.get_active_riot_account, username)
+        if (info and info.get("found") and
+                (info.get("username") or "").strip().lower() == wanted):
+            client_launcher._set_login_stage(
+                "done", f"Verified {info.get('display_name') or username}.", username
+            )
+            return {"info": info, "cancelled": False, "invalid_credentials": False,
+                    "message": ""}
+
+        # Only ask Riot's local auth endpoint after credentials were submitted;
+        # before that, its generic login state is not evidence about this row.
+        if stage == "submitted":
+            auth_error = await asyncio.to_thread(launcher.check_login_error)
+            if auth_error in ("auth_failure", "invalid_credentials"):
+                message = "Riot rejected the username or password."
+                client_launcher._set_login_stage("error", message, username)
+                return {"info": None, "cancelled": False, "invalid_credentials": True,
+                        "message": message}
+            if auth_error in ("rate_limited", "login_error"):
+                message = "Riot returned a temporary login error; try this account again later."
+                client_launcher._set_login_stage("error", message, username)
+                return {"info": None, "cancelled": False, "invalid_credentials": False,
+                        "message": message}
+
+        if stage == "error":
+            lower_message = (message or "").lower()
+            invalid = saw_credentials and (
+                "invalid username" in lower_message or
+                "invalid password" in lower_message or
+                "rejected the username" in lower_message
+            )
+            return {"info": None, "cancelled": False, "invalid_credentials": invalid,
+                    "message": message or "The Riot login could not be completed."}
+
+        await asyncio.sleep(0.75)
+
+    message = "Timed out waiting for Riot Client; the account was kept for retry."
+    client_launcher._set_login_stage("error", message, username)
+    return {"info": None, "cancelled": False, "invalid_credentials": False,
+            "message": message}
+
+
 async def run_batch_account_check():
     """
     Sequentially logs into accounts with rate-limit pacing,
@@ -320,6 +393,8 @@ async def run_batch_account_check():
     CHECK_PROGRESS["running"] = True
     CHECK_PROGRESS["total"] = len(to_check)
     CHECK_PROGRESS["current"] = 0
+    CHECK_PROGRESS["verified"] = 0
+    CHECK_PROGRESS["failed"] = 0
 
     settings = db.get_settings()
     custom_path = settings.get("riot_client_path", "")
@@ -338,7 +413,7 @@ async def run_batch_account_check():
         CHECK_PROGRESS["message"] = f"Checking {acc['username']} ({idx}/{len(to_check)})..."
 
         # 1. Login via pure keyboard
-        await asyncio.to_thread(
+        login_result = await asyncio.to_thread(
             launcher.login_account,
             acc["username"],
             acc["password"],
@@ -346,26 +421,31 @@ async def run_batch_account_check():
             _stay_signed_in_pref()
         )
 
-        # 2. Rate-limit aware wait & poll loop (up to 7.0s) strictly for this account's username
-        detected_info = None
-        for _ in range(14):
-            if not CHECK_PROGRESS["running"]:
-                break
-            await asyncio.sleep(0.5)
-            info = await asyncio.to_thread(launcher.get_active_riot_account, acc["username"])
-            if info and info.get("found") and info.get("username", "").strip().lower() == acc["username"].strip().lower():
-                detected_info = info
-                break
+        # 2. Wait for the asynchronous UI worker and Riot's response. A fixed
+        # seven-second sleep used to expire before credential entry even began.
+        if login_result.get("success"):
+            check_result = await _wait_for_checked_account(acc["username"])
+        else:
+            check_result = {
+                "info": None,
+                "cancelled": False,
+                "invalid_credentials": False,
+                "message": login_result.get("message") or "The login could not be started.",
+            }
+        detected_info = check_result.get("info")
 
-        # 3. Save captured metadata, or move banned/suspended accounts into
-        # the separate banned-accounts store (data kept, not deleted), or
-        # remove genuinely dead/invalid credentials.
+        if check_result.get("cancelled"):
+            break
+
+        # 3. Save captured metadata, move banned/suspended accounts into the
+        # separate retained store, or leave inconclusive rows untouched.
         if detected_info and detected_info.get("found"):
             status = (detected_info.get("status") or "").upper()
             if status in ("BANNED", "SUSPENDED"):
                 update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
                 update_payload["last_updated"] = datetime.now().isoformat()
                 db.update_account(acc["id"], update_payload)
+                CHECK_PROGRESS["verified"] += 1
                 db.move_to_banned(acc["id"])
                 CHECK_PROGRESS["message"] = f"Moved banned account to Banned Accounts: {acc['username']}"
             else:
@@ -378,6 +458,7 @@ async def run_batch_account_check():
                     update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
 
                 db.update_account(acc["id"], update_payload)
+                CHECK_PROGRESS["verified"] += 1
 
                 # Scrape match history if display_name found
                 if detected_info.get("display_name"):
@@ -386,9 +467,23 @@ async def run_batch_account_check():
                     if stats.get("match_history"):
                         db.update_account(acc["id"], {"match_history": stats["match_history"]})
         else:
-            # Login failed / dead credentials -> auto remove account from database
-            db.delete_account(acc["id"])
-            CHECK_PROGRESS["message"] = f"Removed dead/invalid account: {acc['username']}"
+            # A failed check is never permission to destroy saved credentials.
+            # Even Riot-confirmed invalid credentials may simply be a typo that
+            # the user wants to correct in Edit Account.
+            CHECK_PROGRESS["failed"] += 1
+            reason = check_result.get("message") or "The login could not be verified."
+            if check_result.get("invalid_credentials"):
+                CHECK_PROGRESS["message"] = (
+                    f"Credentials rejected for {acc['username']}; account kept for editing."
+                )
+            else:
+                CHECK_PROGRESS["message"] = (
+                    f"Couldn't check {acc['username']}; account kept for retry. {reason}"
+                )
+            client_launcher.login_logger.warning(
+                "[%s] batch check inconclusive; account retained: %s",
+                acc["username"], reason,
+            )
 
         # 4. Clean sign out & cooling delay to avoid Riot rate-limits
         await asyncio.to_thread(launcher.api_sign_out)
@@ -401,8 +496,13 @@ async def run_batch_account_check():
 
     # 5. Clean finish: force close Riot Client
     await asyncio.to_thread(launcher.force_kill_riot_client)
+    was_cancelled = not CHECK_PROGRESS["running"]
     CHECK_PROGRESS["running"] = False
-    CHECK_PROGRESS["message"] = "Verification complete! Riot Client closed."
+    if not was_cancelled:
+        CHECK_PROGRESS["message"] = (
+            f"Verification complete: {CHECK_PROGRESS['verified']} verified, "
+            f"{CHECK_PROGRESS['failed']} kept for retry. Riot Client closed."
+        )
 
 
 @app.get("/api/accounts")
@@ -1146,6 +1246,45 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks,
 async def login_progress():
     """Live progress of the in-flight Riot Client login, for the UI animation."""
     return client_launcher.LOGIN_PROGRESS
+
+
+@app.get("/api/elevation-status")
+async def elevation_status():
+    """
+    Whether Vortex is elevated, and whether the Riot Client is running above
+    it - the combination that stops the login automation from working.
+    """
+    return {
+        "self_elevated": elevation.is_self_elevated(),
+        "riot_elevated": await asyncio.to_thread(elevation.riot_client_is_elevated),
+    }
+
+
+@app.post("/api/relaunch-elevated")
+async def relaunch_elevated():
+    """
+    Start a fresh, elevated copy of Vortex (one UAC prompt) and shut this one
+    down. Used when a login failed because the Riot Client is elevated.
+    """
+    if elevation.is_self_elevated():
+        return {"success": False, "message": "Vortex is already running as administrator."}
+
+    started = await asyncio.to_thread(elevation.relaunch_elevated)
+    if not started:
+        return {
+            "success": False,
+            "message": "Couldn't start an elevated Vortex - the UAC prompt was dismissed, "
+                       "or Windows blocked it. Close Vortex and reopen it with "
+                       "\"Run as administrator\".",
+        }
+
+    def _exit_app():
+        time.sleep(1.2)
+        os._exit(0)
+
+    threading.Thread(target=_exit_app, daemon=True).start()
+    return {"success": True, "relaunching": True,
+            "message": "Restarting Vortex as administrator..."}
 
 
 @app.get("/api/detect-active-account")
@@ -3004,8 +3143,14 @@ async def live_session(force: bool = False):
 
 @app.get("/api/live/agents")
 async def live_agents():
-    """Playable agent roster, for the insta-lock picker."""
+    """Playable agent roster, for the insta-lock picker.  Each agent is flagged
+    with whether the signed-in account actually owns it."""
     agents = await asyncio.to_thread(valorant_client.get_agents)
+    owned = await asyncio.to_thread(valorant_client.owned_agent_ids)
+    if owned is None:
+        agents = [{**a, "owned": True} for a in agents]
+    else:
+        agents = [{**a, "owned": a["id"].lower() in owned} for a in agents]
     return {"agents": agents, "modes": valorant_client.GAME_MODES}
 
 

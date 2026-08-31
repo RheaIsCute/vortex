@@ -107,6 +107,7 @@
                 </button>
                 <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status">
                     <i class="fa-solid fa-list-check" id="check-all-icon"></i>
+                    <span class="check-accounts-loader" aria-hidden="true"></span>
                     <span>Check Accounts</span>
                 </button>
                 <button class="btn btn-secondary" id="btn-add-account" title="Add a single account">
@@ -147,6 +148,10 @@
         </div>
 
 
+
+        <!-- VIEW SLOT — the roster and the live dashboard slide in and out of
+             this slot; only one is mounted in the layout at a time. -->
+        <div class="view-swap" id="view-swap">
 
         <!-- LIVE DASHBOARD — takes over the page while it's open, and the
              account tools collapse into the icon rail on the right. -->
@@ -467,6 +472,7 @@
             </div>
         </main>
         </div><!-- /.accounts-view -->
+        </div><!-- /.view-swap -->
     </div>
 
     <!-- ================= MODALS ================= -->
@@ -969,6 +975,9 @@
             </div>
             <p class="launch-bg-hint" id="launch-bg-hint">Runs in the background — you can close this and keep working.</p>
             <div class="modal-footer justify-center">
+                <button class="btn btn-primary" id="btn-elevate-launch" style="display:none;">
+                    <i class="fa-solid fa-shield-halved"></i> Restart as administrator
+                </button>
                 <button class="btn btn-secondary" id="btn-retry-launch" style="display:none;">
                     <i class="fa-solid fa-rotate-right"></i> Retry
                 </button>

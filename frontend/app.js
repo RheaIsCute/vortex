@@ -87,7 +87,7 @@ const DEFAULT_TIER_ICON = `${TIER_BASE_URL}/0/largeicon.png`;
 // still show its official emblem when peak_rank_icon_url is blank (older
 // accounts synced before the icon URL was saved).
 const TIER_INDEX_MAP = {
-    "UNRANKED": 0,
+    "UNRANKED": 0, "UNRATED": 0,
     "IRON 1": 3, "IRON 2": 4, "IRON 3": 5,
     "BRONZE 1": 6, "BRONZE 2": 7, "BRONZE 3": 8,
     "SILVER 1": 9, "SILVER 2": 10, "SILVER 3": 11,
@@ -99,17 +99,186 @@ const TIER_INDEX_MAP = {
     "RADIANT": 27
 };
 
+/**
+ * Built-in Valorant Asset Registry & Resolvers
+ * Maps names, UUIDs, roles, map splashes, and high-res competitive tier icons directly to local assets.
+ */
+const ValorantAssets = {
+    agents: {
+        "jett": { id: "add6443a-41bd-e414-f6ad-e58d267f4e95", name: "Jett", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "reyna": { id: "a3bfb853-43b2-7238-a4f1-ad90e9e46bcc", name: "Reyna", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "raze": { id: "f94c3b30-42be-e959-889c-5aa313dba261", name: "Raze", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "phoenix": { id: "eb93336a-449b-9c1b-0a54-a891f7921d69", name: "Phoenix", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "yoru": { id: "7f94d92c-4234-0a36-9646-3a87eb8b5c89", name: "Yoru", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "neon": { id: "bb2a4828-46eb-8cd1-e765-15848195d751", name: "Neon", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "iso": { id: "0e38b510-41a8-5780-5e8f-568b2a4f2d6c", name: "Iso", role: "Duelist", roleId: "dbe8757e-9e92-4ed4-b39f-9dfc589691d4" },
+        "sova": { id: "320b2a48-4d9b-a075-30f1-1f93a9b638fa", name: "Sova", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "breach": { id: "5f8d3a7f-467b-97f3-062c-13acf203c006", name: "Breach", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "skye": { id: "6f2a04ca-43e0-be17-7f36-b3908627744d", name: "Skye", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "kay/o": { id: "601dbbe7-43ce-be57-2a40-4abd24953621", name: "KAY/O", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "kayo": { id: "601dbbe7-43ce-be57-2a40-4abd24953621", name: "KAY/O", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "fade": { id: "dade69b4-4f5a-8528-247b-219e5a1facd6", name: "Fade", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "gekko": { id: "e370fa57-4757-3604-3648-499e1f642d3f", name: "Gekko", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "tejo": { id: "df1cb487-4902-002e-5c17-d28e83e78588", name: "Tejo", role: "Initiator", roleId: "1b47567f-8f7b-444b-aae3-b0c634622d10" },
+        "brimstone": { id: "9f0d8ba9-4140-b941-57d3-a7ad57c6b417", name: "Brimstone", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "omen": { id: "8e253930-4c05-31dd-1b6c-968525494517", name: "Omen", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "viper": { id: "707eab51-4836-f488-046a-cda6bf494859", name: "Viper", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "astra": { id: "41fb69c1-4189-7b37-f117-bcaf1e96f1bf", name: "Astra", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "harbor": { id: "95b78ed7-4637-86d9-7e41-71ba8c293152", name: "Harbor", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "clove": { id: "1dbf2edd-4729-0984-3115-daa5eed44993", name: "Clove", role: "Controller", roleId: "4ee40330-ecdd-4f2f-98a8-eb1243428373" },
+        "killjoy": { id: "1e58de9c-4950-5125-93e9-a0aee9f98746", name: "Killjoy", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" },
+        "cypher": { id: "117ed9e3-49f3-6512-3ccf-0cada7e3823b", name: "Cypher", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" },
+        "sage": { id: "569fdd95-4d10-43ab-ca70-79becc718b46", name: "Sage", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" },
+        "chamber": { id: "22697a3d-45bf-8dd7-4fec-84a9e28c69d7", name: "Chamber", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" },
+        "deadlock": { id: "cc8b64c8-4b25-4ff9-6e7f-37b4da43d235", name: "Deadlock", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" },
+        "vyse": { id: "b444168c-4e35-8076-db47-ef9bf368f384", name: "Vyse", role: "Sentinel", roleId: "5fc02f99-4091-4486-a531-98459a3e95e9" }
+    },
+    maps: {
+        "ascent": { id: "7eaecc1b-4337-bbf6-6ab9-04b8f06b3319", name: "Ascent" },
+        "split": { id: "d960549e-485c-e861-8d71-aa9d1aed12a2", name: "Split" },
+        "bind": { id: "2c9d57ec-4431-9c5e-2939-8f9ef6dd5cba", name: "Bind" },
+        "haven": { id: "2bee0dc9-4ffe-519b-1cbd-7fbe763a6047", name: "Haven" },
+        "icebox": { id: "e2ad5c54-4114-a870-9641-8ea21279579a", name: "Icebox" },
+        "breeze": { id: "2fb9a4fd-47b8-4e7d-a969-74b4046ebd53", name: "Breeze" },
+        "fracture": { id: "b529448b-4d60-346e-e89e-00a4c527a405", name: "Fracture" },
+        "pearl": { id: "fd267378-4d1d-484f-ff52-77821ed10dc2", name: "Pearl" },
+        "lotus": { id: "2fe4ed3a-450a-948b-6d6b-e89a78e680a9", name: "Lotus" },
+        "sunset": { id: "92584fbe-486a-b1b2-9faa-39b0f486b498", name: "Sunset" },
+        "abyss": { id: "224b0a95-48b9-f703-1bd8-67aca101a61f", name: "Abyss" },
+        "district": { id: "690b3ed2-4dff-945b-8223-6da834e30d24", name: "District", isTdm: true },
+        "kasbah": { id: "12452a9d-48c3-0b02-e7eb-0381c3520404", name: "Kasbah", isTdm: true },
+        "piazza": { id: "de28aa9b-4cbe-1003-320e-6cb3ec309557", name: "Piazza", isTdm: true },
+        "drift": { id: "1c7555fc-4bc6-3b98-9674-789d47ef6c50", name: "Drift", isTdm: true },
+        "glitch": { id: "1c18ab1f-420d-0d8b-71d0-77ad3c439115", name: "Glitch", isTdm: true },
+        "skirmish a": { id: "12452a9d-48c3-0b02-e7eb-0381c3520404", name: "Kasbah", isTdm: true },
+        "skirmish b": { id: "690b3ed2-4dff-945b-8223-6da834e30d24", name: "District", isTdm: true },
+        "skirmish d": { id: "de28aa9b-4cbe-1003-320e-6cb3ec309557", name: "Piazza", isTdm: true },
+        "skirmish e": { id: "1c7555fc-4bc6-3b98-9674-789d47ef6c50", name: "Drift", isTdm: true },
+        "the range": { id: "ee613ee9-28b7-4beb-9666-08db13bb2244", name: "The Range" },
+        "range": { id: "ee613ee9-28b7-4beb-9666-08db13bb2244", name: "The Range" }
+    },
+    getAgent(nameOrId) {
+        if (!nameOrId) {
+            return {
+                name: "Agent",
+                role: "Agent",
+                icon: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/displayicon.png`,
+                portrait: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/fullportrait.png`,
+                roleIcon: ""
+            };
+        }
+        const key = String(nameOrId).toLowerCase().trim();
+        let entry = this.agents[key];
+        if (!entry) {
+            entry = Object.values(this.agents).find(a => a.id.toLowerCase() === key || a.name.toLowerCase() === key);
+        }
+        if (entry) {
+            return {
+                name: entry.name,
+                role: entry.role,
+                icon: `${LOCAL_GAME_ASSET_ROOT}agents/${entry.id}/displayicon.png`,
+                portrait: `${LOCAL_GAME_ASSET_ROOT}agents/${entry.id}/fullportrait.png`,
+                roleIcon: entry.roleId ? `${LOCAL_GAME_ASSET_ROOT}agents/roles/${entry.roleId}/displayicon.png` : ""
+            };
+        }
+        if (typeof nameOrId === "string" && (nameOrId.startsWith("http") || nameOrId.startsWith("/"))) {
+            return { name: "Agent", icon: localGameAssetUrl(nameOrId), portrait: "", role: "Agent", roleIcon: "" };
+        }
+        return {
+            name: nameOrId,
+            role: "Agent",
+            icon: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/displayicon.png`,
+            portrait: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/fullportrait.png`,
+            roleIcon: ""
+        };
+    },
+    getMap(nameOrId) {
+        if (!nameOrId) {
+            return {
+                name: "Ascent",
+                displayName: "Ascent",
+                splash: `${LOCAL_GAME_ASSET_ROOT}maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/splash.png`,
+                icon: `${LOCAL_GAME_ASSET_ROOT}maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/listviewicon.png`,
+                miniIcon: `${LOCAL_GAME_ASSET_ROOT}maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/displayicon.png`,
+                isTdm: false
+            };
+        }
+        const key = String(nameOrId).toLowerCase().trim();
+        let entry = this.maps[key];
+        if (!entry) {
+            entry = Object.values(this.maps).find(m => m.id.toLowerCase() === key || m.name.toLowerCase() === key);
+        }
+        if (!entry) {
+            for (const [k, val] of Object.entries(this.maps)) {
+                if (key.includes(k) || k.includes(key)) {
+                    entry = val;
+                    break;
+                }
+            }
+        }
+        if (entry) {
+            return {
+                name: entry.name,
+                displayName: entry.isTdm ? `${entry.name} (TDM)` : entry.name,
+                splash: `${LOCAL_GAME_ASSET_ROOT}maps/${entry.id}/splash.png`,
+                icon: `${LOCAL_GAME_ASSET_ROOT}maps/${entry.id}/listviewicon.png`,
+                miniIcon: `${LOCAL_GAME_ASSET_ROOT}maps/${entry.id}/displayicon.png`,
+                isTdm: !!entry.isTdm
+            };
+        }
+        return {
+            name: nameOrId,
+            displayName: nameOrId,
+            splash: `${LOCAL_GAME_ASSET_ROOT}maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/splash.png`,
+            icon: `${LOCAL_GAME_ASSET_ROOT}maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/listviewicon.png`,
+            miniIcon: "",
+            isTdm: false
+        };
+    },
+    getRank(tier, division) {
+        const tierUpper = (tier || "UNRANKED").toUpperCase().trim();
+        const div = (division || "").toString().trim();
+        let key = (tierUpper === "UNRANKED" || tierUpper === "UNRATED" || tierUpper === "RADIANT" || !div)
+            ? (tierUpper === "UNRATED" ? "UNRANKED" : tierUpper)
+            : `${tierUpper} ${div}`;
+        let idx = TIER_INDEX_MAP[key];
+        if (idx === undefined) idx = TIER_INDEX_MAP[`${tierUpper} 1`];
+        if (idx === undefined) idx = 0;
+
+        let label = tierUpper.charAt(0) + tierUpper.slice(1).toLowerCase();
+        if (tierUpper === "UNRANKED" || tierUpper === "UNRATED") label = "Unrated";
+        else if (tierUpper === "RADIANT") label = "Radiant";
+        else if (div) label += ` ${div}`;
+
+        const rankStyles = {
+            "IRON": { color: "#94a3b8", glow: "rgba(148,163,184,0.4)", gradient: "linear-gradient(135deg, #475569, #94a3b8)" },
+            "BRONZE": { color: "#b45309", glow: "rgba(180,83,9,0.45)", gradient: "linear-gradient(135deg, #78350f, #d97706)" },
+            "SILVER": { color: "#cbd5e1", glow: "rgba(203,213,225,0.45)", gradient: "linear-gradient(135deg, #64748b, #cbd5e1)" },
+            "GOLD": { color: "#eab308", glow: "rgba(234,179,8,0.5)", gradient: "linear-gradient(135deg, #ca8a04, #fde047)" },
+            "PLATINUM": { color: "#06b6d4", glow: "rgba(6,182,212,0.5)", gradient: "linear-gradient(135deg, #0891b2, #67e8f9)" },
+            "DIAMOND": { color: "#c084fc", glow: "rgba(192,132,252,0.5)", gradient: "linear-gradient(135deg, #9333ea, #e879f9)" },
+            "ASCENDANT": { color: "#10b981", glow: "rgba(16,185,129,0.5)", gradient: "linear-gradient(135deg, #059669, #34d399)" },
+            "IMMORTAL": { color: "#f43f5e", glow: "rgba(244,63,94,0.55)", gradient: "linear-gradient(135deg, #e11d48, #fb7185)" },
+            "RADIANT": { color: "#fde047", glow: "rgba(253,224,71,0.65)", gradient: "linear-gradient(135deg, #eab308, #fffbeb)" },
+            "UNRANKED": { color: "#64748b", glow: "rgba(100,116,139,0.3)", gradient: "linear-gradient(135deg, #334155, #64748b)" },
+            "UNRATED": { color: "#64748b", glow: "rgba(100,116,139,0.3)", gradient: "linear-gradient(135deg, #334155, #64748b)" }
+        };
+        const style = rankStyles[tierUpper] || rankStyles["UNRANKED"];
+
+        return {
+            tierIndex: idx,
+            tierName: label,
+            tierKey: tierUpper,
+            icon: `${TIER_BASE_URL}/${idx}/largeicon.png`,
+            color: style.color,
+            glow: style.glow,
+            gradient: style.gradient
+        };
+    }
+};
+
 function getRankIconUrl(tier, division) {
-    const tierUpper = (tier || "").toUpperCase().trim();
-    if (!tierUpper) return "";
-    const div = (division || "").toString().trim();
-    const key = (tierUpper === "UNRANKED" || tierUpper === "RADIANT" || !div)
-        ? tierUpper
-        : `${tierUpper} ${div}`;
-    let idx = TIER_INDEX_MAP[key];
-    if (idx === undefined) idx = TIER_INDEX_MAP[`${tierUpper} 1`];
-    if (idx === undefined) return "";
-    return `${TIER_BASE_URL}/${idx}/largeicon.png`;
+    return ValorantAssets.getRank(tier, division).icon;
 }
 
 // DOM Elements
@@ -246,6 +415,7 @@ const DOM = {
     modalLaunch: document.getElementById("modal-launch"),
     btnCloseLaunch: document.getElementById("btn-close-launch"),
     btnRetryLaunch: document.getElementById("btn-retry-launch"),
+    btnElevateLaunch: document.getElementById("btn-elevate-launch"),
     launchStatusPill: document.getElementById("launch-status-pill"),
     launchBgHint: document.getElementById("launch-bg-hint"),
     launchUserVal: document.getElementById("launch-user-val"),
@@ -266,6 +436,7 @@ const DOM = {
     // Live Dashboard view
     headerActions: document.getElementById("header-actions"),
     accountsView: document.getElementById("accounts-view"),
+    viewSwap: document.getElementById("view-swap"),
     btnToggleDashboard: document.getElementById("btn-toggle-dashboard"),
     dashView: document.getElementById("dash-view"),
     dashClose: document.getElementById("dash-close"),
@@ -782,6 +953,10 @@ function initEventListeners() {
         });
     }
 
+    if (DOM.btnElevateLaunch) {
+        DOM.btnElevateLaunch.addEventListener("click", relaunchVortexElevated);
+    }
+
     if (DOM.btnCopyLaunchUser) {
         DOM.btnCopyLaunchUser.addEventListener("click", () => {
             if (state.activeLaunchAcc) {
@@ -888,7 +1063,8 @@ async function handleCheckAllAccounts() {
     }
 
     state.isCheckingAccounts = true;
-    DOM.checkAllIcon.classList.add("rotating");
+    DOM.btnCheckAllAccounts.classList.add("is-checking");
+    DOM.btnCheckAllAccounts.setAttribute("aria-busy", "true");
     DOM.syncProgressBar.style.display = "block";
     DOM.syncProgressFill.style.width = "10%";
     DOM.syncProgressText.textContent = "Starting account verification...";
@@ -917,7 +1093,8 @@ async function handleCheckAllAccounts() {
                     clearInterval(pollInterval);
                     DOM.syncProgressFill.style.width = "100%";
                     DOM.syncProgressText.textContent = progress.message || "All accounts verified!";
-                    DOM.checkAllIcon.classList.remove("rotating");
+                    DOM.btnCheckAllAccounts.classList.remove("is-checking");
+                    DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
                     state.isCheckingAccounts = false;
                     showToast(progress.message || "Account check completed!", "success");
 
@@ -937,7 +1114,8 @@ async function handleCheckAllAccounts() {
 
     } catch (err) {
         showToast("Failed to start account verification", "error");
-        DOM.checkAllIcon.classList.remove("rotating");
+        DOM.btnCheckAllAccounts.classList.remove("is-checking");
+        DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
         DOM.syncProgressBar.style.display = "none";
         state.isCheckingAccounts = false;
     }
@@ -1679,7 +1857,7 @@ function renderGridView() {
         const animIndex = (activeAcc ? 1 : 0) + i;
 
         return `
-            <div class="account-card ${acc.favorite ? 'is-favorite' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:${Math.min(animIndex, 24)}">
+            <div class="account-card ${acc.favorite ? 'is-favorite' : ''} ${v.needsCheck ? 'needs-check' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:${Math.min(animIndex, 24)}">
                 <!-- Header -->
                 <div class="card-header">
                     <div class="card-badges">
@@ -1687,7 +1865,7 @@ function renderGridView() {
                             <span class="badge-unset" title="Log in once to verify these credentials and pull live account data">
                                 <span class="mini-spinner"></span> Unverified
                             </span>
-                            <span class="badge-region is-muted" title="Region not confirmed yet">${escapeHtml(acc.region || 'NA')} · not set</span>
+                            <span class="badge-region is-muted" title="Region not confirmed yet">Region: <span class="mini-spinner"></span></span>
                         ` : `
                             <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
                             <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
@@ -1728,7 +1906,7 @@ function renderGridView() {
                     ${v.needsCheck ? `
                         <div class="winrate-meta is-unset">
                             <span><span class="mini-spinner"></span> Winrate no data</span>
-                            <span>Matches <strong>—</strong></span>
+                            <span>Matches <span class="mini-spinner"></span></span>
                         </div>
                         <div class="winrate-bar-track">
                             <div class="winrate-bar-fill is-unset" style="width: 100%;"></div>
@@ -1783,7 +1961,7 @@ function renderGridView() {
                         </button>
                     ` : v.needsCheck ? `
                         <button class="btn-launch-card btn-check-inline" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Log in once to confirm the username and password work, and pull the real Riot ID, level and rank">
-                            <i class="fa-solid fa-shield-halved"></i> CHECK ACCOUNT
+                            <i class="fa-solid fa-shield-halved"></i><span class="account-check-loader" aria-hidden="true"></span> CHECK ACCOUNT
                         </button>
                     ` : `
                         <button class="btn-launch-card" onclick="launchAccount(${acc.id})" title="Auto-fill login into Riot Client">
@@ -1888,7 +2066,7 @@ function renderTableView() {
                             </button>
                         `}
                         ${v.needsCheck ? `
-                            <button class="btn btn-icon btn-sm is-warning" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Check Account - verify the credentials and pull live data"><i class="fa-solid fa-shield-halved"></i></button>
+                            <button class="btn btn-icon btn-sm is-warning" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Check Account - verify the credentials and pull live data"><i class="fa-solid fa-shield-halved"></i><span class="account-check-loader" aria-hidden="true"></span></button>
                         ` : ''}
                         <button class="btn btn-icon btn-sm" onclick="openMatchesModal(${acc.id})" title="Recent Matches"><i class="fa-solid fa-clock-rotate-left"></i></button>
                         <button class="btn btn-icon btn-sm" onclick="openEditModal(${acc.id})" title="Edit Account"><i class="fa-solid fa-pen"></i></button>
@@ -1938,16 +2116,17 @@ async function openMatchesModal(id) {
     const acc = state.accounts.find(a => a.id === id);
     if (!acc) return;
 
+    const rankInfo = ValorantAssets.getRank(acc.rank_tier, acc.rank_division);
+    const peakInfo = ValorantAssets.getRank(acc.peak_rank_tier, acc.peak_rank_division);
+
     DOM.matchModalRiotId.textContent = acc.display_name || acc.username;
-    DOM.matchModalRankImg.src = acc.rank_icon_url || DEFAULT_TIER_ICON;
+    DOM.matchModalRankImg.src = acc.rank_icon_url || rankInfo.icon;
     DOM.matchMetaCurrent.textContent = formatRankTitle(acc);
     DOM.matchMetaPeak.textContent = acc.peak_rank_tier ? `${acc.peak_rank_tier} ${acc.peak_rank_division || ''}` : 'None';
     
-    if (acc.peak_rank_icon_url && DOM.matchMetaPeakImg) {
-        DOM.matchMetaPeakImg.src = acc.peak_rank_icon_url;
+    if (DOM.matchMetaPeakImg) {
+        DOM.matchMetaPeakImg.src = acc.peak_rank_icon_url || peakInfo.icon;
         DOM.matchMetaPeakImg.style.display = "inline-block";
-    } else if (DOM.matchMetaPeakImg) {
-        DOM.matchMetaPeakImg.style.display = "none";
     }
 
     DOM.matchMetaWinrate.textContent = `${acc.winrate || 0}%`;
@@ -1961,6 +2140,7 @@ async function openMatchesModal(id) {
         const matches = data.matches || [];
         state.currentAccountMatches = matches;
         renderMatchHistoryList(matches);
+        DOM.matchMetaWinrate.textContent = recentWinrateLabel(matches, acc.winrate);
     } catch (err) {
         DOM.matchesListContainer.innerHTML = '<div class="no-matches-msg">Failed to load match history.</div>';
     }
@@ -1970,55 +2150,69 @@ function renderMatchHistoryList(matches) {
     if (!matches || matches.length === 0) {
         DOM.matchesListContainer.innerHTML = `
             <div class="no-matches-msg">
-                <i class="fa-solid fa-shield-halved" style="font-size: 28px; margin-bottom: 8px; color: var(--accent-purple);"></i>
+                <i class="fa-solid fa-shield-halved" style="font-size: 32px; margin-bottom: 12px; color: var(--accent-purple);"></i>
                 <p>No recent match data available for this account.</p>
-                <p style="font-size: 12px; color: var(--text-dim);">Play a game or check if your Riot ID is correct.</p>
+                <p style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Play a game or check if your Riot ID is correct.</p>
             </div>
         `;
         return;
     }
 
     DOM.matchesListContainer.innerHTML = matches.map((m, i) => {
-        const outcome = (m.outcome || "VICTORY").toUpperCase();
+        const outcome = (m.outcome || m.result || "VICTORY").toUpperCase();
         const outcomeClass = outcome === "VICTORY" ? "outcome-victory" : (outcome === "DEFEAT" ? "outcome-defeat" : "outcome-draw");
-        const agentIcon = m.agent_icon || "https://media.valorant-api.com/agents";
+        const mapAsset = ValorantAssets.getMap(m.map);
+        const agentAsset = ValorantAssets.getAgent(m.agent || m.character);
+        const agentIcon = m.agent_icon || agentAsset.icon;
+        const kdrVal = Number(m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed(2);
+        const kdrClass = kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative");
 
         return `
-            <button class="match-card ${outcomeClass}" style="--i:${i}" type="button" onclick="openMatchDetail(${i}, 'account')" title="Open full match details">
-                <!-- Agent Section -->
-                <div class="match-agent-section">
-                    <img src="${agentIcon}" alt="${m.agent || 'Agent'}" class="match-agent-avatar" onerror="this.src='https://media.valorant-api.com/agents';">
-                    <div class="match-agent-info">
-                        <h4>${escapeHtml(m.agent || 'Agent')}</h4>
-                        <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}</span>
+            <button class="match-card ${outcomeClass}" style="--i:${i}; --map-splash: url('${mapAsset.splash}');" type="button" onclick="openMatchDetail(${i}, 'account')" title="Open full match details">
+                <div class="match-card-bg-mask"></div>
+                <div class="match-card-inner">
+                    <!-- Agent Section -->
+                    <div class="match-agent-section">
+                        <div class="match-agent-avatar-wrap">
+                            <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.src='${agentAsset.icon}';">
+                            ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="match-role-badge" title="${agentAsset.role}">` : ''}
+                        </div>
+                        <div class="match-agent-info">
+                            <h4>${escapeHtml(agentAsset.name)}</h4>
+                            <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}</span>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Map Section -->
-                <div class="match-map-section">
-                    <span class="match-map-name">${escapeHtml(m.map || 'Ascent')}</span>
-                    <span class="match-date-label">${escapeHtml(m.game_date || 'Recent')}</span>
-                </div>
-
-                <!-- Score Section -->
-                <div class="match-score-section">
-                    <span class="match-outcome-badge">${outcome}</span>
-                    <span class="match-rounds-score">${m.rounds_won || 0} : ${m.rounds_lost || 0}</span>
-                </div>
-
-                <!-- Stats Section -->
-                <div class="match-stats-section">
-                    <div class="stat-box">
-                        <span class="stat-box-label">K / D / A</span>
-                        <span class="stat-box-val">${m.kills || 0} / ${m.deaths || 0} / ${m.assists || 0}</span>
+                    <!-- Map Section -->
+                    <div class="match-map-section">
+                        <span class="match-map-name">${escapeHtml(mapAsset.displayName)}</span>
+                        <span class="match-date-label">${escapeHtml(m.game_date || 'Recent')}</span>
                     </div>
-                    <div class="stat-box">
-                        <span class="stat-box-label">KD Ratio</span>
-                        <span class="stat-box-val" style="color: ${m.kdr >= 1.0 ? '#10b981' : '#ef4444'};">${m.kdr || 0}</span>
+
+                    <!-- Score Section -->
+                    <div class="match-score-section">
+                        <span class="match-outcome-badge">${outcome}</span>
+                        <span class="match-rounds-score">${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}</span>
                     </div>
-                    <div class="stat-box">
-                        <span class="stat-box-label">Headshot</span>
-                        <span class="stat-box-val">${m.hs_pct || 0}%</span>
+
+                    <!-- Stats Section -->
+                    <div class="match-stats-section">
+                        <div class="stat-box">
+                            <span class="stat-box-label">K / D / A</span>
+                            <span class="stat-box-val">${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-box-label">KD Ratio</span>
+                            <span class="stat-box-val ${kdrClass}">${kdrVal}</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-box-label">Headshot</span>
+                            <span class="stat-box-val text-hs">${m.hs_pct ?? m.hs ?? 0}%</span>
+                        </div>
+                    </div>
+
+                    <div class="match-card-arrow">
+                        <i class="fa-solid fa-chevron-right"></i>
                     </div>
                 </div>
             </button>
@@ -2026,32 +2220,136 @@ function renderMatchHistoryList(matches) {
     }).join("");
 }
 
+// The "Recent Winrate" figure in the match modal should reflect the matches
+// actually on screen, not the account's stored lifetime winrate (which is 0
+// for accounts whose last stat lookup failed). Falls back to the stored value
+// when there are no decided matches to count.
+function recentWinrateLabel(matches, storedWinrate) {
+    let wins = 0, decided = 0;
+    for (const m of (matches || [])) {
+        const outcome = (m.outcome || "").toUpperCase();
+        if (outcome === "VICTORY") { wins++; decided++; }
+        else if (outcome === "DEFEAT") { decided++; }
+    }
+    if (!decided) return `${storedWinrate || 0}%`;
+    return `${Math.round((wins / decided) * 100)}%`;
+}
+
 function profileStatsHtml(profile) {
-    const current = [profile.rank_tier, profile.rank_division].filter(Boolean).join(" ") || "Unranked";
-    const peak = [profile.peak_rank_tier, profile.peak_rank_division].filter(Boolean).join(" ") || "No recorded peak";
+    const currentRank = ValorantAssets.getRank(profile.rank_tier, profile.rank_division);
+    const peakRank = ValorantAssets.getRank(profile.peak_rank_tier, profile.peak_rank_division);
+    const currentLabel = [profile.rank_tier, profile.rank_division].filter(Boolean).join(" ") || "Unrated";
+    const peakLabel = [profile.peak_rank_tier, profile.peak_rank_division].filter(Boolean).join(" ") || "No recorded peak";
     const matches = profile.match_history || [];
     const combat = profile.combat || {};
     const combatAvailable = combat.matches_analyzed || combat.last5_games;
+    
+    let wins = 0;
+    let losses = 0;
+    matches.forEach(m => {
+        const outcome = (m.outcome || m.result || "").toUpperCase();
+        if (outcome === "VICTORY" || outcome === "WIN") wins++;
+        else if (outcome === "DEFEAT" || outcome === "LOSS") losses++;
+    });
+    const winrate = profile.winrate !== undefined ? profile.winrate : (matches.length ? Math.round((wins / matches.length) * 100) : 0);
+
     return `
-        <div class="profile-summary">
-            <div><span>Current rank</span><strong>${escapeHtml(current)}${profile.lp ? ` · ${profile.lp} RR` : ""}</strong></div>
-            <div><span>Peak rank</span><strong>${escapeHtml(peak)}</strong></div>
-            <div><span>Level</span><strong>${profile.level || "—"}</strong></div>
-            <div><span>Recent win rate</span><strong>${profile.winrate || 0}%</strong></div>
+        <!-- Profile 4-Card Showcase Grid -->
+        <div class="profile-cards-grid">
+            <div class="profile-card profile-rank-card current-rank" style="--tier-color: ${currentRank.color}; --tier-glow: ${currentRank.glow};">
+                <div class="rank-emblem-wrap">
+                    <img src="${profile.rank_icon_url || currentRank.icon}" alt="${escapeHtml(currentLabel)}" class="rank-emblem-img">
+                </div>
+                <div class="profile-card-info">
+                    <span class="profile-card-label">CURRENT RANK</span>
+                    <strong class="profile-card-val" style="color: ${currentRank.color};">${escapeHtml(currentLabel)}</strong>
+                    <span class="profile-card-sub">${profile.lp !== undefined && profile.lp !== null && profile.lp > 0 ? `${profile.lp} RR` : "Competitive"}</span>
+                </div>
+            </div>
+
+            <div class="profile-card profile-rank-card peak-rank" style="--tier-color: ${peakRank.color}; --tier-glow: ${peakRank.glow};">
+                <div class="rank-emblem-wrap">
+                    <img src="${profile.peak_rank_icon_url || peakRank.icon}" alt="${escapeHtml(peakLabel)}" class="rank-emblem-img">
+                </div>
+                <div class="profile-card-info">
+                    <span class="profile-card-label">PEAK RANK</span>
+                    <strong class="profile-card-val" style="color: ${peakRank.color};">${escapeHtml(peakLabel)}</strong>
+                    <span class="profile-card-sub">${escapeHtml(profile.peak_rank_season || "All-Time Peak")}</span>
+                </div>
+            </div>
+
+            <div class="profile-card profile-level-card">
+                <div class="level-icon-wrap">
+                    <i class="fa-solid fa-trophy"></i>
+                </div>
+                <div class="profile-card-info">
+                    <span class="profile-card-label">ACCOUNT LEVEL</span>
+                    <strong class="profile-card-val level-val">${profile.level || "—"}</strong>
+                    <span class="profile-card-sub">Progression</span>
+                </div>
+            </div>
+
+            <div class="profile-card profile-winrate-card">
+                <div class="winrate-badge-wrap">
+                    <i class="fa-solid fa-chart-pie"></i>
+                </div>
+                <div class="profile-card-info">
+                    <span class="profile-card-label">RECENT WIN RATE</span>
+                    <strong class="profile-card-val text-cyan">${winrate}%</strong>
+                    <span class="profile-card-sub">${wins}W - ${losses}L</span>
+                </div>
+            </div>
         </div>
-        ${combatAvailable ? `<h4 class="detail-section-title"><i class="fa-solid fa-chart-simple"></i> Recent performance</h4>
+
+        ${combatAvailable ? `
+        <h4 class="detail-section-title"><i class="fa-solid fa-crosshairs"></i> Recent Performance</h4>
         <div class="detail-stat-grid">
-            <div><span>K/D ratio</span><strong>${combat.kd ?? 0}</strong></div>
+            <div><span>K/D ratio</span><strong><i class="fa-solid fa-bolt text-gold"></i> ${combat.kd ?? 0}</strong></div>
             <div><span>K / D / A</span><strong>${combat.kills ?? 0} / ${combat.deaths ?? 0} / ${combat.assists ?? 0}</strong></div>
-            <div><span>Headshots</span><strong>${combat.hs_pct ?? 0}%</strong></div>
+            <div><span>Headshot %</span><strong class="text-hs"><i class="fa-solid fa-bullseye"></i> ${combat.hs_pct ?? 0}%</strong></div>
             <div><span>ADR / ACS</span><strong>${combat.adr ?? 0} / ${combat.acs ?? 0}</strong></div>
         </div>` : ""}
-        <h4 class="detail-section-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent matches</h4>
-        <div class="detail-history">${matches.length ? matches.map((m, i) => `
-            <button type="button" class="detail-history-row ${m.outcome === "VICTORY" ? "is-win" : "is-loss"}" onclick="openMatchDetail(${i}, 'profile')">
-                <span>${escapeHtml(m.outcome || "MATCH")}</span><strong>${escapeHtml(m.map || "Unknown map")}</strong>
-                <small>${escapeHtml(m.agent || "Agent")} · ${m.kills || 0}/${m.deaths || 0}/${m.assists || 0}</small>
-            </button>`).join("") : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}</div>`;
+
+        <h4 class="detail-section-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent Matches</h4>
+        <div class="detail-history">
+            ${matches.length ? matches.map((m, i) => {
+                const outcome = (m.outcome || m.result || "MATCH").toUpperCase();
+                const isWin = outcome === "VICTORY" || outcome === "WIN";
+                const isLoss = outcome === "DEFEAT" || outcome === "LOSS";
+                const outcomeClass = isWin ? "is-win" : (isLoss ? "is-loss" : "is-draw");
+                const mapAsset = ValorantAssets.getMap(m.map);
+                const agentAsset = ValorantAssets.getAgent(m.agent);
+                const agentIcon = m.agent_icon || agentAsset.icon;
+                const kdr = m.kdr ?? (m.kills / Math.max(1, m.deaths || 1)).toFixed(2);
+
+                return `
+                <button type="button" class="detail-history-row ${outcomeClass}" style="--map-splash: url('${mapAsset.splash}'); --i: ${i};" onclick="openMatchDetail(${i}, 'profile')" title="View full scoreboard">
+                    <div class="detail-history-bg-mask"></div>
+                    <div class="detail-history-inner">
+                        <div class="detail-history-left">
+                            <div class="detail-agent-wrap">
+                                <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="detail-agent-avatar" onerror="this.src='${agentAsset.icon}';">
+                            </div>
+                            <div class="detail-match-meta">
+                                <strong>${escapeHtml(mapAsset.displayName)}</strong>
+                                <small>${escapeHtml(agentAsset.name)} · <span class="history-mode">${escapeHtml(m.mode || 'Match')}</span></small>
+                            </div>
+                        </div>
+
+                        <div class="detail-history-center">
+                            <span class="detail-outcome-pill ${outcomeClass}">${outcome}</span>
+                            ${(m.rounds_won !== undefined && m.rounds_lost !== undefined) ? `<span class="detail-score-pill">${m.rounds_won} : ${m.rounds_lost}</span>` : ''}
+                        </div>
+
+                        <div class="detail-history-right">
+                            <span class="detail-kda-stat">${m.kills || 0} / ${m.deaths || 0} / ${m.assists || 0}</span>
+                            <span class="detail-kdr-badge ${kdr >= 1.0 ? 'is-pos' : 'is-neg'}">${kdr} KD</span>
+                            <i class="fa-solid fa-chevron-right detail-arrow"></i>
+                        </div>
+                    </div>
+                </button>`;
+            }).join("") : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}
+        </div>`;
 }
 
 async function openPlayerProfile(riotId, puuid = "") {
@@ -2092,29 +2390,63 @@ function matchTeamScore(m, teamId, teamIndex) {
     return teamIndex === 0 ? Number(m.rounds_won || 0) : Number(m.rounds_lost || 0);
 }
 
-function matchTeamHtml(m, teamId, teamIndex) {
-    const players = (m.roster || [])
-        .filter(p => String(p.team || "Unassigned").toLowerCase() === String(teamId).toLowerCase())
-        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-    const summary = (m.teams || []).find(t => String(t.team || "").toLowerCase() === String(teamId).toLowerCase());
-    const rounds = matchTeamScore(m, teamId, teamIndex);
-    const teamName = /blue/i.test(teamId) ? "Blue Team" : /red/i.test(teamId) ? "Red Team" : `${teamId || `Team ${teamIndex + 1}`}`;
-    const result = summary ? (summary.won ? "WIN" : "LOSS") : "TEAM";
+function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
+    const players = (teamObj.players || []).slice().sort((a, b) => Number(b.score || b.acs || 0) - Number(a.score || a.acs || 0));
+    const teamMvpPuuid = players.length > 0 ? (players[0].puuid || players[0].riot_id) : null;
+    const isWinner = teamObj.won || (teamObj.rounds > (m.rounds_lost || 0));
+    const isBlue = /blue/i.test(teamObj.key);
+    const isRed = /red/i.test(teamObj.key);
+    const teamClass = isBlue ? "team-blue" : (isRed ? "team-red" : "");
+
     return `
-        <section class="detail-team ${summary?.won ? "is-winner" : ""}">
+        <section class="detail-team ${isWinner ? "is-winner" : ""} ${teamClass}">
             <div class="detail-team-head">
-                <span><i class="fa-solid fa-people-group"></i> ${escapeHtml(teamName)}</span>
-                <strong>${rounds} rounds <em>${result}</em></strong>
+                <span>
+                    <i class="fa-solid ${isBlue ? 'fa-shield' : (isRed ? 'fa-fire' : 'fa-people-group')}"></i> 
+                    ${escapeHtml(teamObj.name)}
+                </span>
+                <strong>${teamObj.rounds} rounds <em class="${isWinner ? 'win-pill' : 'loss-pill'}">${isWinner ? "WIN" : "LOSS"}</em></strong>
             </div>
-            <div class="detail-score-head"><span>Agent / Riot ID</span><span>K / D / A</span><span>ACS</span><span>Score</span><span>ADR</span><span>HS%</span></div>
+            <div class="detail-score-head">
+                <span>Agent / Player</span>
+                <span>K / D / A</span>
+                <span>ACS</span>
+                <span>Score</span>
+                <span>ADR</span>
+                <span>HS%</span>
+            </div>
             <div class="detail-score-body">${players.map(p => {
-                const riotId = p.riot_id && p.riot_id.includes("#") ? p.riot_id : "Riot ID resolving…";
-                const clickId = encodeURIComponent(p.riot_id || "");
+                const riotId = p.riot_id && p.riot_id.includes("#") ? p.riot_id : (p.name || "Riot ID resolving…");
+                const clickId = encodeURIComponent(p.riot_id || p.name || "");
                 const clickPuuid = encodeURIComponent(p.puuid || "");
-                return `<button type="button" class="detail-score-player ${p.is_self ? "is-self" : ""}" onclick="openPlayerProfile(decodeURIComponent('${clickId}'), decodeURIComponent('${clickPuuid}'))">
-                    <span class="detail-score-identity">${p.agent_icon ? `<img src="${p.agent_icon}" alt="">` : '<i class="fa-solid fa-user"></i>'}<span><strong>${escapeHtml(riotId)}</strong><small>${escapeHtml(p.agent || "Agent")}</small></span></span>
-                    <b>${p.kills || 0} / ${p.deaths || 0} / ${p.assists || 0}</b>
-                    <b>${p.acs ?? 0}</b><b>${p.score ?? 0}</b><b>${p.adr ?? 0}</b><b>${p.hs_pct ?? 0}%</b>
+                const agentAsset = ValorantAssets.getAgent(p.agent || p.agent_icon);
+                const agentIcon = p.agent_icon || agentAsset.icon;
+                const pId = p.puuid || p.riot_id;
+                const isMatchMvp = pId && pId === matchMvpPuuid;
+                const isTeamMvp = pId && !isMatchMvp && pId === teamMvpPuuid;
+
+                return `
+                <button type="button" class="detail-score-player ${p.is_self ? "is-self" : ""}" onclick="openPlayerProfile(decodeURIComponent('${clickId}'), decodeURIComponent('${clickPuuid}'))" title="Click to view ${escapeHtml(riotId)}'s profile">
+                    <span class="detail-score-identity">
+                        <div class="detail-score-agent-icon-wrap">
+                            <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" onerror="this.src='${agentAsset.icon}';">
+                            ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="detail-score-role-icon" title="${agentAsset.role}">` : ''}
+                        </div>
+                        <span class="detail-score-names">
+                            <strong>
+                                ${escapeHtml(riotId)}
+                                ${p.is_self ? '<span class="self-tag">YOU</span>' : ''}
+                                ${isMatchMvp ? '<span class="mvp-tag match-mvp" title="Match MVP"><i class="fa-solid fa-crown"></i> MVP</span>' : ''}
+                                ${isTeamMvp ? '<span class="mvp-tag team-mvp" title="Team MVP"><i class="fa-solid fa-star"></i> TEAM MVP</span>' : ''}
+                            </strong>
+                            <small>${escapeHtml(agentAsset.name)} · ${escapeHtml(agentAsset.role)}</small>
+                        </span>
+                    </span>
+                    <b><span class="kda-kills">${p.kills ?? 0}</span> / <span class="kda-deaths">${p.deaths ?? 0}</span> / <span class="kda-assists">${p.assists ?? 0}</span></b>
+                    <b class="text-acs">${p.acs ?? 0}</b>
+                    <b class="text-score">${p.score ?? 0}</b>
+                    <b class="text-adr">${p.adr ?? 0}</b>
+                    <b class="text-hs">${p.hs_pct ?? 0}%</b>
                 </button>`;
             }).join("")}</div>
         </section>`;
@@ -2124,25 +2456,155 @@ function openMatchDetail(index, source) {
     const matches = source === "account" ? state.currentAccountMatches : source === "profile" ? state.profileMatches : state.dashboardMatches;
     const m = matches && matches[index];
     if (!m) return;
+
     const outcome = (m.outcome || m.result || "Match").toUpperCase();
-    const roster = m.roster || [];
-    const teamIds = [...new Set([
-        ...(m.teams || []).map(t => t.team).filter(Boolean),
-        ...roster.map(p => p.team || "Unassigned")
-    ])];
-    DOM.detailModalTitle.textContent = `${m.map || "Unknown map"} · ${outcome}`;
-    DOM.detailModalSub.textContent = `${m.mode || "Match"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${m.game_date || "Recent"}`;
+    const isWin = outcome === "VICTORY" || outcome === "WIN";
+    const isLoss = outcome === "DEFEAT" || outcome === "LOSS";
+    const outcomeClass = isWin ? "outcome-victory" : (isLoss ? "outcome-defeat" : "outcome-draw");
+    const mapAsset = ValorantAssets.getMap(m.map);
+    const selfAgent = ValorantAssets.getAgent(m.agent || m.character);
+    const roster = (m.roster || []).slice();
+
+    // Deduplicate roster players by PUUID / Riot ID to prevent duplicate player rows
+    const uniqueRoster = [];
+    const seenPuuids = new Set();
+    for (const p of roster) {
+        const key = (p.puuid || p.riot_id || Math.random().toString()).trim().toLowerCase();
+        if (!seenPuuids.has(key)) {
+            seenPuuids.add(key);
+            uniqueRoster.push(p);
+        }
+    }
+
+    // Determine Match MVP (highest ACS / score across entire match)
+    let matchMvpPuuid = null;
+    let maxMatchScore = -1;
+    uniqueRoster.forEach(p => {
+        const scoreVal = Number(p.score || p.acs || 0);
+        if (scoreVal > maxMatchScore) {
+            maxMatchScore = scoreVal;
+            matchMvpPuuid = p.puuid || p.riot_id;
+        }
+    });
+
+    // Group teams case-insensitively and canonicalize
+    const teamMap = new Map();
+
+    // 1. Seed teams from match summary
+    (m.teams || []).forEach(t => {
+        const rawName = String(t.team || "").trim();
+        if (!rawName) return;
+        const key = rawName.toLowerCase();
+        if (!teamMap.has(key)) {
+            teamMap.set(key, {
+                key: key,
+                rawId: rawName,
+                name: /blue/i.test(key) ? "Blue Team" : (/red/i.test(key) ? "Red Team" : (rawName.charAt(0).toUpperCase() + rawName.slice(1))),
+                rounds: Number(t.rounds_won || 0),
+                won: Boolean(t.won),
+                players: []
+            });
+        }
+    });
+
+    // 2. Add players into team groups
+    uniqueRoster.forEach(p => {
+        const rawTeam = String(p.team || "Unassigned").trim();
+        const key = rawTeam.toLowerCase();
+        if (!teamMap.has(key)) {
+            teamMap.set(key, {
+                key: key,
+                rawId: rawTeam,
+                name: /blue/i.test(key) ? "Blue Team" : (/red/i.test(key) ? "Red Team" : (rawTeam.charAt(0).toUpperCase() + rawTeam.slice(1))),
+                rounds: 0,
+                won: false,
+                players: []
+            });
+        }
+        teamMap.get(key).players.push(p);
+    });
+
+    // 3. Filter only teams with players
+    const activeTeams = Array.from(teamMap.values()).filter(t => t.players.length > 0);
+
+    // 4. If rounds won/lost were not in team summary, infer from match headline
+    if (activeTeams.length === 2 && activeTeams[0].rounds === 0 && activeTeams[1].rounds === 0) {
+        const selfPlayer = uniqueRoster.find(p => p.is_self);
+        if (selfPlayer) {
+            const selfKey = String(selfPlayer.team || "").toLowerCase();
+            const selfTeamObj = activeTeams.find(t => t.key === selfKey) || activeTeams[0];
+            const otherTeamObj = activeTeams.find(t => t !== selfTeamObj) || activeTeams[1];
+            selfTeamObj.rounds = Number(m.rounds_won || 0);
+            otherTeamObj.rounds = Number(m.rounds_lost || 0);
+            selfTeamObj.won = Number(m.rounds_won || 0) > Number(m.rounds_lost || 0);
+            otherTeamObj.won = Number(m.rounds_lost || 0) > Number(m.rounds_won || 0);
+        } else {
+            activeTeams[0].rounds = Number(m.rounds_won || 0);
+            activeTeams[1].rounds = Number(m.rounds_lost || 0);
+            activeTeams[0].won = Number(m.rounds_won || 0) > Number(m.rounds_lost || 0);
+            activeTeams[1].won = Number(m.rounds_lost || 0) > Number(m.rounds_won || 0);
+        }
+    }
+
+    DOM.detailModalTitle.textContent = `${mapAsset.displayName} · ${outcome}`;
+    DOM.detailModalSub.textContent = `${m.mode || "Competitive"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${m.game_date || "Recent"}`;
+
     DOM.matchDetailContent.innerHTML = `
-        <div class="detail-stat-grid">
-            <div><span>K / D / A</span><strong>${m.kills || 0} / ${m.deaths || 0} / ${m.assists || 0}</strong></div>
-            <div><span>K/D ratio</span><strong>${m.kdr ?? m.kd ?? 0}</strong></div>
-            <div><span>Headshots</span><strong>${m.hs_pct ?? m.hs ?? 0}%</strong></div>
-            <div><span>${m.adr !== undefined ? "ADR" : "Score"}</span><strong>${m.adr ?? m.score ?? 0}</strong></div>
+        <!-- Match Hero Splash Banner -->
+        <div class="match-hero-banner ${outcomeClass}" style="--map-splash: url('${mapAsset.splash}');">
+            <div class="match-hero-overlay"></div>
+            <div class="match-hero-content">
+                <div class="match-hero-left">
+                    <div class="match-hero-agent-portrait">
+                        <img src="${selfAgent.icon}" alt="${escapeHtml(selfAgent.name)}" onerror="this.src='${selfAgent.icon}';">
+                    </div>
+                    <div class="match-hero-meta">
+                        <span class="match-hero-mode">${escapeHtml(m.mode || "Competitive")}</span>
+                        <h2 class="match-hero-map">${escapeHtml(mapAsset.displayName)}</h2>
+                        <span class="match-hero-date"><i class="fa-regular fa-clock"></i> ${escapeHtml(m.game_date || "Recent")}</span>
+                    </div>
+                </div>
+
+                <div class="match-hero-center">
+                    <div class="match-hero-outcome-badge ${outcomeClass}">${outcome}</div>
+                    <div class="match-hero-score">${m.rounds_won ?? 0} <span class="score-divider">:</span> ${m.rounds_lost ?? 0}</div>
+                </div>
+
+                <div class="match-hero-right">
+                    <div class="hero-stat-pill">
+                        <span class="hero-stat-label">K/D/A</span>
+                        <span class="hero-stat-val">${m.kills ?? 0}/${m.deaths ?? 0}/${m.assists ?? 0}</span>
+                    </div>
+                    <div class="hero-stat-pill">
+                        <span class="hero-stat-label">KD RATIO</span>
+                        <span class="hero-stat-val text-cyan">${(m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed ? (m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed(2) : (m.kdr ?? m.kd ?? 0)}</span>
+                    </div>
+                    <div class="hero-stat-pill">
+                        <span class="hero-stat-label">HEADSHOT</span>
+                        <span class="hero-stat-val text-hs">${m.hs_pct ?? m.hs ?? 0}%</span>
+                    </div>
+                </div>
+            </div>
         </div>
-        <h4 class="detail-section-title"><i class="fa-solid fa-table-list"></i> Full scoreboard <small>Click any player to view their profile and match history</small></h4>
-        <div class="detail-scoreboard">${roster.length ? teamIds.map((team, i) => matchTeamHtml(m, team, i)).join("") : '<p class="no-matches-msg">Scoreboard data will appear after this history is refreshed.</p>'}</div>
-        ${(m.round_results || []).length ? `<h4 class="detail-section-title"><i class="fa-solid fa-timeline"></i> Round results</h4>
-        <div class="detail-rounds">${m.round_results.map(r => `<span class="${/blue/i.test(r.winner) ? "is-blue" : "is-red"}" title="${escapeHtml(r.result || "Round")}">${r.round}</span>`).join("")}</div>` : ""}`;
+
+        <h4 class="detail-section-title">
+            <i class="fa-solid fa-table-list"></i> Full Scoreboard 
+            <small>Click any player to view their profile and match history</small>
+        </h4>
+
+        <div class="detail-scoreboard">
+            ${activeTeams.length ? activeTeams.map((teamObj, i) => matchTeamHtml(m, teamObj, matchMvpPuuid, i)).join("") : '<p class="no-matches-msg">Scoreboard data will appear after this history is refreshed.</p>'}
+        </div>
+
+        ${(m.round_results || []).length ? `
+        <h4 class="detail-section-title"><i class="fa-solid fa-timeline"></i> Round Timeline</h4>
+        <div class="detail-rounds">
+            ${m.round_results.map(r => `
+                <span class="${/blue/i.test(r.winner) ? "is-blue" : "is-red"}" title="Round ${r.round}: ${escapeHtml(r.result || (r.winner ? `${r.winner} Win` : "Round"))}">
+                    ${r.round}
+                </span>`).join("")}
+        </div>` : ""}`;
+
     openModal(DOM.modalMatchDetail);
 }
 
@@ -2575,8 +3037,16 @@ function renderLaunchProgress(prog) {
         DOM.launchStatusPill.classList.toggle("is-error", stage === "error");
     }
 
+    // A login that failed because the Riot Client is elevated needs Vortex
+    // elevated too - offer that instead of a plain retry that would just fail
+    // the same way.
+    const needsElevation = stage === "error" && !!prog.needs_elevation;
+    if (DOM.btnElevateLaunch) DOM.btnElevateLaunch.style.display = needsElevation ? "inline-flex" : "none";
+
     // Retry only makes sense once something has actually failed.
-    if (DOM.btnRetryLaunch) DOM.btnRetryLaunch.style.display = stage === "error" ? "inline-flex" : "none";
+    if (DOM.btnRetryLaunch) {
+        DOM.btnRetryLaunch.style.display = (stage === "error" && !needsElevation) ? "inline-flex" : "none";
+    }
     if (DOM.btnCloseLaunch) {
         DOM.btnCloseLaunch.textContent = stage === "done" ? "Done" : (stage === "error" ? "Close" : "Run in background");
     }
@@ -2603,6 +3073,29 @@ function stopLaunchPolling() {
     if (state._launchPoll) {
         clearInterval(state._launchPoll);
         state._launchPoll = null;
+    }
+}
+
+/**
+ * Relaunches Vortex elevated (one UAC prompt) so it can drive an elevated
+ * Riot Client's login window. This instance exits once the new one starts.
+ */
+async function relaunchVortexElevated() {
+    const btn = DOM.btnElevateLaunch;
+    if (btn) { btn.disabled = true; btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Waiting for UAC…`; }
+    try {
+        const res = await fetch("/api/relaunch-elevated", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            stopLaunchPolling();
+            renderLaunchProgress({ stage: "opening", message: data.message || "Restarting as administrator…" });
+        } else {
+            showToast(data.message || "Couldn't restart as administrator.", "error");
+        }
+    } catch (err) {
+        showToast("Couldn't reach the app's backend.", "error");
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = `<i class="fa-solid fa-shield-halved"></i> Restart as administrator`; }
     }
 }
 
@@ -3465,65 +3958,72 @@ function highlightAccount(id) {
 // puts everything back.
 // ==========================================================================
 
-// Short full-cover wipe reusing the boot screen's look, played over a view
-// change so PLAY -> dashboard (and back) reads as one motion instead of a
-// hard cut. `swap` runs while the screen is fully covered; the returned
-// promise resolves once the overlay has left. `reverse` flips the sweep
-// direction so entering and leaving feel mirrored.
-const VORTEX_LOGO_MARKUP = `
-    <svg class="vw-mark" viewBox="0 0 1000 647.9" aria-hidden="true">
-        <g fill="url(#vbGrad)" fill-rule="evenodd">
-            <path class="vb-fill" d="M1.0,4.0 19.1,7.0 80.2,25.1 92.3,27.1 438.3,125.4 292.9,175.5 416.2,342.0 419.3,343.0 441.3,338.0 493.5,322.0 528.6,307.9 575.7,284.9 545.6,309.9 512.5,333.0 473.4,356.1 443.3,371.1 408.2,385.2 382.1,393.2 356.1,398.2 331.0,399.2 249.7,299.9 2.0,5.0Z"/>
-            <path class="vb-fill" d="M995.0,1.0 998.0,1.0 989.0,12.0 788.4,234.7 787.4,216.6 778.3,198.6 761.3,182.5 743.2,172.5 718.2,164.5 697.1,160.5 670.0,158.5 633.9,159.5 686.1,152.5 724.2,152.5 725.2,151.5 723.2,149.4 700.1,140.4 667.0,132.4 619.9,127.4 595.8,127.4 619.9,116.3 678.0,96.3 897.7,29.1 994.0,2.0Z"/>
-            <path class="vb-fill" d="M593.8,179.5 638.9,180.5 667.0,186.6 684.1,192.6 707.1,205.6 724.2,221.7 732.2,233.7 738.2,249.7 739.2,277.8 737.2,287.9 730.2,307.9 721.2,325.0 706.1,347.0 690.1,366.1 666.0,390.2 637.9,413.2 634.9,416.2 635.9,417.3 673.0,396.2 717.2,364.1 746.2,334.0 765.3,304.9 761.3,319.0 752.3,338.0 736.2,362.1 688.1,422.3 503.5,641.9 498.5,645.9 406.2,521.6 446.3,508.5 497.5,487.5 555.7,459.4 557.7,457.4 556.7,456.4 529.6,467.4 486.5,481.4 442.3,493.5 400.2,502.5 340.0,509.5 302.9,509.5 276.8,506.5 311.9,505.5 367.1,496.5 415.2,483.5 459.4,467.4 513.5,441.3 550.7,418.3 586.8,390.2 616.9,361.1 629.9,346.0 645.9,323.0 656.0,300.9 659.0,284.9 657.0,269.8 652.0,257.8 634.9,238.7 625.9,232.7 608.8,224.7 581.7,217.7 537.6,215.6 485.5,223.7 439.3,237.7 420.3,245.7 453.4,224.7 500.5,202.6 550.7,186.6 576.7,181.5 592.8,180.5Z"/>
-            <path class="vb-fill" d="M239.7,368.1 239.7,383.1 241.7,389.2 246.7,398.2 256.8,408.2 263.8,413.2 281.8,421.3 296.9,425.3 320.0,428.3 368.1,427.3 414.2,419.3 474.4,400.2 513.5,382.1 502.5,391.2 459.4,418.3 417.3,439.3 385.2,452.4 361.1,460.4 323.0,469.4 298.9,472.4 263.8,472.4 247.7,469.4 230.7,462.4 218.7,452.4 211.6,438.3 210.6,425.3 216.6,404.2 228.7,382.1 238.7,369.1Z"/>
-        </g>
-    </svg>`;
+// Horizontal slide between the roster and the dashboard, so PLAY -> dashboard
+// (and back) reads as one movement instead of a hard cut. `swap` flips the
+// view classes while both panels are briefly mounted together; the outgoing
+// panel is pinned on top and slid off while the incoming one slides in. The
+// returned promise resolves once the slide has finished. `back` mirrors the
+// direction so leaving feels like the reverse of entering.
+function runViewSlide(swap, { back = false } = {}) {
+    const swapEl = DOM.viewSwap;
+    const leaving = back ? DOM.dashView : DOM.accountsView;
+    const entering = back ? DOM.accountsView : DOM.dashView;
 
-function runVortexWipe(swap, { reverse = false } = {}) {
-    // A shared gradient def the wipe's logo needs; boot.css defines #vbGrad
-    // only inside the boot SVG, which is gone by now.
-    if (!document.getElementById("vw-grad-defs")) {
-        const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        s.id = "vw-grad-defs";
-        s.setAttribute("width", "0");
-        s.setAttribute("height", "0");
-        s.style.position = "absolute";
-        s.innerHTML = `<defs><linearGradient id="vbGrad" x1="0" y1="0.12" x2="1" y2="0">
-            <stop offset="0" stop-color="#6f5bff"/><stop offset="0.55" stop-color="#8a3bfb"/>
-            <stop offset="1" stop-color="#a020fe"/></linearGradient></defs>`;
-        document.body.appendChild(s);
+    // No container or reduced motion: skip straight to the swapped state.
+    if (!swapEl || !leaving || !entering || PREFERS_REDUCED_MOTION) {
+        return Promise.resolve(swap());
     }
 
-    const el = document.createElement("div");
-    el.className = "vortex-wipe" + (reverse ? " is-reverse" : "");
-    el.innerHTML = VORTEX_LOGO_MARKUP + '<span class="vw-track"></span>';
-    document.body.appendChild(el);
+    // Pin the slot to its current height and hold the outgoing panel in place
+    // (absolute, on top) so the class flips inside swap() - which may await a
+    // network round-trip - don't cause a visible jump before the slide starts.
+    swapEl.style.height = swapEl.offsetHeight + "px";
+    swapEl.classList.add("is-sliding");
+    leaving.classList.add("view-leaving");
 
-    const reduced = PREFERS_REDUCED_MOTION;
-    const coverMs = reduced ? 180 : 360;   // matches vw-in / vw-fade
-    const holdMs = reduced ? 0 : 120;
-    const revealMs = reduced ? 180 : 340;  // matches vw-out / vw-fade-out
+    return Promise.resolve(swap()).then(() => new Promise(resolve => {
+        entering.classList.add("view-entering");
 
-    return new Promise(resolve => {
-        window.setTimeout(async () => {
-            try { await swap(); } catch (_) {}
-            window.setTimeout(() => {
-                el.classList.add("is-out");
-                window.setTimeout(() => {
-                    el.remove();
-                    resolve();
-                }, revealMs);
-            }, holdMs);
-        }, coverMs);
-    });
+        // Ease the slot between the two panel heights alongside the slide,
+        // then kick off the slide itself on the next frame.
+        const endH = entering.offsetHeight;
+        requestAnimationFrame(() => {
+            swapEl.style.transition = "height var(--dur-4) var(--ease-out)";
+            swapEl.style.height = endH + "px";
+            swapEl.classList.add(back ? "slide-back" : "slide-forward");
+        });
+
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            swapEl.classList.remove("is-sliding", "slide-back", "slide-forward");
+            leaving.classList.remove("view-leaving");
+            entering.classList.remove("view-entering");
+            swapEl.style.transition = "";
+            swapEl.style.height = "";
+            resolve();
+        };
+
+        // Only the slide's own animation ends the slide - the dashboard is
+        // full of nested entrance animations whose animationend also bubbles
+        // up to this element.
+        const onEnd = e => {
+            if (e.target !== entering) return;
+            entering.removeEventListener("animationend", onEnd);
+            finish();
+        };
+        entering.addEventListener("animationend", onEnd);
+        // Safety net in case animationend never lands (tab hidden mid-slide).
+        window.setTimeout(finish, 900);
+    }));
 }
 
 async function openDashboard() {
     if (state.dashboardOpen || state._dashTransitioning) return;
     state._dashTransitioning = true;
 
-    await runVortexWipe(async () => {
+    await runViewSlide(async () => {
         state.dashboardOpen = true;
 
         document.body.classList.add("dashboard-mode");
@@ -3533,7 +4033,9 @@ async function openDashboard() {
         }
         if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.add("is-active");
 
-        if (!state.agents.length) await loadLiveAgents();
+        // Reload every open: the agent list is static but its per-account
+        // "owned" flags are not.
+        await loadLiveAgents();
         renderModeGrid();
         renderAgentGrid();
         refreshInstalockStatus(true);
@@ -3553,7 +4055,7 @@ function closeDashboard() {
     if (!state.dashboardOpen || state._dashTransitioning) return;
     state._dashTransitioning = true;
 
-    runVortexWipe(() => {
+    runViewSlide(() => {
         state.dashboardOpen = false;
 
         document.body.classList.remove("dashboard-mode");
@@ -3566,7 +4068,7 @@ function closeDashboard() {
         stopLiveTimers();
         clearTimeout(state._statsTimer);
         window.scrollTo({ top: 0, behavior: "auto" });
-    }, { reverse: true }).then(() => {
+    }, { back: true }).then(() => {
         state._dashTransitioning = false;
     });
 }
@@ -4609,7 +5111,11 @@ function renderAgentGrid() {
     if (!DOM.dashAgentGrid) return;
 
     const query = (DOM.dashAgentSearch ? DOM.dashAgentSearch.value : "").trim().toLowerCase();
-    const agents = state.agents.filter(a => !query || a.name.toLowerCase().includes(query));
+    const agents = state.agents
+        .filter(a => !query || a.name.toLowerCase().includes(query))
+        // Owned agents float to the top; the backend already sorts by name.
+        .slice()
+        .sort((a, b) => (b.owned !== false ? 1 : 0) - (a.owned !== false ? 1 : 0));
 
     if (!agents.length) {
         DOM.dashAgentGrid.innerHTML = `<p class="dash-roster-empty">${
@@ -4618,20 +5124,25 @@ function renderAgentGrid() {
         return;
     }
 
-    DOM.dashAgentGrid.innerHTML = agents.map(a => `
-        <button class="dash-agent-btn ${a.id === state.selectedAgentId ? "active" : ""}"
-                data-agent="${escapeHtml(a.id)}" title="${escapeHtml(a.name)}${a.role ? " · " + escapeHtml(a.role) : ""}">
+    DOM.dashAgentGrid.innerHTML = agents.map(a => {
+        const locked = a.owned === false;
+        return `
+        <button class="dash-agent-btn ${a.id === state.selectedAgentId ? "active" : ""} ${locked ? "locked" : ""}"
+                data-agent="${escapeHtml(a.id)}" ${locked ? "disabled" : ""}
+                title="${escapeHtml(a.name)}${a.role ? " · " + escapeHtml(a.role) : ""}${locked ? " · not owned on this account" : ""}">
             <img src="${a.icon}" alt="${escapeHtml(a.name)}" onerror="this.style.visibility='hidden';">
             <span>${escapeHtml(a.name)}</span>
-        </button>
-    `).join("");
+        </button>`;
+    }).join("");
 
-    DOM.dashAgentGrid.querySelectorAll(".dash-agent-btn").forEach(btn => {
+    DOM.dashAgentGrid.querySelectorAll(".dash-agent-btn:not(.locked)").forEach(btn => {
         btn.addEventListener("click", () => selectAgent(btn.dataset.agent));
     });
 }
 
 function selectAgent(agentId) {
+    const agent = state.agents.find(a => a.id === agentId);
+    if (agent && agent.owned === false) return;
     state.selectedAgentId = state.selectedAgentId === agentId ? null : agentId;
     renderAgentGrid();
     updateInstalockControls();
