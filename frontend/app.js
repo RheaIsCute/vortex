@@ -1498,7 +1498,7 @@ function getAccountCombatStats(acc) {
     if (!matches || matches.length === 0) {
         return {
             winrate: Number(acc.winrate) || 0,
-            games: acc.games_played || 0,
+            games: Number(acc.games_played) || 0,
             kd: "0.0",
             kda: "0.0",
             hs: 0,
@@ -1526,8 +1526,8 @@ function getAccountCombatStats(acc) {
     const avgKills = n > 0 ? (kills / n).toFixed(1) : "0.0";
 
     return {
-        winrate: Number(acc.winrate) || 0,
-        games: acc.games_played || n,
+        winrate: accountWinrate(acc),
+        games: Math.max(Number(acc.games_played) || 0, n),
         kd,
         kda,
         hs: avgHs,
@@ -1589,6 +1589,23 @@ function renderAccounts(silent = false) {
     }
 }
 
+// Win rate for an account, preferring what its saved matches actually show.
+// acc.winrate is the stored lifetime figure from the remote stat sync and
+// sits at 0 whenever that sync last failed - which is when every winrate on
+// the card looks broken even though the match list right there says otherwise.
+function accountWinrate(acc) {
+    const matches = Array.isArray(acc.match_history) ? acc.match_history : [];
+    let wins = 0, decided = 0;
+    for (const m of matches) {
+        const o = (m.outcome || m.result || "").toUpperCase();
+        if (o === "VICTORY" || o === "WIN") { wins++; decided++; }
+        else if (o === "DEFEAT" || o === "LOSS") { decided++; }
+        else if (o === "DRAW" || o === "TIE") { wins += 0.5; decided++; }
+    }
+    if (decided > 0) return Math.round((wins / decided) * 100);
+    return Number(acc.winrate) || 0;
+}
+
 /** Shared per-account view model used by both the grid and table renderers. */
 function buildAccountView(acc) {
     const tier = (acc.rank_tier || "UNRANKED").toUpperCase();
@@ -1596,7 +1613,7 @@ function buildAccountView(acc) {
     const effectiveTag = acc.tag && !['Smurf', 'Ranked', 'Unrated', ''].includes(acc.tag)
         ? acc.tag
         : (acc.level >= 20 ? 'Ranked' : 'Unrated');
-    const winrate = Number(acc.winrate) || 0;
+    const winrate = accountWinrate(acc);
 
     // The signed-in account gets a live badge and a PLAY button instead of
     // LOGIN; anything Riot hasn't confirmed yet gets a Check Account button.
@@ -1626,6 +1643,10 @@ function buildAccountView(acc) {
         effectiveTag,
         tagClass: getTagBadgeClass(effectiveTag, acc.level),
         winrate,
+        gamesPlayed: Math.max(
+            Number(acc.games_played) || 0,
+            Array.isArray(acc.match_history) ? acc.match_history.length : 0
+        ),
         // Meter colour follows the value: red below 45%, amber to 55%, accent above.
         wrClass: winrate >= 55 ? "wr-high" : (winrate >= 45 ? "wr-mid" : "wr-low"),
         tierClass: `tier-${tier.toLowerCase()}`,
@@ -1715,7 +1736,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                         </div>
                         <div class="hero-stat-card">
                             <span class="hero-stat-label">MATCHES</span>
-                            <span class="hero-stat-value">${acc.games_played || combat.games || 0}</span>
+                            <span class="hero-stat-value">${combat.games || 0}</span>
                         </div>
                     </div>
 
@@ -1798,7 +1819,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                         ` : `
                         <button class="btn btn-secondary hero-action-btn hero-matches-btn ${isValRunning ? 'is-expanded' : ''}" onclick="openMatchesModal(${acc.id})" title="View Match History & Details">
                             <i class="fa-solid fa-clock-rotate-left"></i>
-                            <span>Matches (${acc.games_played || 0})</span>
+                            <span>Matches (${combat.games || 0})</span>
                         </button>
                         ${isValRunning ? '' : `<button class="btn btn-primary hero-action-btn hero-dashboard-btn" onclick="openDashboard()" title="Open Live Match Dashboard">
                             <i class="fa-solid fa-gauge-high"></i>
@@ -1942,7 +1963,7 @@ function renderGridView() {
                     ` : `
                         <div class="winrate-meta">
                             <span>Winrate <strong>${v.winrate}%</strong></span>
-                            <span>Matches <strong>${acc.games_played || 0}</strong></span>
+                            <span>Matches <strong>${v.gamesPlayed}</strong></span>
                         </div>
                         <div class="winrate-bar-track">
                             <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
@@ -2078,7 +2099,7 @@ function renderTableView() {
                     ` : '<span class="text-dim">---</span>'}
                 </td>
                 <td><span class="level-chip">LV ${acc.level || "-"}</span></td>
-                <td>${v.winrate}% <span class="text-dim">(${acc.games_played || 0}G)</span></td>
+                <td>${v.winrate}% <span class="text-dim">(${v.gamesPlayed}G)</span></td>
                 <td><span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span></td>
                 <td>${v.lastLoginFormatted}</td>
                 <td>
