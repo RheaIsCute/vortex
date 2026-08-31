@@ -2790,6 +2790,13 @@ select.form-control option {
     box-shadow: 0 4px 10px rgba(0,0,0,0.4);
 }
 
+.match-agent-avatar.is-placeholder {
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+    font-size: 18px;
+}
+
 .match-role-badge {
     position: absolute;
     bottom: -2px;
@@ -7668,6 +7675,13 @@ button.match-card, button.stat-match, button.dash-player {
     object-fit: cover;
 }
 
+.match-hero-agent-portrait.is-empty {
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+    font-size: 22px;
+}
+
 .match-hero-meta {
     display: flex;
     flex-direction: column;
@@ -7907,6 +7921,13 @@ button.match-card, button.stat-match, button.dash-player {
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.detail-agent-wrap.is-empty {
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+    font-size: 15px;
 }
 
 .detail-match-meta {
@@ -8155,28 +8176,46 @@ button.match-card, button.stat-match, button.dash-player {
     position: relative;
     width: 36px;
     height: 36px;
-    border-radius: 8px;
-    background: var(--surface-3);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    overflow: hidden;
     flex-shrink: 0;
 }
 
-.detail-score-agent-icon-wrap img {
+/* No resolved agent art: show a neutral silhouette in the same box. */
+.detail-score-agent-icon-wrap.is-empty {
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--surface-3);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-dim);
+    font-size: 15px;
+}
+
+/* The agent portrait fills the box. Scope this to the portrait only - the role
+   badge is also an <img> in here, and a bare `img` rule would stretch it to
+   36x36 and bury the agent icon. Rounding/border live on the portrait itself
+   (not the wrap) so the badge overhanging the corner isn't clipped away. */
+.detail-score-agent-icon-wrap > img:not(.detail-score-role-icon) {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    display: block;
+    border-radius: 8px;
+    background: var(--surface-3);
+    border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .detail-score-role-icon {
     position: absolute;
-    bottom: 0;
-    right: 0;
-    width: 13px;
-    height: 13px;
-    background: rgba(0, 0, 0, 0.75);
-    border-radius: 3px;
-    padding: 1px;
+    bottom: -3px;
+    right: -3px;
+    width: 15px;
+    height: 15px;
+    background: rgba(6, 8, 16, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    padding: 2px;
+    object-fit: contain;
+    z-index: 1;
 }
 
 .detail-score-names {

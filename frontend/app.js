@@ -157,16 +157,14 @@ const ValorantAssets = {
         "the range": { id: "ee613ee9-28b7-4beb-9666-08db13bb2244", name: "The Range" },
         "range": { id: "ee613ee9-28b7-4beb-9666-08db13bb2244", name: "The Range" }
     },
+    // A neutral placeholder for a player whose agent hasn't resolved. Callers
+    // check `unresolved` so they don't print a misleading name/role (e.g.
+    // "Miks · Agent") or a real agent's portrait for an unknown pick.
+    _unknownAgent() {
+        return { name: "Unknown agent", role: "", unresolved: true, icon: "", portrait: "", roleIcon: "" };
+    },
     getAgent(nameOrId) {
-        if (!nameOrId) {
-            return {
-                name: "Agent",
-                role: "Agent",
-                icon: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/displayicon.png`,
-                portrait: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/fullportrait.png`,
-                roleIcon: ""
-            };
-        }
+        if (!nameOrId) return this._unknownAgent();
         const key = String(nameOrId).toLowerCase().trim();
         let entry = this.agents[key];
         if (!entry) {
@@ -182,15 +180,9 @@ const ValorantAssets = {
             };
         }
         if (typeof nameOrId === "string" && (nameOrId.startsWith("http") || nameOrId.startsWith("/"))) {
-            return { name: "Agent", icon: localGameAssetUrl(nameOrId), portrait: "", role: "Agent", roleIcon: "" };
+            return { name: "Agent", icon: localGameAssetUrl(nameOrId), portrait: "", role: "", roleIcon: "" };
         }
-        return {
-            name: nameOrId,
-            role: "Agent",
-            icon: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/displayicon.png`,
-            portrait: `${LOCAL_GAME_ASSET_ROOT}agents/add6443a-41bd-e414-f6ad-e58d267f4e95/fullportrait.png`,
-            roleIcon: ""
-        };
+        return this._unknownAgent();
     },
     getMap(nameOrId) {
         if (!nameOrId) {
@@ -1053,12 +1045,32 @@ async function handleBatchTextImport() {
 // CHECK ACCOUNTS (SEQUENTIAL SCANNER)
 // ==========================================================================
 
+// Single place that puts the Check Accounts button and progress bar back to
+// rest. Called on completion, on error, on cancel, and by a watchdog - the
+// spinner used to get stuck forever if the poll loop died or the backend
+// never reported running:false.
+function stopCheckAccountsUi(hideBar = true) {
+    state.isCheckingAccounts = false;
+    if (state._checkPoll) { clearInterval(state._checkPoll); state._checkPoll = null; }
+    if (state._checkPollDeadline) { clearTimeout(state._checkPollDeadline); state._checkPollDeadline = null; }
+    if (DOM.btnCheckAllAccounts) {
+        DOM.btnCheckAllAccounts.classList.remove("is-checking");
+        DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
+    }
+    if (hideBar && DOM.syncProgressBar) {
+        DOM.syncProgressBar.style.display = "none";
+        if (DOM.syncProgressFill) DOM.syncProgressFill.style.width = "0%";
+    }
+}
+
 async function handleCheckAllAccounts() {
     if (state.isCheckingAccounts) {
         try {
             await fetch("/api/accounts/cancel-check", { method: "POST" });
             showToast("Stopping account check...", "info");
         } catch (e) {}
+        // Don't wait on the poll loop to notice - release the button now.
+        stopCheckAccountsUi(true);
         return;
     }
 
@@ -1069,6 +1081,18 @@ async function handleCheckAllAccounts() {
     DOM.syncProgressFill.style.width = "10%";
     DOM.syncProgressText.textContent = "Starting account verification...";
 
+    // Watchdog: if the poll loop hasn't seen progress in 3 minutes (a hung
+    // backend task, a dropped connection), stop spinning and let the user retry.
+    let lastCurrent = -1;
+    const armWatchdog = () => {
+        if (state._checkPollDeadline) clearTimeout(state._checkPollDeadline);
+        state._checkPollDeadline = setTimeout(() => {
+            showToast("Account check stopped responding - stopping. You can run it again.", "error");
+            DOM.syncProgressText.textContent = "Account check stopped responding.";
+            stopCheckAccountsUi(true);
+        }, 180000);
+    };
+
     try {
         const res = await fetch("/api/accounts/check-all", { method: "POST" });
         const startData = await res.json();
@@ -1076,12 +1100,22 @@ async function handleCheckAllAccounts() {
         if (!startData.success && startData.message) {
             showToast(startData.message, "info");
         }
+        // Nothing to check / refused to start: don't sit on a spinner.
+        if (startData.success && startData.to_check_count === 0) {
+            DOM.syncProgressText.textContent = startData.message || "All accounts are already checked.";
+            setTimeout(() => stopCheckAccountsUi(true), 2000);
+            return;
+        }
+
+        armWatchdog();
 
         // Poll progress until complete
-        const pollInterval = setInterval(async () => {
+        state._checkPoll = setInterval(async () => {
             try {
                 const statusRes = await fetch("/api/accounts/check-status");
                 const progress = await statusRes.json();
+
+                if (progress.current !== lastCurrent) { lastCurrent = progress.current; armWatchdog(); }
 
                 if (progress.running) {
                     const pct = Math.max(10, Math.round((progress.current / Math.max(progress.total, 1)) * 100));
@@ -1090,12 +1124,9 @@ async function handleCheckAllAccounts() {
                     fetchAccounts();
                     fetchStatsSummary();
                 } else {
-                    clearInterval(pollInterval);
                     DOM.syncProgressFill.style.width = "100%";
                     DOM.syncProgressText.textContent = progress.message || "All accounts verified!";
-                    DOM.btnCheckAllAccounts.classList.remove("is-checking");
-                    DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
-                    state.isCheckingAccounts = false;
+                    stopCheckAccountsUi(false);
                     showToast(progress.message || "Account check completed!", "success");
 
                     setTimeout(() => {
@@ -1108,16 +1139,13 @@ async function handleCheckAllAccounts() {
                     fetchBannedAccounts();
                 }
             } catch (err) {
-                // Ignore poll error
+                // Ignore a single poll error; the watchdog covers a sustained one.
             }
         }, 1500);
 
     } catch (err) {
         showToast("Failed to start account verification", "error");
-        DOM.btnCheckAllAccounts.classList.remove("is-checking");
-        DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
-        DOM.syncProgressBar.style.display = "none";
-        state.isCheckingAccounts = false;
+        stopCheckAccountsUi(true);
     }
 }
 
@@ -2173,12 +2201,14 @@ function renderMatchHistoryList(matches) {
                 <div class="match-card-inner">
                     <!-- Agent Section -->
                     <div class="match-agent-section">
-                        <div class="match-agent-avatar-wrap">
-                            <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.src='${agentAsset.icon}';">
+                        <div class="match-agent-avatar-wrap ${agentIcon ? "" : "is-empty"}">
+                            ${agentIcon
+                                ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.closest('.match-agent-avatar-wrap').classList.add('is-empty'); this.remove();">`
+                                : `<span class="match-agent-avatar is-placeholder"><i class="fa-solid fa-user"></i></span>`}
                             ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="match-role-badge" title="${agentAsset.role}">` : ''}
                         </div>
                         <div class="match-agent-info">
-                            <h4>${escapeHtml(agentAsset.name)}</h4>
+                            <h4>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)}</h4>
                             <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}</span>
                         </div>
                     </div>
@@ -2327,12 +2357,14 @@ function profileStatsHtml(profile) {
                     <div class="detail-history-bg-mask"></div>
                     <div class="detail-history-inner">
                         <div class="detail-history-left">
-                            <div class="detail-agent-wrap">
-                                <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="detail-agent-avatar" onerror="this.src='${agentAsset.icon}';">
+                            <div class="detail-agent-wrap ${agentIcon ? "" : "is-empty"}">
+                                ${agentIcon
+                                    ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="detail-agent-avatar" onerror="this.closest('.detail-agent-wrap').classList.add('is-empty'); this.remove();">`
+                                    : `<i class="fa-solid fa-user"></i>`}
                             </div>
                             <div class="detail-match-meta">
                                 <strong>${escapeHtml(mapAsset.displayName)}</strong>
-                                <small>${escapeHtml(agentAsset.name)} · <span class="history-mode">${escapeHtml(m.mode || 'Match')}</span></small>
+                                <small>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)} · <span class="history-mode">${escapeHtml(m.mode || 'Match')}</span></small>
                             </div>
                         </div>
 
@@ -2421,6 +2453,9 @@ function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
                 const clickPuuid = encodeURIComponent(p.puuid || "");
                 const agentAsset = ValorantAssets.getAgent(p.agent || p.agent_icon);
                 const agentIcon = p.agent_icon || agentAsset.icon;
+                const agentSub = agentAsset.unresolved
+                    ? "Agent resolving…"
+                    : `${agentAsset.name}${agentAsset.role ? ` · ${agentAsset.role}` : ""}`;
                 const pId = p.puuid || p.riot_id;
                 const isMatchMvp = pId && pId === matchMvpPuuid;
                 const isTeamMvp = pId && !isMatchMvp && pId === teamMvpPuuid;
@@ -2428,8 +2463,10 @@ function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
                 return `
                 <button type="button" class="detail-score-player ${p.is_self ? "is-self" : ""}" onclick="openPlayerProfile(decodeURIComponent('${clickId}'), decodeURIComponent('${clickPuuid}'))" title="Click to view ${escapeHtml(riotId)}'s profile">
                     <span class="detail-score-identity">
-                        <div class="detail-score-agent-icon-wrap">
-                            <img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" onerror="this.src='${agentAsset.icon}';">
+                        <div class="detail-score-agent-icon-wrap ${agentIcon ? "" : "is-empty"}">
+                            ${agentIcon
+                                ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" onerror="this.closest('.detail-score-agent-icon-wrap').classList.add('is-empty'); this.remove();">`
+                                : `<i class="fa-solid fa-user"></i>`}
                             ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="detail-score-role-icon" title="${agentAsset.role}">` : ''}
                         </div>
                         <span class="detail-score-names">
@@ -2439,7 +2476,7 @@ function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
                                 ${isMatchMvp ? '<span class="mvp-tag match-mvp" title="Match MVP"><i class="fa-solid fa-crown"></i> MVP</span>' : ''}
                                 ${isTeamMvp ? '<span class="mvp-tag team-mvp" title="Team MVP"><i class="fa-solid fa-star"></i> TEAM MVP</span>' : ''}
                             </strong>
-                            <small>${escapeHtml(agentAsset.name)} · ${escapeHtml(agentAsset.role)}</small>
+                            <small>${escapeHtml(agentSub)}</small>
                         </span>
                     </span>
                     <b><span class="kda-kills">${p.kills ?? 0}</span> / <span class="kda-deaths">${p.deaths ?? 0}</span> / <span class="kda-assists">${p.assists ?? 0}</span></b>
@@ -2555,8 +2592,10 @@ function openMatchDetail(index, source) {
             <div class="match-hero-overlay"></div>
             <div class="match-hero-content">
                 <div class="match-hero-left">
-                    <div class="match-hero-agent-portrait">
-                        <img src="${selfAgent.icon}" alt="${escapeHtml(selfAgent.name)}" onerror="this.src='${selfAgent.icon}';">
+                    <div class="match-hero-agent-portrait ${selfAgent.icon ? "" : "is-empty"}">
+                        ${selfAgent.icon
+                            ? `<img src="${selfAgent.icon}" alt="${escapeHtml(selfAgent.name)}" onerror="this.closest('.match-hero-agent-portrait').classList.add('is-empty'); this.remove();">`
+                            : `<i class="fa-solid fa-user"></i>`}
                     </div>
                     <div class="match-hero-meta">
                         <span class="match-hero-mode">${escapeHtml(m.mode || "Competitive")}</span>

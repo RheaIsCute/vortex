@@ -404,105 +404,133 @@ async def run_batch_account_check():
     await asyncio.to_thread(launcher.force_kill_riot_client)
     await asyncio.sleep(1.5)
 
-    for idx, acc in enumerate(to_check, start=1):
-        if not CHECK_PROGRESS["running"]:
-            break
+    # The whole scan runs under try/finally. An unhandled error in the login
+    # automation or the scraper used to propagate out of this background task
+    # and leave CHECK_PROGRESS["running"] stuck True forever - which froze the
+    # "Check Accounts" spinner in the UI with no way to clear it short of a
+    # restart. A per-account try keeps one bad row from aborting the batch.
+    was_cancelled = False
+    try:
+        for idx, acc in enumerate(to_check, start=1):
+            if not CHECK_PROGRESS["running"]:
+                was_cancelled = True
+                break
 
-        CHECK_PROGRESS["current"] = idx
-        CHECK_PROGRESS["account"] = acc["username"]
-        CHECK_PROGRESS["message"] = f"Checking {acc['username']} ({idx}/{len(to_check)})..."
+            CHECK_PROGRESS["current"] = idx
+            CHECK_PROGRESS["account"] = acc["username"]
+            CHECK_PROGRESS["message"] = f"Checking {acc['username']} ({idx}/{len(to_check)})..."
 
-        # 1. Login via pure keyboard
-        login_result = await asyncio.to_thread(
-            launcher.login_account,
-            acc["username"],
-            acc["password"],
-            custom_path if custom_path else None,
-            _stay_signed_in_pref()
-        )
-
-        # 2. Wait for the asynchronous UI worker and Riot's response. A fixed
-        # seven-second sleep used to expire before credential entry even began.
-        if login_result.get("success"):
-            check_result = await _wait_for_checked_account(acc["username"])
-        else:
-            check_result = {
-                "info": None,
-                "cancelled": False,
-                "invalid_credentials": False,
-                "message": login_result.get("message") or "The login could not be started.",
-            }
-        detected_info = check_result.get("info")
-
-        if check_result.get("cancelled"):
-            break
-
-        # 3. Save captured metadata, move banned/suspended accounts into the
-        # separate retained store, or leave inconclusive rows untouched.
-        if detected_info and detected_info.get("found"):
-            status = (detected_info.get("status") or "").upper()
-            if status in ("BANNED", "SUSPENDED"):
-                update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
-                update_payload["last_updated"] = datetime.now().isoformat()
-                db.update_account(acc["id"], update_payload)
-                CHECK_PROGRESS["verified"] += 1
-                db.move_to_banned(acc["id"])
-                CHECK_PROGRESS["message"] = f"Moved banned account to Banned Accounts: {acc['username']}"
-            else:
-                update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
-                update_payload["last_updated"] = datetime.now().isoformat()
-
-                # Automatically tag level >= 20 as Ranked and < 20 as Unrated
-                lvl = int(detected_info.get("level", 1) or 1)
-                if acc.get("tag") in ("Ranked", "Unrated", "Smurf", "", None):
-                    update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
-
-                db.update_account(acc["id"], update_payload)
-                CHECK_PROGRESS["verified"] += 1
-
-                # Scrape match history if display_name found
-                if detected_info.get("display_name"):
-                    scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
-                    stats = await scraper.fetch_account_stats(detected_info["display_name"], detected_info.get("region", "NA"))
-                    if stats.get("match_history"):
-                        db.update_account(acc["id"], {"match_history": stats["match_history"]})
-        else:
-            # A failed check is never permission to destroy saved credentials.
-            # Even Riot-confirmed invalid credentials may simply be a typo that
-            # the user wants to correct in Edit Account.
-            CHECK_PROGRESS["failed"] += 1
-            reason = check_result.get("message") or "The login could not be verified."
-            if check_result.get("invalid_credentials"):
-                CHECK_PROGRESS["message"] = (
-                    f"Credentials rejected for {acc['username']}; account kept for editing."
+            try:
+                # 1. Login via pure keyboard
+                login_result = await asyncio.to_thread(
+                    launcher.login_account,
+                    acc["username"],
+                    acc["password"],
+                    custom_path if custom_path else None,
+                    _stay_signed_in_pref()
                 )
-            else:
+
+                # 2. Wait for the asynchronous UI worker and Riot's response. A
+                # fixed seven-second sleep used to expire before credential
+                # entry even began.
+                if login_result.get("success"):
+                    check_result = await _wait_for_checked_account(acc["username"])
+                else:
+                    check_result = {
+                        "info": None,
+                        "cancelled": False,
+                        "invalid_credentials": False,
+                        "message": login_result.get("message") or "The login could not be started.",
+                    }
+                detected_info = check_result.get("info")
+
+                if check_result.get("cancelled"):
+                    was_cancelled = True
+                    break
+
+                # 3. Save captured metadata, move banned/suspended accounts into
+                # the separate retained store, or leave inconclusive rows alone.
+                if detected_info and detected_info.get("found"):
+                    status = (detected_info.get("status") or "").upper()
+                    if status in ("BANNED", "SUSPENDED"):
+                        update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+                        update_payload["last_updated"] = datetime.now().isoformat()
+                        db.update_account(acc["id"], update_payload)
+                        CHECK_PROGRESS["verified"] += 1
+                        db.move_to_banned(acc["id"])
+                        CHECK_PROGRESS["message"] = f"Moved banned account to Banned Accounts: {acc['username']}"
+                    else:
+                        update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+                        update_payload["last_updated"] = datetime.now().isoformat()
+
+                        # Automatically tag level >= 20 as Ranked and < 20 as Unrated
+                        lvl = int(detected_info.get("level", 1) or 1)
+                        if acc.get("tag") in ("Ranked", "Unrated", "Smurf", "", None):
+                            update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
+
+                        db.update_account(acc["id"], update_payload)
+                        CHECK_PROGRESS["verified"] += 1
+
+                        # Scrape match history if display_name found
+                        if detected_info.get("display_name"):
+                            scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
+                            stats = await scraper.fetch_account_stats(detected_info["display_name"], detected_info.get("region", "NA"))
+                            if stats.get("match_history"):
+                                db.update_account(acc["id"], {"match_history": stats["match_history"]})
+                else:
+                    # A failed check is never permission to destroy saved
+                    # credentials. Even Riot-confirmed invalid credentials may
+                    # simply be a typo to correct in Edit Account.
+                    CHECK_PROGRESS["failed"] += 1
+                    reason = check_result.get("message") or "The login could not be verified."
+                    if check_result.get("invalid_credentials"):
+                        CHECK_PROGRESS["message"] = (
+                            f"Credentials rejected for {acc['username']}; account kept for editing."
+                        )
+                    else:
+                        CHECK_PROGRESS["message"] = (
+                            f"Couldn't check {acc['username']}; account kept for retry. {reason}"
+                        )
+                    client_launcher.login_logger.warning(
+                        "[%s] batch check inconclusive; account retained: %s",
+                        acc["username"], reason,
+                    )
+            except Exception:
+                # One account blowing up (automation crash, scraper error) must
+                # not abort the rest of the batch or leave the scan wedged.
+                CHECK_PROGRESS["failed"] += 1
                 CHECK_PROGRESS["message"] = (
-                    f"Couldn't check {acc['username']}; account kept for retry. {reason}"
+                    f"Error while checking {acc['username']}; account kept, moving on."
                 )
-            client_launcher.login_logger.warning(
-                "[%s] batch check inconclusive; account retained: %s",
-                acc["username"], reason,
-            )
+                client_launcher.login_logger.exception(
+                    "[%s] batch check raised; account retained", acc["username"]
+                )
 
-        # 4. Clean sign out & cooling delay to avoid Riot rate-limits
-        await asyncio.to_thread(launcher.api_sign_out)
-        await asyncio.sleep(2.0)
+            # 4. Clean sign out & cooling delay to avoid Riot rate-limits
+            await asyncio.to_thread(launcher.api_sign_out)
+            await asyncio.sleep(2.0)
 
-        # Reset Riot Client process every 4 accounts to clear UI cache & memory
-        if idx % 4 == 0 and idx < len(to_check):
+            # Reset Riot Client process every 4 accounts to clear UI cache & memory
+            if idx % 4 == 0 and idx < len(to_check):
+                await asyncio.to_thread(launcher.force_kill_riot_client)
+                await asyncio.sleep(1.5)
+    finally:
+        # 5. Always: force close Riot Client and clear the running flag so the
+        # UI spinner stops no matter how the scan ended.
+        try:
             await asyncio.to_thread(launcher.force_kill_riot_client)
-            await asyncio.sleep(1.5)
-
-    # 5. Clean finish: force close Riot Client
-    await asyncio.to_thread(launcher.force_kill_riot_client)
-    was_cancelled = not CHECK_PROGRESS["running"]
-    CHECK_PROGRESS["running"] = False
-    if not was_cancelled:
-        CHECK_PROGRESS["message"] = (
-            f"Verification complete: {CHECK_PROGRESS['verified']} verified, "
-            f"{CHECK_PROGRESS['failed']} kept for retry. Riot Client closed."
-        )
+        except Exception:
+            client_launcher.login_logger.exception("batch check: final Riot Client close failed")
+        if not CHECK_PROGRESS["running"]:
+            was_cancelled = True
+        CHECK_PROGRESS["running"] = False
+        if was_cancelled:
+            CHECK_PROGRESS["message"] = "Verification cancelled. Riot Client closed."
+        else:
+            CHECK_PROGRESS["message"] = (
+                f"Verification complete: {CHECK_PROGRESS['verified']} verified, "
+                f"{CHECK_PROGRESS['failed']} kept for retry. Riot Client closed."
+            )
 
 
 @app.get("/api/accounts")
