@@ -1418,15 +1418,6 @@ class GameConfigBorderlessRequest(BaseModel):
     all_accounts: bool = False        # set every account that has config here
 
 
-class OverlaySettingsRequest(BaseModel):
-    overlay_enabled: Optional[bool] = None
-
-
-class OverlaySwitchRequest(BaseModel):
-    launch_game: bool = True
-    confirm_close_game: bool = False
-
-
 class TelemetryEventRequest(BaseModel):
     """One GEP info update from the no-UI Vortex Telemetry extension."""
     match_id: str
@@ -2818,7 +2809,7 @@ def get_live_snapshot(force: bool = False) -> Dict[str, Any]:
     if not force and _LIVE_SNAPSHOT["data"] and (now - _LIVE_SNAPSHOT["built_at"]) < _LIVE_SNAPSHOT_TTL:
         return _LIVE_SNAPSHOT["data"]
 
-    # Main UI, overlay and manual refreshes can arrive together.  Only one
+    # Main UI, the Live Aim HUD and manual refreshes can arrive together.  Only one
     # caller pays for the Riot request fan-out; everyone else re-checks the
     # freshly populated cache after acquiring the lock.
     with _LIVE_SNAPSHOT_LOCK:
@@ -3158,87 +3149,6 @@ async def live_launch():
 @app.get("/api/live/launch-state")
 async def live_launch_state():
     return valorant_client.launch_state()
-
-
-def _overlay_settings_view(settings: Dict[str, str]) -> Dict[str, bool]:
-    return {
-        "overlay_enabled": settings.get("overlay_enabled", "1") != "0",
-    }
-
-
-@app.get("/api/overlay/state")
-async def overlay_state():
-    """
-    Everything the Quick Panel needs in one call: the live session, the
-    stored roster, and the settings its toggles reflect. Reuses the same
-    cached snapshot the main dashboard polls, so having both open at once
-    doesn't double the calls out to the Riot Client.
-    """
-    live = await asyncio.to_thread(get_live_snapshot)
-    accounts = db.get_all_accounts()
-    settings = db.get_settings()
-    return {"live": live, "accounts": accounts, "settings": _overlay_settings_view(settings)}
-
-
-@app.post("/api/overlay/settings")
-async def update_overlay_settings(req: OverlaySettingsRequest):
-    """Saves the Quick Panel's own toggles."""
-    updates: Dict[str, str] = {}
-    if req.overlay_enabled is not None:
-        updates["overlay_enabled"] = "1" if req.overlay_enabled else "0"
-    if updates:
-        db.update_settings(updates)
-
-    return {"success": True, "settings": _overlay_settings_view(db.get_settings())}
-
-
-@app.post("/api/overlay/accounts/{account_id}/switch")
-async def overlay_switch_account(account_id: int, req: OverlaySwitchRequest, background_tasks: BackgroundTasks):
-    """
-    The Quick Panel's account switcher: logs the target account in - closing
-    a running game first, exactly like Play already does - and optionally
-    starts VALORANT once the login lands.
-
-    A game running under a different account needs confirm_close_game set.
-    The panel's own UI already makes the user confirm that before this is
-    ever called; this check is what keeps a stray or scripted request from
-    closing a live match without it.
-    """
-    account = db.get_account_by_id(account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    status = (account.get("status") or "PLAYABLE").upper()
-    if status in ("BANNED", "SUSPENDED"):
-        return {"success": False, "message": "This account can't be switched to."}
-
-    running = await asyncio.to_thread(launcher.is_valorant_running)
-    if running:
-        live = await asyncio.to_thread(get_live_snapshot)
-        already_active = live.get("account_id") == account_id
-        if not already_active and not req.confirm_close_game:
-            return {"success": False, "message": "VALORANT is running - confirm to close it and switch."}
-
-    settings = db.get_settings()
-    client_path = settings.get("riot_client_path", "") or await asyncio.to_thread(launcher.detect_riot_client_path)
-
-    result = await asyncio.to_thread(
-        launcher.login_account, account["username"], account["password"],
-        client_path or None, _stay_signed_in_pref()
-    )
-    if not result.get("success"):
-        return {"success": False, "message": result.get("message") or "Login failed."}
-
-    db.update_account(account_id, {"last_login": datetime.now().isoformat()})
-    note_account_login(account_id)
-    invalidate_live_snapshot()
-    background_tasks.add_task(background_auto_detect_and_link, account_id)
-
-    label = account.get("display_name") or account["username"]
-    if req.launch_game:
-        background_tasks.add_task(background_login_then_play, account_id)
-        return {"success": True, "message": f"Switching to {label}, then starting VALORANT..."}
-    return {"success": True, "message": f"Switching to {label}..."}
 
 
 async def _launch_game_for_current_session() -> None:

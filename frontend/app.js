@@ -220,15 +220,11 @@ const DOM = {
     settingsForceBorderless: document.getElementById("settings-force-borderless"),
     settingsStaySignedIn: document.getElementById("settings-stay-signed-in"),
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
-    settingsOverlayEnabled: document.getElementById("settings-overlay-enabled"),
-    settingsOverlayHotkey: document.getElementById("settings-overlay-hotkey"),
     settingsLiveHudEnabled: document.getElementById("settings-live-hud-enabled"),
     settingsOverwolfEnabled: document.getElementById("settings-overwolf-enabled"),
     settingsValorantTrackerEnabled: document.getElementById("settings-valorant-tracker-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
-    overlayHotkeyClear: document.getElementById("overlay-hotkey-clear"),
-    overlayHotkeyHelp: document.getElementById("overlay-hotkey-help"),
     btnBorderlessAll: document.getElementById("btn-borderless-all"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
@@ -747,7 +743,6 @@ function initEventListeners() {
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
     if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
     if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.addEventListener("change", updateTelemetryControls);
-    bindHotkeyRecorder();
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -2723,135 +2718,6 @@ function openTrackerUrl(displayName) {
 // SETTINGS & BACKUP
 // ==========================================================================
 
-/**
- * Same modifier+key grammar the backend's parse_hotkey() enforces
- * (backend/overlay_hotkey.py) - kept in sync by hand since it's a small,
- * stable rule set. Used only for instant feedback here; the backend is what
- * actually decides whether a combination can be registered.
- */
-function validateOverlayHotkey(spec) {
-    const trimmed = (spec || "").trim();
-    if (!trimmed) return "Enter a key combination, e.g. CTRL+SHIFT+F8.";
-    const parts = trimmed.toUpperCase().split(/[+\s]+/).filter(Boolean);
-    const mods = new Set(["CTRL", "CONTROL", "SHIFT", "ALT", "WIN", "WINDOWS", "META", "SUPER"]);
-    const named = new Set([
-        "SPACE", "TAB", "ESC", "ESCAPE", "ENTER", "RETURN", "BACKSPACE",
-        "INSERT", "DELETE", "DEL", "HOME", "END", "PAGEUP", "PAGEDOWN",
-        "UP", "DOWN", "LEFT", "RIGHT", "PRINTSCREEN", "PAUSE"
-    ]);
-    for (let n = 1; n <= 24; n++) named.add(`F${n}`);
-
-    let hasModifier = false, key = null;
-    for (const part of parts) {
-        if (mods.has(part)) { hasModifier = true; continue; }
-        if (key !== null) return `"${part}" isn't a modifier and a key was already given.`;
-        key = part;
-    }
-    if (key === null) return "Add a key after the modifiers, e.g. CTRL+SHIFT+F8.";
-    if (!hasModifier) return "Add at least one modifier (CTRL, ALT, SHIFT or WIN) so this doesn't fire on plain typing.";
-    if (!(named.has(key) || (key.length === 1 && /^[A-Z0-9]$/.test(key)))) {
-        return `"${key}" isn't a key this can bind - use a letter, digit, or F1-F24.`;
-    }
-    return null;
-}
-
-const DEFAULT_OVERLAY_HOTKEY = "SHIFT+5";
-
-/**
- * Turns the shortcut box into a recorder: focus it, press the combination,
- * and it writes what you actually pressed. Typing the string by hand meant
- * guessing Vortex's spelling of every key ("WIN" or "META"? "ESC" or
- * "ESCAPE"?) and only finding out it was wrong on the next launch.
- *
- * Reads event.code rather than event.key, because with a modifier held the
- * printable value changes - SHIFT+5 arrives as "%", which is not a key the
- * backend can bind.
- */
-function bindHotkeyRecorder() {
-    const input = DOM.settingsOverlayHotkey;
-    if (!input) return;
-
-    if (DOM.overlayHotkeyClear) {
-        DOM.overlayHotkeyClear.addEventListener("click", () => {
-            input.value = DEFAULT_OVERLAY_HOTKEY;
-            renderOverlayHotkeyValidity();
-        });
-    }
-
-    input.addEventListener("focus", () => {
-        input.classList.add("is-recording");
-        input.dataset.previous = input.value;
-        input.value = "";
-        input.placeholder = "Press your combination…";
-        renderOverlayHotkeyValidity();
-    });
-
-    input.addEventListener("blur", () => {
-        input.classList.remove("is-recording");
-        input.placeholder = "Click, then press your keys";
-        // A combination that was never completed shouldn't wipe the old one.
-        if (validateOverlayHotkey(input.value)) {
-            input.value = input.dataset.previous || DEFAULT_OVERLAY_HOTKEY;
-        }
-        renderOverlayHotkeyValidity();
-    });
-
-    input.addEventListener("keydown", (e) => {
-        // Tab has to keep moving focus, or the box becomes a keyboard trap.
-        if (e.key === "Tab") return;
-        e.preventDefault();
-
-        if (e.key === "Escape") { input.blur(); return; }
-
-        const parts = [];
-        if (e.ctrlKey) parts.push("CTRL");
-        if (e.altKey) parts.push("ALT");
-        if (e.shiftKey) parts.push("SHIFT");
-        if (e.metaKey) parts.push("WIN");
-
-        const key = hotkeyNameFromCode(e.code, e.key);
-        // Modifier-only so far: show it building up, but don't commit.
-        input.value = key ? [...parts, key].join("+") : parts.join("+");
-        renderOverlayHotkeyValidity();
-        if (key && parts.length) input.blur();
-    });
-}
-
-/** event.code -> the key spelling the backend binder expects, or "". */
-function hotkeyNameFromCode(code, key) {
-    if (!code) return "";
-    let m;
-    if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
-    if ((m = /^Digit([0-9])$/.exec(code))) return m[1];
-    if ((m = /^Numpad([0-9])$/.exec(code))) return m[1];
-    if ((m = /^(F([1-9]|1[0-9]|2[0-4]))$/.exec(code))) return m[1];
-
-    const named = {
-        Space: "SPACE", Tab: "TAB", Escape: "ESC", Enter: "ENTER",
-        NumpadEnter: "ENTER", Backspace: "BACKSPACE", Insert: "INSERT",
-        Delete: "DELETE", Home: "HOME", End: "END", PageUp: "PAGEUP",
-        PageDown: "PAGEDOWN", ArrowUp: "UP", ArrowDown: "DOWN",
-        ArrowLeft: "LEFT", ArrowRight: "RIGHT", PrintScreen: "PRINTSCREEN",
-        Pause: "PAUSE",
-    };
-    if (named[code]) return named[code];
-
-    // Bare modifiers are not the key, they're the prefix.
-    if (/^(Control|Alt|Shift|Meta|OS)/.test(code) ||
-        ["Control", "Alt", "Shift", "Meta"].includes(key)) return "";
-    return "";
-}
-
-function renderOverlayHotkeyValidity() {
-    if (!DOM.settingsOverlayHotkey || !DOM.overlayHotkeyHelp) return;
-    const problem = validateOverlayHotkey(DOM.settingsOverlayHotkey.value);
-    DOM.settingsOverlayHotkey.classList.toggle("is-invalid", !!problem);
-    DOM.overlayHotkeyHelp.textContent = problem ||
-        "Click the box and press the combination you want. Applies on next launch.";
-    DOM.overlayHotkeyHelp.classList.toggle("is-error", !!problem);
-    return !problem;
-}
-
 function updateTelemetryControls() {
     if (!DOM.settingsValorantTrackerEnabled) return;
     const overwolfEnabled = !!DOM.settingsOverwolfEnabled?.checked;
@@ -2862,8 +2728,6 @@ function updateTelemetryControls() {
 function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
-    if (DOM.settingsOverlayEnabled) DOM.settingsOverlayEnabled.checked = (state.settings.overlay_enabled || "1") !== "0";
-    if (DOM.settingsOverlayHotkey) DOM.settingsOverlayHotkey.value = state.settings.overlay_hotkey || DEFAULT_OVERLAY_HOTKEY;
     if (DOM.settingsLiveHudEnabled) DOM.settingsLiveHudEnabled.checked = (state.settings.live_hud_enabled || "0") !== "0";
     if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.checked = state.settings.overwolf_enabled === "1";
     if (DOM.settingsValorantTrackerEnabled) DOM.settingsValorantTrackerEnabled.checked = state.settings.valorant_tracker_enabled === "1";
@@ -2874,7 +2738,6 @@ function openSettingsModal() {
         if (state.settings.post_valorant_launch_default_path)
             DOM.settingsPostValorantPath.placeholder = state.settings.post_valorant_launch_default_path;
     }
-    renderOverlayHotkeyValidity();
     if (DOM.settingsAppVersion) {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
@@ -2933,17 +2796,10 @@ async function openLoginLog() {
 }
 
 async function saveSettings() {
-    if (DOM.settingsOverlayHotkey && !renderOverlayHotkeyValidity()) {
-        showToast("Fix the Quick Panel shortcut before saving.", "error");
-        return;
-    }
-
     const payload = {
         settings: {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
-            overlay_enabled: DOM.settingsOverlayEnabled?.checked ? "1" : "0",
-            overlay_hotkey: (DOM.settingsOverlayHotkey?.value || DEFAULT_OVERLAY_HOTKEY).trim().toUpperCase(),
             live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0",
             overwolf_enabled: DOM.settingsOverwolfEnabled?.checked ? "1" : "0",
             valorant_tracker_enabled: (DOM.settingsOverwolfEnabled?.checked && DOM.settingsValorantTrackerEnabled?.checked) ? "1" : "0",

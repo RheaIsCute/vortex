@@ -224,9 +224,6 @@ class Database:
                 # Start VALORANT by itself once a plain Login lands. Off by
                 # default - Login and Play stay distinct actions unless asked.
                 ("auto_launch_after_login", "0"),
-                # Native quick panel, summoned globally by the hotkey below.
-                ("overlay_enabled", "1"),
-                ("overlay_hotkey", "SHIFT+5"),
                 # Passive top-right accuracy HUD.  Kept opt-in because it is
                 # intentionally always visible while a match is running.
                 ("live_hud_enabled", "0"),
@@ -245,18 +242,14 @@ class Database:
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-            # Removed settings-profile/preset feature and its legacy automatic
-            # Overwolf switch. New telemetry preferences above are opt-in.
+            # Removed features and their orphaned settings: the settings-profile
+            # /preset feature, its legacy automatic Overwolf switch, and the
+            # Quick Panel overlay with its global hotkey.
             cursor.execute(
                 "DELETE FROM settings WHERE key IN "
-                "('settings_autoapply', 'settings_profile_account_id', 'overwolf_auto')"
+                "('settings_autoapply', 'settings_profile_account_id', 'overwolf_auto', "
+                "'overlay_enabled', 'overlay_hotkey')"
             )
-
-            # (A migration used to rewrite SHIFT+5 to CTRL+SHIFT+F8 here. It is
-            # gone because SHIFT+5 is the wanted default again, and a migration
-            # that rewrites one specific value can never be told apart from the
-            # user deliberately choosing it - it just undid their choice on
-            # every startup.)
 
             # Migrate any legacy 'Smurf' tags to 'Ranked' (if level >= 20) or 'Unrated'
             cursor.execute("UPDATE accounts SET tag = 'Ranked' WHERE UPPER(tag) = 'SMURF' AND level >= 20")

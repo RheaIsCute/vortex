@@ -74,15 +74,11 @@ else:
     sys.path.insert(0, BASE_DIR)
 
 from backend.server import app, db, in_match_now
-from backend.overlay_hotkey import OverlayHotkey
 from backend.client_launcher import is_valorant_foreground
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 
-OVERLAY_WIDTH = 430
-OVERLAY_HEIGHT = 640
-OVERLAY_MARGIN = 24
-OVERLAY_TITLE = "Vortex Quick Panel"
+HUD_MARGIN = 24
 LIVE_HUD_WIDTH = 300
 LIVE_HUD_HEIGHT = 188
 LIVE_HUD_TITLE = "Vortex Live Aim HUD"
@@ -155,44 +151,6 @@ def apply_window_icon_loop():
                 pass
 
 
-def _overlay_start_position():
-    """Top-right corner of the primary monitor, with a small margin - the
-    usual spot for a quick-access panel that shouldn't sit on top of
-    whatever's centered on screen (the game, a browser, etc)."""
-    try:
-        screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        return max(0, screen_w - OVERLAY_WIDTH - OVERLAY_MARGIN), OVERLAY_MARGIN
-    except Exception:
-        return None, None
-
-
-def _create_overlay_window():
-    """
-    The Quick Panel: a small, frameless, always-on-top window for fast
-    account switching without going through the full app window. Created
-    hidden - the global hotkey below is what shows it.
-
-    This is a second ordinary webview window, not an in-game overlay: nothing
-    here touches VALORANT's process, injects into it, or draws over its
-    surface. It floats above whatever else is on screen the same way any
-    always-on-top desktop app does.
-    """
-    x, y = _overlay_start_position()
-    return webview.create_window(
-        title=OVERLAY_TITLE,
-        url=f"{URL}/static/overlay.html",
-        width=OVERLAY_WIDTH,
-        height=OVERLAY_HEIGHT,
-        x=x, y=y,
-        min_size=(390, 520),
-        background_color="#06040b",
-        frameless=True,
-        easy_drag=True,
-        on_top=True,
-        hidden=True,
-    )
-
-
 def _create_live_hud_window():
     """Small passive upper-right HUD for the live aim trace.
 
@@ -202,7 +160,7 @@ def _create_live_hud_window():
     """
     try:
         screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        x = max(0, screen_w - LIVE_HUD_WIDTH - OVERLAY_MARGIN)
+        x = max(0, screen_w - LIVE_HUD_WIDTH - HUD_MARGIN)
     except Exception:
         x = None
     return webview.create_window(
@@ -211,7 +169,7 @@ def _create_live_hud_window():
         width=LIVE_HUD_WIDTH,
         height=LIVE_HUD_HEIGHT,
         x=x,
-        y=OVERLAY_MARGIN,
+        y=HUD_MARGIN,
         min_size=(260, 150),
         background_color="#0b0a15",
         frameless=True,
@@ -389,170 +347,6 @@ def _make_live_hud_controller(hud_window):
     return setLiveHudEnabled
 
 
-def _make_overlay_controller(overlay_window, main_window):
-    """
-    Wires the Quick Panel's own Close button / Escape key and its "Full app"
-    button, and returns the toggle callback for the global hotkey.
-
-    All three routes into showing/hiding the panel - the hotkey, the in-panel
-    Close button, and Escape - have to agree on whether it's currently open.
-    Before this they didn't: the hotkey tracked its own visible/hidden flag,
-    while the panel's Close button and Escape key called into a JS bridge
-    (window.pywebview.api.hideOverlay) that nothing on the Python side ever
-    exposed, so both silently did nothing and the panel could only be
-    dismissed by pressing the hotkey again. Routing all three through the
-    same state here is what keeps them in sync.
-    """
-    state = {"visible": False, "hwnd": 0}
-
-    def prepare_native_window():
-        """Keep the panel topmost while allowing it to receive mouse input."""
-        hwnd = state["hwnd"] or win32gui.FindWindow(None, OVERLAY_TITLE)
-        if not hwnd:
-            return 0
-        state["hwnd"] = hwnd
-        try:
-            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            # NOACTIVATE kept VALORANT focused and trapped its cursor. Opening
-            # the quick panel is an intentional focus change, so it must be a
-            # normal interactive window for buttons and inputs to work.
-            # The quick panel is the interactive exception to the desktop HUD.
-            # Explicitly clear every click-through/non-activating flag so a
-            # previous HUD style or WebView recreation can never make its
-            # buttons and inputs swallow mouse events.
-            ex_style = (
-                (ex_style | WS_EX_TOOLWINDOW)
-                & ~WS_EX_NOACTIVATE
-                & ~WS_EX_TRANSPARENT
-                & ~WS_EX_LAYERED
-                & ~WS_EX_APPWINDOW
-            )
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
-            win32gui.SetWindowPos(
-                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_FRAMECHANGED,
-            )
-        except Exception:
-            _startup_log("prepare_native_window failed:\n" + traceback.format_exc())
-            return 0
-        return hwnd
-
-    def focus_overlay(hwnd):
-        """Focus only the panel, without activating the shell/taskbar."""
-        user32 = ctypes.windll.user32
-        current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
-        foreground = user32.GetForegroundWindow()
-        foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
-        overlay_thread = user32.GetWindowThreadProcessId(hwnd, None)
-        attached = []
-        try:
-            # The hotkey callback has its own Win32 message thread. Attach it
-            # briefly to both the game's foreground queue and WebView's UI
-            # queue so Windows permits a direct focus transfer to the panel.
-            for thread_id in {foreground_thread, overlay_thread}:
-                if thread_id and thread_id != current_thread:
-                    if user32.AttachThreadInput(current_thread, thread_id, True):
-                        attached.append(thread_id)
-            user32.AllowSetForegroundWindow(-1)
-            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-            win32gui.SetWindowPos(
-                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
-            )
-            win32gui.BringWindowToTop(hwnd)
-            user32.SetForegroundWindow(hwnd)
-            user32.SetActiveWindow(hwnd)
-            user32.SetFocus(hwnd)
-        finally:
-            for thread_id in reversed(attached):
-                user32.AttachThreadInput(current_thread, thread_id, False)
-
-    def showOverlay():
-        state["visible"] = True
-        try:
-            hwnd = prepare_native_window()
-            if hwnd:
-                focus_overlay(hwnd)
-            else:
-                overlay_window.show()
-                hwnd = prepare_native_window()
-                if hwnd:
-                    focus_overlay(hwnd)
-        except Exception:
-            _startup_log("showOverlay failed:\n" + traceback.format_exc())
-
-    def hideOverlay():
-        state["visible"] = False
-        try:
-            overlay_window.hide()
-        except Exception:
-            pass
-
-    def showMainApp():
-        # Restore and show the main window, then bring it to the foreground natively
-        try:
-            main_window.restore()
-        except Exception:
-            pass
-        try:
-            main_window.show()
-        except Exception:
-            pass
-        try:
-            main_hwnd = win32gui.FindWindow(None, "Vortex | Valorant Account Manager")
-            if main_hwnd and win32gui.IsWindow(main_hwnd):
-                # Main WebView must never inherit overlay click-through flags.
-                ex_style = win32gui.GetWindowLong(main_hwnd, win32con.GWL_EXSTYLE)
-                ex_style = (
-                    (ex_style | WS_EX_APPWINDOW)
-                    & ~WS_EX_TRANSPARENT
-                    & ~WS_EX_LAYERED
-                    & ~WS_EX_NOACTIVATE
-                )
-                win32gui.SetWindowLong(main_hwnd, win32con.GWL_EXSTYLE, ex_style)
-                win32gui.ShowWindow(main_hwnd, win32con.SW_RESTORE)
-                win32gui.SetWindowPos(
-                    main_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
-                )
-                win32gui.BringWindowToTop(main_hwnd)
-                ctypes.windll.user32.AllowSetForegroundWindow(-1)
-                ctypes.windll.user32.SetForegroundWindow(main_hwnd)
-        except Exception:
-            pass
-
-    overlay_window.expose(hideOverlay, showMainApp)
-
-    def toggle():
-        hideOverlay() if state["visible"] else showOverlay()
-
-    return toggle
-
-
-def _start_overlay_hotkey(toggle):
-    """
-    Arms the global shortcut that shows/hides the Quick Panel, reading the
-    combination from Settings (default CTRL+SHIFT+F8). Disabled entirely
-    when the user has turned the overlay off.
-
-    A hotkey that's already claimed by something else on the system fails to
-    register - that's logged and left off rather than fought over or retried,
-    since there's nothing productive to do about a conflicting global binding
-    from inside this app.
-    """
-    settings = db.get_settings()
-    if settings.get("overlay_enabled", "1") == "0":
-        return None
-
-    spec = settings.get("overlay_hotkey", "SHIFT+5") or "SHIFT+5"
-    hotkey = OverlayHotkey()
-    error = hotkey.start(spec, toggle)
-    if error:
-        print(f"[Vortex] Overlay hotkey not armed: {error}")
-        return None
-    return hotkey
-
-
 def main():
     _startup_log("main entered")
     # Start server in background thread
@@ -583,12 +377,9 @@ def main():
             easy_drag=True
         )
         _startup_log("main WebView created")
-        overlay_window = _create_overlay_window()
-        _startup_log("hidden Quick Panel WebView created")
         hud_enabled_at_start = db.get_settings().get("live_hud_enabled", "0") != "0"
         live_hud_window = _create_live_hud_window() if hud_enabled_at_start else None
         _startup_log("Live Aim HUD WebView " + ("created" if live_hud_window else "skipped (disabled)"))
-        toggle_overlay = _make_overlay_controller(overlay_window, window)
         if live_hud_window:
             set_live_hud_enabled = _make_live_hud_controller(live_hud_window)
         else:
@@ -604,19 +395,14 @@ def main():
             def _restore_live_hud_after_load(*_args):
                 set_live_hud_enabled(True)
             live_hud_window.events.loaded += _restore_live_hud_after_load
-        _start_overlay_hotkey(toggle_overlay)
-        _startup_log("overlay controller, Live Aim HUD, and hotkey initialized")
+        _startup_log("Live Aim HUD initialized")
 
         def _on_main_closing():
             # pywebview keeps running as long as any window - including the
-            # hidden Quick Panel - still exists, so closing just the main
+            # hidden Live Aim HUD - still exists, so closing just the main
             # window would otherwise leave the app alive with nothing visible
             # to bring it back with. Closing the main window is "quit Vortex"
             # - everything else has to go down with it.
-            try:
-                overlay_window.destroy()
-            except Exception:
-                pass
             if live_hud_window:
                 try:
                     live_hud_window.destroy()
