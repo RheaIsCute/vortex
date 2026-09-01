@@ -69,11 +69,19 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
         styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-        # 1. Start-a-Match slot has both the queue CTA and a Play alternative
+        # 1. Start-a-Match slot: queue CTA + the single Play VALORANT action.
         self.assertIn('id="btn-start-ranked"', index_html)
         self.assertIn('id="btn-side-play"', index_html)
         self.assertIn("renderSidePlayButton", app_js)
-        self.assertIn("valorantNotRunning", app_js)
+        # State is driven by the live snapshot's process flag, one source only.
+        self.assertIn("const gameRunning = !!live.valorant_running", app_js)
+        # Closed state shows no "VALORANT isn't running / Press PLAY" card.
+        self.assertNotIn("Press PLAY to start the game first", app_js)
+        self.assertNotIn('ctaTitle = "VALORANT isn\'t running"', app_js)
+        # Header PLAY button is retired (kept hidden).
+        self.assertIn("DOM.btnDashPlay.hidden = true", app_js)
+        # [hidden] must beat the button's own display so exactly one shows.
+        self.assertIn(".btn-ranked-cta[hidden]", styles_css)
 
         # 2. Insta-lock agent switch re-arms the backend and confirms
         self.assertIn("Autolock updated to", app_js)
@@ -96,32 +104,39 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
         styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-        # 1. One shared match-row component, used by both entry points.
+        # 1. ONE shared match-row component for every entry point.
         self.assertIn("function matchCardHtml(", app_js)
         self.assertIn('matchCardHtml(m, i, "account")', app_js)
         self.assertIn('matchCardHtml(m, i, "dashboard")', app_js)
+        self.assertIn('matchCardHtml(m, i, "profile")', app_js)
 
-        # 2. The old duplicated dashboard-only match markup is gone.
-        self.assertNotIn("stat-match-kda-wrap", app_js)
-        self.assertNotIn("stat-match-details-row", app_js)
-        self.assertNotIn(".stat-match ", styles_css)
-        self.assertNotIn(".stat-match-", styles_css)
+        # 2. Every older per-entry-point match-row implementation is gone.
+        for dead in ("stat-match", "detail-history-row", "detail-history-inner",
+                     "detail-kda-stat", "detail-kdr-badge", "detail-outcome-pill",
+                     "match-agent-section", "match-stats-section", "match-card-inner"):
+            self.assertNotIn(dead, app_js, f"{dead} still in app.js")
+            self.assertNotIn(dead, styles_css, f"{dead} still in styles.css")
 
-        # 3. A single date helper, with the Account-Manager fallback ("Recent").
+        # 3. The row is one fixed-column grid (not floating flex sections).
+        card_block = styles_css.split("\n.match-card {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("display: grid", card_block)
+        self.assertIn("grid-template-columns:", card_block)
+
+        # 4. A single date helper, with the Account-Manager fallback ("Recent").
         self.assertIn("function matchDateLabel(", app_js)
         self.assertIn('"Recent"', app_js)
-        # The detail modal reads the same helper, not a raw field.
         self.assertNotIn('m.game_date || "Recent"', app_js)
 
-        # 4. The map splash must not sit under the stats: it is a low-opacity
-        #    layer behind a near-opaque scrim, and stat values are light, so a
-        #    bright map never washes out the numbers or the date.
-        card_block = styles_css.split(".match-card {", 1)[1].split("\n}", 1)[0]
+        # 5. Map art is a faint layer behind a near-opaque scrim; stat values
+        #    are light so a bright map never washes them out.
         self.assertNotIn("background-image: var(--map-splash)", card_block)
-        before_block = styles_css.split(".match-card::before {", 1)[1].split("}", 1)[0]
-        self.assertIn("opacity: 0.35", before_block)
-        mask_block = styles_css.split(".match-card-bg-mask {", 1)[1].split("}", 1)[0]
-        self.assertIn("rgba(13, 17, 23, 0.82)", mask_block)  # right edge stays dark
-        # Missing per-match combat data shows a dash, not a misleading "0 / 0 / 0".
-        self.assertIn('const hasCombat =', app_js)
+        splash_block = styles_css.split(".mh-splash {", 1)[1].split("}", 1)[0]
+        self.assertIn("opacity: 0.28", splash_block)
+        scrim_block = styles_css.split(".mh-scrim {", 1)[1].split("}", 1)[0]
+        self.assertIn("rgba(13, 17, 23, 0.86)", scrim_block)  # far-right stays dark
+        val_block = styles_css.split(".mh-stat-val {", 1)[1].split("}", 1)[0]
+        self.assertIn("color: #fff", val_block)
+
+        # 6. Missing combat data shows a dash, not a misleading "0 / 0 / 0".
+        self.assertIn("const hasCombat =", app_js)
         self.assertIn('"—"', app_js)

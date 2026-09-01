@@ -2414,73 +2414,97 @@ function matchDateLabel(m) {
     return "Recent";
 }
 
-/** One match row - the shared component for both entry points. */
+/**
+ * A short "Aug 30, 2026" form of the same date, for narrow layouts. Parses the
+ * full `game_date` string (or the epoch) - it does NOT introduce a second date
+ * source, just a compact rendering of the one we already have.
+ */
+function matchDateShort(m) {
+    const full = matchDateLabel(m);
+    if (full === "Recent") return "Recent";
+    // "Weekday, Month D, YYYY h:mm AM" -> "Mon D, YYYY"
+    const mo = full.match(/([A-Za-z]+) (\d{1,2}), (\d{4})/);
+    if (mo) return `${mo[1].slice(0, 3)} ${mo[2]}, ${mo[3]}`;
+    const millis = Number(m && (m.started_at || m.game_start_millis) || 0);
+    if (millis > 0) {
+        const d = new Date(millis);
+        if (!isNaN(d)) return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
+    return full;
+}
+
+/**
+ * One match row - the single shared component for every match-history entry
+ * point (Account Manager modal, Dashboard / Live Stats, player-profile lookup).
+ * One fixed-column grid so the same match reads identically everywhere:
+ *   [agent] [map + date] [result] [K/D/A] [KD] [HS%] [>]
+ */
 function matchCardHtml(m, i, source) {
     const outcome = matchOutcome(m);
     const mapAsset = ValorantAssets.getMap(m.map);
     const agentAsset = ValorantAssets.getAgent(m.agent || m.character);
     const agentIcon = m.agent_icon || agentAsset.icon;
+    const agentName = agentAsset.unresolved ? "Agent" : agentAsset.name;
 
-    // Some sources (a degraded scrape, a placement/TDM match) carry the map,
-    // agent and result but no per-round combat line. Show a dash rather than a
-    // misleading string of zeros.
-    const hasCombat = m.kills != null || m.deaths != null || m.kdr != null || m.kd != null;
-    const kdrRaw = m.kdr ?? m.kd ?? (m.deaths != null ? m.kills / Math.max(1, m.deaths || 1) : null);
+    // A degraded scrape (wrong region, unauthenticated key, some TDM rows) can
+    // return the map/agent/result but an all-zero combat line and an empty
+    // date. Treat "every combat number is zero/absent" as no data and show a
+    // dash rather than a misleading "0 / 0 / 0".
+    const k = Number(m.kills || 0), d = Number(m.deaths || 0), a = Number(m.assists || 0);
+    const kdrGiven = m.kdr != null || m.kd != null;
+    const hasCombat = kdrGiven || k > 0 || d > 0 || a > 0;
+    const kdrRaw = m.kdr ?? m.kd ?? (hasCombat ? k / Math.max(1, d) : null);
     const kdrVal = kdrRaw != null ? Number(kdrRaw).toFixed(2) : "—";
-    const kdrClass = kdrVal === "—" ? "is-negative"
+    const kdrClass = kdrVal === "—" ? "is-neutral"
         : (kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative"));
-    const kda = hasCombat ? `${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}` : "—";
+    const kda = hasCombat ? `${k} / ${d} / ${a}` : "—";
     const hsRaw = m.hs_pct ?? m.hs;
-    const hsPct = hsRaw != null ? `${hsRaw}%` : "—";
+    const hsPct = !hasCombat ? "—" : `${hsRaw != null ? hsRaw : 0}%`;
     const score = m.placement ? `#${m.placement}`
         : (m.rounds_won != null || m.rounds_lost != null ? `${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}` : "");
+    const mode = `${m.mode || "Competitive"}${m.surrendered ? " · Surr." : ""}`;
 
     return `
         <button class="match-card ${outcome.cls}" style="--i:${i}; --map-splash: url('${mapAsset.splash}');" type="button" onclick="openMatchDetail(${i}, '${source}')" title="Open full match details">
-            <div class="match-card-bg-mask"></div>
-            <div class="match-card-inner">
-                <div class="match-agent-section">
-                    <div class="match-agent-avatar-wrap ${agentIcon ? "" : "is-empty"}">
-                        ${agentIcon
-                            ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.closest('.match-agent-avatar-wrap').classList.add('is-empty'); this.remove();">`
-                            : `<span class="match-agent-avatar is-placeholder"><i class="fa-solid fa-user"></i></span>`}
-                        ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="match-role-badge" title="${agentAsset.role}">` : ''}
-                    </div>
-                    <div class="match-agent-info">
-                        <h4>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)}</h4>
-                        <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}${m.surrendered ? ' · Surrender' : ''}</span>
-                    </div>
-                </div>
+            <span class="mh-splash" aria-hidden="true"></span>
+            <span class="mh-scrim" aria-hidden="true"></span>
+            <span class="mh-cell mh-agent">
+                <span class="mh-avatar ${agentIcon ? "" : "is-empty"}">
+                    ${agentIcon
+                        ? `<img src="${agentIcon}" alt="${escapeHtml(agentName)}" onerror="this.closest('.mh-avatar').classList.add('is-empty'); this.remove();">`
+                        : `<i class="fa-solid fa-user"></i>`}
+                    ${agentAsset.roleIcon ? `<img class="mh-role" src="${agentAsset.roleIcon}" alt="" title="${escapeHtml(agentAsset.role)}">` : ""}
+                </span>
+                <span class="mh-agent-text">
+                    <span class="mh-agent-name">${escapeHtml(agentName)}</span>
+                    <span class="mh-mode">${escapeHtml(mode)}</span>
+                </span>
+            </span>
 
-                <div class="match-map-section">
-                    <span class="match-map-name">${escapeHtml(mapAsset.displayName)}</span>
-                    <span class="match-date-label">${escapeHtml(matchDateLabel(m))}</span>
-                </div>
+            <span class="mh-cell mh-map">
+                <span class="mh-map-name">${escapeHtml(mapAsset.displayName)}</span>
+                <span class="mh-date" title="${escapeHtml(matchDateLabel(m))}"><span class="mh-date-full">${escapeHtml(matchDateLabel(m))}</span><span class="mh-date-short">${escapeHtml(matchDateShort(m))}</span></span>
+            </span>
 
-                <div class="match-score-section">
-                    <span class="match-outcome-badge">${escapeHtml(outcome.text)}</span>
-                    ${score ? `<span class="match-rounds-score">${escapeHtml(score)}</span>` : ""}
-                </div>
+            <span class="mh-cell mh-result">
+                <span class="mh-outcome">${escapeHtml(outcome.text)}</span>
+                ${score ? `<span class="mh-score">${escapeHtml(score)}</span>` : ""}
+            </span>
 
-                <div class="match-stats-section">
-                    <div class="stat-box">
-                        <span class="stat-box-label">K / D / A</span>
-                        <span class="stat-box-val">${escapeHtml(kda)}</span>
-                    </div>
-                    <div class="stat-box">
-                        <span class="stat-box-label">KD Ratio</span>
-                        <span class="stat-box-val ${kdrClass}">${escapeHtml(kdrVal)}</span>
-                    </div>
-                    <div class="stat-box">
-                        <span class="stat-box-label">Headshot</span>
-                        <span class="stat-box-val text-hs">${escapeHtml(hsPct)}</span>
-                    </div>
-                </div>
+            <span class="mh-cell mh-stat mh-stat-kda">
+                <span class="mh-stat-label">K / D / A</span>
+                <span class="mh-stat-val">${escapeHtml(kda)}</span>
+            </span>
+            <span class="mh-cell mh-stat mh-stat-kd">
+                <span class="mh-stat-label">KD</span>
+                <span class="mh-stat-val ${kdrClass}">${escapeHtml(kdrVal)}</span>
+            </span>
+            <span class="mh-cell mh-stat mh-stat-hs">
+                <span class="mh-stat-label">HS%</span>
+                <span class="mh-stat-val is-hs">${escapeHtml(hsPct)}</span>
+            </span>
 
-                <div class="match-card-arrow">
-                    <i class="fa-solid fa-chevron-right"></i>
-                </div>
-            </div>
+            <span class="mh-cell mh-chevron"><i class="fa-solid fa-chevron-right"></i></span>
         </button>
     `;
 }
@@ -2591,46 +2615,10 @@ function profileStatsHtml(profile) {
         </div>` : ""}
 
         <h4 class="detail-section-title"><i class="fa-solid fa-clock-rotate-left"></i> Recent Matches</h4>
-        <div class="detail-history">
-            ${matches.length ? matches.map((m, i) => {
-                const outcome = (m.outcome || m.result || "MATCH").toUpperCase();
-                const isWin = outcome === "VICTORY" || outcome === "WIN";
-                const isLoss = outcome === "DEFEAT" || outcome === "LOSS";
-                const outcomeClass = isWin ? "is-win" : (isLoss ? "is-loss" : "is-draw");
-                const mapAsset = ValorantAssets.getMap(m.map);
-                const agentAsset = ValorantAssets.getAgent(m.agent);
-                const agentIcon = m.agent_icon || agentAsset.icon;
-                const kdr = m.kdr ?? (m.kills / Math.max(1, m.deaths || 1)).toFixed(2);
-
-                return `
-                <button type="button" class="detail-history-row ${outcomeClass}" style="--map-splash: url('${mapAsset.splash}'); --i: ${i};" onclick="openMatchDetail(${i}, 'profile')" title="View full scoreboard">
-                    <div class="detail-history-bg-mask"></div>
-                    <div class="detail-history-inner">
-                        <div class="detail-history-left">
-                            <div class="detail-agent-wrap ${agentIcon ? "" : "is-empty"}">
-                                ${agentIcon
-                                    ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="detail-agent-avatar" onerror="this.closest('.detail-agent-wrap').classList.add('is-empty'); this.remove();">`
-                                    : `<i class="fa-solid fa-user"></i>`}
-                            </div>
-                            <div class="detail-match-meta">
-                                <strong>${escapeHtml(mapAsset.displayName)}</strong>
-                                <small>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)} · <span class="history-mode">${escapeHtml(m.mode || 'Match')}</span></small>
-                            </div>
-                        </div>
-
-                        <div class="detail-history-center">
-                            <span class="detail-outcome-pill ${outcomeClass}">${outcome}</span>
-                            ${(m.rounds_won !== undefined && m.rounds_lost !== undefined) ? `<span class="detail-score-pill">${m.rounds_won} : ${m.rounds_lost}</span>` : ''}
-                        </div>
-
-                        <div class="detail-history-right">
-                            <span class="detail-kda-stat">${m.kills || 0} / ${m.deaths || 0} / ${m.assists || 0}</span>
-                            <span class="detail-kdr-badge ${kdr >= 1.0 ? 'is-pos' : 'is-neg'}">${kdr} KD</span>
-                            <i class="fa-solid fa-chevron-right detail-arrow"></i>
-                        </div>
-                    </div>
-                </button>`;
-            }).join("") : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}
+        <div class="matches-list matches-list-compact">
+            ${matches.length
+                ? matches.map((m, i) => matchCardHtml(m, i, "profile")).join("")
+                : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}
         </div>`;
 }
 
@@ -5145,70 +5133,28 @@ function renderRoster(el, players) {
 // -- PLAY -----------------------------------------------------------------
 
 /**
- * One click only. The button re-opens when the game is confirmed running
- * (nothing left to do), when the launch is confirmed failed, or when the
- * game disappears again - never while a launch is still in flight.
+ * The header PLAY button is retired: the single Play action now lives in the
+ * "Start a Match" panel (renderSidePlayButton) so the closed-game state has
+ * exactly one launch button. This keeps the element hidden and inert; the
+ * "VALORANT CLOSED / RUNNING" chip beside it stays as status only.
  */
 function renderPlayButton(live) {
-    const launch = (live && live.launch) || {};
     const running = !!(live && live.valorant_running);
-    const launching = !!launch.active || (state.playPending && !running);
+    const launch = (live && live.launch) || {};
 
-    // The optimistic lock is dropped as soon as the backend owns the state.
+    // Still clear the optimistic lock once the backend owns the state, so the
+    // side Play button settles correctly.
     if (state.playPending && (launch.active || running || launch.stage === "failed")) {
         state.playPending = false;
     }
 
-    let label = "PLAY";
-    let icon = "fa-solid fa-play";
-    let disabled = false;
-    let cls = "btn-dash-play";
-    let title = "Force-start VALORANT for this account";
-
-    if (!live || !live.available) {
-        label = "NO SESSION";
-        disabled = true;
-        title = "Sign in to an account first.";
-    } else if (running) {
-        label = "RUNNING";
-        icon = "fa-solid fa-circle-check";
-        disabled = true;
-        cls += " is-running";
-        title = "VALORANT is already running.";
-    } else if (launching) {
-        label = "STARTING…";
-        icon = "fa-solid fa-circle-notch";
-        disabled = true;
-        cls += " is-launching";
-        title = launch.message || "Starting VALORANT…";
-    } else if (launch.stage === "failed") {
-        label = "RETRY";
-        icon = "fa-solid fa-rotate-right";
-        title = launch.message || "VALORANT didn't start - try again.";
-    }
-
-    if (DOM.btnDashPlay) {
-        DOM.btnDashPlay.className = cls;
-        DOM.btnDashPlay.disabled = disabled;
-        DOM.btnDashPlay.title = title;
-        const iconEl = DOM.btnDashPlay.querySelector("i");
-        if (iconEl) iconEl.className = icon;
-        if (DOM.dashPlayLabel) DOM.dashPlayLabel.textContent = label;
-    }
-
-    if (DOM.btnSessionPlay) {
-        DOM.btnSessionPlay.disabled = disabled;
-        if (DOM.sessionPlayLabel) {
-            DOM.sessionPlayLabel.textContent = running ? "Running" : (launching ? "Starting…" : "Play");
-        }
-    }
+    if (DOM.btnDashPlay) DOM.btnDashPlay.hidden = true;
 }
 
 /**
- * The Start-a-Match-slot PLAY button. Only rendered while it is visible (i.e.
- * VALORANT reported not running), and shares the same one-click launch state
- * as the header PLAY button. Styling comes entirely from CSS / the theme
- * accent - nothing here forces a colour.
+ * The single Play VALORANT action, in the "Start a Match" panel. Shown only
+ * while VALORANT is not running (see renderQueueControls). Styling comes
+ * entirely from CSS / the theme accent - nothing here forces a colour.
  */
 function renderSidePlayButton(live) {
     if (!DOM.btnSidePlay) return;
@@ -5291,12 +5237,11 @@ function renderQueueControls(live) {
         state.pendingQueueId = null;
     }
 
-    // When VALORANT is specifically reported as not running (but a Riot
-    // session exists), the Start-a-Match action can't do anything useful, so
-    // the whole slot becomes a PLAY action instead. Both are never shown at
-    // once.
-    const sessionReady = !!live.available;
-    const valorantNotRunning = sessionReady && !live.valorant_running;
+    // Single source of truth: the live snapshot's process state. When VALORANT
+    // is not running the "Start a Match" panel shows ONLY "Play VALORANT" - no
+    // Start-Match button, no "VALORANT isn't running" card. When it is running,
+    // the normal Start-Match controls come back and Play VALORANT is gone.
+    const gameRunning = !!live.valorant_running;
 
     // -- CTA -----------------------------------------------------------
     if (DOM.dashCtaIcon) DOM.dashCtaIcon.className = mode ? mode.icon : "fa-solid fa-trophy";
@@ -5304,10 +5249,7 @@ function renderQueueControls(live) {
     let ctaTitle = `Start ${modeName} Match`;
     let ctaSub = `Queues up for ${modeName}`;
 
-    if (!canControl) {
-        ctaTitle = "VALORANT isn't running";
-        ctaSub = "Press PLAY to start the game first";
-    } else if (inMatch) {
+    if (inMatch) {
         ctaTitle = live.match.phase === "agent_select" ? "In agent select" : "You're in a match";
         ctaSub = "Finish or leave it before queueing again";
     } else if (inQueue) {
@@ -5318,18 +5260,18 @@ function renderQueueControls(live) {
     if (DOM.dashCtaTitle) DOM.dashCtaTitle.textContent = ctaTitle;
     if (DOM.dashCtaSub) DOM.dashCtaSub.textContent = ctaSub;
 
-    // Swap Start Match <-> Play depending on whether the game is up.
+    // Swap Start Match <-> Play VALORANT on game state.
     if (DOM.btnSidePlay) {
-        DOM.btnStartRanked.hidden = valorantNotRunning;
-        DOM.btnSidePlay.hidden = !valorantNotRunning;
-        if (valorantNotRunning) renderSidePlayButton(live);
+        DOM.btnStartRanked.hidden = !gameRunning;
+        DOM.btnSidePlay.hidden = gameRunning;
+        if (!gameRunning) renderSidePlayButton(live);
     }
 
     DOM.btnStartRanked.disabled = !canControl || inQueue || inMatch;
     DOM.btnStartRanked.classList.toggle("is-queued", inQueue);
 
     DOM.btnQueueStop.disabled = !canControl || !inQueue;
-    DOM.btnQueueStop.style.display = inQueue ? "flex" : "none";
+    DOM.btnQueueStop.style.display = (gameRunning && inQueue) ? "flex" : "none";
 
     // -- status line ---------------------------------------------------
     if (inQueue) {

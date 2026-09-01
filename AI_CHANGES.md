@@ -234,3 +234,108 @@ Limitations:
 - Verified via unit tests, a production build, direct inspection of the
   stored match data, and CSS review. No pixel screenshot of the rendered
   modal was captured in this environment (no browser-automation tooling).
+
+## 2026-09-01 — Claude — One match-history row everywhere + simplified closed-game dashboard + v5.5.38
+
+Two issues from a fresh screenshot pair.
+
+### 1. Match history was still three implementations
+
+`matchCardHtml` (v5.5.36/37) covered the Account-Manager modal and the
+Dashboard, but the **player-profile lookup** modal still rendered its own
+`.detail-history-row` (a third layout), and `matchCardHtml` itself was a
+`justify-content: space-between` flex row whose four `min-width` sections
+drifted apart into disconnected columns on a wide modal, with the map
+splash painted as the row's own `background-image`.
+
+Changed:
+
+- Rebuilt `matchCardHtml` as **one fixed CSS-grid row** -
+  `agent | map+date | result | K/D/A | KD | HS% | >` - so every match reads
+  as a single entry. All three entry points now call it:
+  `matchCardHtml(m, i, "account" | "dashboard" | "profile")`.
+- `profileStatsHtml` no longer builds `.detail-history-row`; it renders
+  `matchCardHtml` inside `.matches-list.matches-list-compact`.
+- Deleted every superseded row implementation and its CSS:
+  `.stat-match*` (already gone), `.detail-history*`, `.detail-agent*`,
+  `.detail-outcome-pill`, `.detail-kda-stat`, `.detail-kdr-badge`, and the
+  old flex `.match-card-inner` / `.match-agent-section` /
+  `.match-stats-section` / `.stat-box*` markup (~260 lines net removed).
+- Map art is a `.mh-splash` layer at `opacity: 0.28` behind a near-opaque
+  `.mh-scrim` (`rgba(13,17,23, .97 -> .86)`); stat values are `#fff`, the
+  date is `var(--text-sub)` (not the dimmest token). Verified on the running
+  app via CDP screenshots: values and dates are clearly legible on every
+  map, wide (1360px) and narrow (720px).
+- Narrow layouts drop the KD / HS% / chevron columns and switch the date
+  to a short "Aug 30, 2026" form (`matchDateShort`, which parses the same
+  `game_date` string - not a new date source). Full date stays in the
+  element `title`.
+
+### 2. Duplicate Play / "VALORANT isn't running" UI
+
+Closed-game dashboard showed the header PLAY button, a "VALORANT CLOSED"
+chip, the disabled "Start Competitive Match" button re-labelled "VALORANT
+isn't running / Press PLAY...", AND the "Play VALORANT" button - four
+things for one action. Root cause: `#btn-start-ranked` was toggled with
+the `hidden` attribute, but `.btn-ranked-cta { display: flex }` overrode a
+bare `[hidden]`, so it never actually hid; and `renderPlayButton` still
+drove the header PLAY button.
+
+Changed:
+
+- `renderPlayButton` now just keeps `#btn-dash-play` hidden - the header
+  PLAY button is retired. The "VALORANT CLOSED / RUNNING" chip stays as
+  status only.
+- `renderQueueControls` keys purely off `live.valorant_running`
+  (`const gameRunning = !!live.valorant_running`): not running -> show only
+  `#btn-side-play` "Play VALORANT / Starts the game for this account";
+  running -> hide it, restore `#btn-start-ranked` and the normal controls.
+  The "VALORANT isn't running / Press PLAY" copy is deleted.
+- Added `.btn-ranked-cta[hidden], .btn-dash-play[hidden] { display: none !important }`
+  so the swap actually takes effect.
+- "Play VALORANT" inherits `.btn-ranked-cta`'s `var(--grad-primary)`, so it
+  follows the active theme accent (verified violet on the purple theme via
+  CDP: `linear-gradient(135deg, rgb(196,113,245) ... rgb(109,40,217))`).
+
+Verified via CDP against the running app: header PLAY hidden, Start-Match
+hidden, exactly one violet "Play VALORANT", no warning card, chip reads
+"VALORANT closed".
+
+Files:
+
+- `frontend/app.js`, `frontend/styles.css`
+- `backend/version.py`, `version.json`, `installer/vortex_setup.iss`
+- `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts: none.
+
+State logic (final):
+
+- `gameRunning = !!state.live.valorant_running` (the live snapshot's process
+  flag) is the single source. `if (gameRunning) -> Start Match controls;
+  else -> Play VALORANT`. No independent booleans. `state.playPending` is
+  only a short-lived optimistic lock cleared as soon as the snapshot
+  reports `launch.active` / running / failed.
+
+Tests:
+
+- `python -m pytest -q` -> 68 passed (2 pre-existing FastAPI deprecation
+  warnings). `test_match_history_is_unified_between_entry_points` rewritten
+  for the grid row + all-three-entry-points + no dead implementations;
+  `test_live_match_controls_markup` updated for the retired header PLAY,
+  the removed warning copy, and `[hidden]` beating the button display.
+- `python -m compileall -q app.py backend tests` passed.
+- `build.bat` -> PyInstaller bundle + `dist_installer/VortexSetup.exe`
+  (ProductVersion 5.5.38); built app `GET /api/app-version` ->
+  `{"version":"5.5.38"}`.
+- Live CDP verification on the source app (screenshots retained in the
+  session scratchpad): match rows wide + narrow, and the closed-game
+  dashboard.
+
+Limitations:
+
+- The Dashboard "Player Stats -> Match History" grid was verified by code
+  (same `matchCardHtml` call) and by the shared component's screenshots;
+  a live run needs VALORANT open, which was not available. The
+  player-profile lookup returned no rows here (needs a Riot session) but
+  is confirmed to use `matchCardHtml`, not the deleted `.detail-history-row`.
