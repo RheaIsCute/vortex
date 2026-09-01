@@ -17,7 +17,7 @@ A tactical, purple and obsidian-black desktop account manager and rank tracker f
 - **Single & Batch Sync**: Refresh individual accounts or sync all accounts at once.
 - **Instant Search & Filters**: Search across accounts (`Ctrl + K`) with region filters (NA, EU, AP, KR, BR, LATAM) and category filters (Main, Smurf, Alt).
 - **Live Match Dashboard**: Opens for whichever account is signed in - tracks the running match round by round (score, map, mode, both team rosters with agents and ranks), starts a ranked match in one click, switches game mode, and can insta-lock an agent the moment agent select opens.
-- **Optional live telemetry**: Overwolf/Vortex Telemetry and the Valorant Tracker fallback are separate, default-off switches in Settings. Account management and the Riot dashboard work without either; see [the telemetry setup guide](overwolf/vortex-telemetry/README.md).
+- **Live Match Features**: one default-off switch in Settings turns on live match tracking and the in-game aim HUD; Vortex enables the required telemetry providers (Overwolf/Vortex Telemetry, with the Valorant Tracker log as an internal fallback) automatically. Account management and the Riot dashboard work without it; see [the telemetry setup guide](overwolf/vortex-telemetry/README.md).
 - **Play Button & Session Detection**: The app detects which account is logged into the Riot Client right now, badges that card as live, and turns its button into PLAY to launch VALORANT straight into it.
 - **Per-Account Check**: A "Check Account" button on anything Riot hasn't confirmed yet - logs in once, verifies the username and password work, and pulls the real Riot ID, region, level, rank and ban status.
 - **Dual View Modes**: Grid View and Spreadsheet Table View.

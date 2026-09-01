@@ -378,15 +378,11 @@ const DOM = {
     btnCheckUpdate: document.getElementById("btn-check-update"),
     settingsLogPath: document.getElementById("settings-log-path"),
     btnOpenLog: document.getElementById("btn-open-log"),
-    settingsForceBorderless: document.getElementById("settings-force-borderless"),
     settingsStaySignedIn: document.getElementById("settings-stay-signed-in"),
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
-    settingsLiveHudEnabled: document.getElementById("settings-live-hud-enabled"),
-    settingsOverwolfEnabled: document.getElementById("settings-overwolf-enabled"),
-    settingsValorantTrackerEnabled: document.getElementById("settings-valorant-tracker-enabled"),
+    settingsLiveMatchEnabled: document.getElementById("settings-live-match-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
-    btnBorderlessAll: document.getElementById("btn-borderless-all"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -429,7 +425,6 @@ const DOM = {
     headerActions: document.getElementById("header-actions"),
     accountsView: document.getElementById("accounts-view"),
     viewSwap: document.getElementById("view-swap"),
-    btnToggleDashboard: document.getElementById("btn-toggle-dashboard"),
     dashView: document.getElementById("dash-view"),
     dashClose: document.getElementById("dash-close"),
     btnDashPlay: document.getElementById("btn-dash-play"),
@@ -904,8 +899,6 @@ function initEventListeners() {
     DOM.btnAutoDetectClient.addEventListener("click", autoDetectClientPath);
     if (DOM.btnCheckUpdate) DOM.btnCheckUpdate.addEventListener("click", () => checkForUpdate(true));
     if (DOM.btnOpenLog) DOM.btnOpenLog.addEventListener("click", openLoginLog);
-    if (DOM.btnBorderlessAll) DOM.btnBorderlessAll.addEventListener("click", applyBorderlessToAll);
-    if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.addEventListener("change", updateTelemetryControls);
     if (DOM.btnInstallUpdate) DOM.btnInstallUpdate.addEventListener("click", installPendingUpdate);
     if (DOM.btnDismissUpdate) DOM.btnDismissUpdate.addEventListener("click", () => {
         if (DOM.updateBanner) DOM.updateBanner.style.display = "none";
@@ -3271,20 +3264,19 @@ function openTrackerUrl(displayName) {
 // SETTINGS & BACKUP
 // ==========================================================================
 
-function updateTelemetryControls() {
-    if (!DOM.settingsValorantTrackerEnabled) return;
-    const overwolfEnabled = !!DOM.settingsOverwolfEnabled?.checked;
-    DOM.settingsValorantTrackerEnabled.disabled = !overwolfEnabled;
-    if (!overwolfEnabled) DOM.settingsValorantTrackerEnabled.checked = false;
+// The three telemetry keys move together behind one user-facing toggle. Any
+// one of them being on is treated as the feature being on (covers existing
+// users who had only the Overwolf provider enabled before the merge).
+function liveMatchFeaturesOn() {
+    return state.settings.live_hud_enabled === "1"
+        || state.settings.overwolf_enabled === "1"
+        || state.settings.valorant_tracker_enabled === "1";
 }
 
 function openSettingsModal() {
     DOM.settingsClientPath.value = state.settings.riot_client_path || "";
     DOM.settingsApiKey.value = state.settings.riot_api_key || "";
-    if (DOM.settingsLiveHudEnabled) DOM.settingsLiveHudEnabled.checked = (state.settings.live_hud_enabled || "0") !== "0";
-    if (DOM.settingsOverwolfEnabled) DOM.settingsOverwolfEnabled.checked = state.settings.overwolf_enabled === "1";
-    if (DOM.settingsValorantTrackerEnabled) DOM.settingsValorantTrackerEnabled.checked = state.settings.valorant_tracker_enabled === "1";
-    updateTelemetryControls();
+    if (DOM.settingsLiveMatchEnabled) DOM.settingsLiveMatchEnabled.checked = liveMatchFeaturesOn();
     if (DOM.settingsPostValorantEnabled) DOM.settingsPostValorantEnabled.checked = (state.settings.post_valorant_launch_enabled || "0") !== "0";
     if (DOM.settingsPostValorantPath) {
         DOM.settingsPostValorantPath.value = state.settings.post_valorant_launch_path || "";
@@ -3295,36 +3287,9 @@ function openSettingsModal() {
         DOM.settingsAppVersion.value = state.appVersion ? `v${state.appVersion}` : "Loading...";
     }
     loadLoginLogPath();
-    if (DOM.settingsForceBorderless) DOM.settingsForceBorderless.checked = (state.settings.force_borderless || "1") !== "0";
     if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = (state.settings.stay_signed_in || "1") !== "0";
     if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = state.settings.auto_launch_after_login === "1";
     openModal(DOM.modalSettings);
-}
-
-/** Forces windowed borderless on every account that has settings on this PC. */
-async function applyBorderlessToAll() {
-    const btn = DOM.btnBorderlessAll;
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `<i class="fa-solid fa-spinner rotating"></i> Applying...`;
-    }
-    try {
-        const res = await fetch("/api/game-config/force-borderless", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ all_accounts: true })
-        });
-        const data = await res.json();
-        showToast(data.message || (data.success ? "Applied." : "Couldn't apply."),
-                  data.success ? "success" : "error");
-    } catch (err) {
-        showToast("Failed to reach the app's backend.", "error");
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> Set every account to borderless now`;
-        }
-    }
 }
 
 async function loadLoginLogPath() {
@@ -3349,14 +3314,17 @@ async function openLoginLog() {
 }
 
 async function saveSettings() {
+    // One user-facing toggle drives all three telemetry providers. Enabling it
+    // turns on the aim HUD plus the Overwolf feed and keeps the Valorant
+    // Tracker log as an internal fallback; disabling it turns all three off.
+    const liveMatchOn = !!DOM.settingsLiveMatchEnabled?.checked;
     const payload = {
         settings: {
             riot_client_path: DOM.settingsClientPath.value.trim(),
             riot_api_key: DOM.settingsApiKey.value.trim(),
-            live_hud_enabled: DOM.settingsLiveHudEnabled?.checked ? "1" : "0",
-            overwolf_enabled: DOM.settingsOverwolfEnabled?.checked ? "1" : "0",
-            valorant_tracker_enabled: (DOM.settingsOverwolfEnabled?.checked && DOM.settingsValorantTrackerEnabled?.checked) ? "1" : "0",
-            force_borderless: DOM.settingsForceBorderless?.checked ? "1" : "0",
+            live_hud_enabled: liveMatchOn ? "1" : "0",
+            overwolf_enabled: liveMatchOn ? "1" : "0",
+            valorant_tracker_enabled: liveMatchOn ? "1" : "0",
             stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
             auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
@@ -3373,7 +3341,7 @@ async function saveSettings() {
         const data = await res.json();
         if (data.success) {
             state.settings = data.settings;
-            void setLiveHudEnabled(!!DOM.settingsLiveHudEnabled?.checked);
+            void setLiveHudEnabled(liveMatchOn);
             showToast("Settings saved", "success");
             closeModal(DOM.modalSettings);
         }
@@ -4091,7 +4059,6 @@ async function openDashboard() {
             DOM.dashView.classList.add("is-open");
             DOM.dashView.setAttribute("aria-hidden", "false");
         }
-        if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.add("is-active");
 
         // Reload every open: the agent list is static but its per-account
         // "owned" flags are not.
@@ -4123,19 +4090,12 @@ function closeDashboard() {
             DOM.dashView.classList.remove("is-open");
             DOM.dashView.setAttribute("aria-hidden", "true");
         }
-        if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.classList.remove("is-active");
-
         stopLiveTimers();
         clearTimeout(state._statsTimer);
         window.scrollTo({ top: 0, behavior: "auto" });
     }, { back: true }).then(() => {
         state._dashTransitioning = false;
     });
-}
-
-function toggleDashboard() {
-    if (state.dashboardOpen) closeDashboard();
-    else openDashboard();
 }
 
 async function loadLiveAgents() {
@@ -5623,7 +5583,6 @@ function initLiveEventListeners() {
     }
 
     if (DOM.btnOpenDashboard) DOM.btnOpenDashboard.addEventListener("click", openDashboard);
-    if (DOM.btnToggleDashboard) DOM.btnToggleDashboard.addEventListener("click", toggleDashboard);
     if (DOM.dashClose) DOM.dashClose.addEventListener("click", closeDashboard);
     if (DOM.btnDashPlay) DOM.btnDashPlay.addEventListener("click", forceLaunchValorant);
 

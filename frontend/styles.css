@@ -2284,7 +2284,7 @@ select.form-control option {
     line-height: 1.45;
 }
 
-/* --- Toggle switch (Launch Display Mode / Auto-apply) ------------------- */
+/* --- Toggle switch (Settings switch rows) ------------------------------- */
 
 .switch-row {
     display: flex;
@@ -4747,13 +4747,13 @@ body.dashboard-mode .header-actions { gap: 6px; }
 
 /* Labels collapse to nothing so every tool becomes a square icon button -
    same controls, a fraction of the width. */
-body.dashboard-mode .header-actions .btn:not(.is-dash-toggle) > span {
+body.dashboard-mode .header-actions .btn > span {
     max-width: 0;
     opacity: 0;
     margin-left: -8px;
 }
 
-body.dashboard-mode .header-actions .btn:not(.is-dash-toggle):not(.btn-icon) {
+body.dashboard-mode .header-actions .btn:not(.btn-icon) {
     width: 38px;
     padding-left: 0;
     padding-right: 0;
@@ -4780,13 +4780,6 @@ body.dashboard-mode .session-bar {
     overflow: hidden;
     pointer-events: none;
     border-width: 0;
-}
-
-.btn.is-dash-toggle.is-active {
-    background: var(--grad-primary);
-    color: #fff;
-    border-color: transparent;
-    box-shadow: 0 4px 16px -4px rgba(var(--a-rgb), 0.65), var(--bevel);
 }
 
 .dash-header {
@@ -8508,8 +8501,3 @@ button.match-card, button.stat-match, button.dash-player {
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.btn-borderless-all {
-    width: 100%;
-    margin-top: 10px;
-    justify-content: center;
-}
