@@ -3390,16 +3390,33 @@ async function autoDetectClientPath() {
 }
 
 async function handleExportBackup() {
+    const filename = `valorant_accounts_backup_${new Date().toISOString().slice(0, 10)}.json`;
     try {
         const res = await fetch("/api/export");
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `valorant_accounts_backup_${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        const text = await res.text();
+
+        // In the desktop build WebView2 blocks a programmatic <a download>, so
+        // route the save through the native dialog exposed by app.py. The
+        // browser build has no such bridge and falls back to the blob link.
+        const api = window.pywebview && window.pywebview.api;
+        if (api && typeof api.saveBackup === "function") {
+            const result = await api.saveBackup(text, filename);
+            if (result && result.cancelled) return;
+            if (!result || !result.success) {
+                showToast("Failed to export", "error");
+                return;
+            }
+        } else {
+            const url = window.URL.createObjectURL(new Blob([text], { type: "application/json" }));
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        }
+
         showToast("Backup exported", "success");
         closeModal(DOM.modalBackup);
     } catch (err) {
