@@ -13,15 +13,15 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ### Codex
 
-Status: DONE
+Status: IN PROGRESS
 
-Scope: Final integration, dashboard transition responsiveness, security review, verification, and GitHub synchronization.
+Scope: Prepare, publish, and verify the v5.5.34 production release and auto-update flow.
 
-Files likely owned: `frontend/app.js`, `backend/database.py`, `backend/scraper.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setup.iss`, `docs/BUILD.md`, `AI_CHANGES.md`, `AI_TASKS.md`
 
 Dependencies:
 
-Notes: Reviewed complete workspace diff; tests, build, and loopback application smoke test passed. Dashboard transition now schedules immediately before live-agent refresh work.
+Notes: Updater inspection confirms version.json manifest checks over jsDelivr/GitHub Raw; release-based updates remain intentional. v5.5.34 source and production artifacts are built; publish/tag/verify remain.
 
 ### Claude
 

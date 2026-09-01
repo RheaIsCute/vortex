@@ -74,3 +74,15 @@ Tests:
 - `python -m compileall -q app.py backend tests` and `git diff --check` passed.
 - `build.bat` passed: PyInstaller created a 3,846-file runtime bundle and Inno Setup created `dist_installer/VortexSetup.exe`.
 - Loopback Uvicorn smoke test passed: `GET /` returned HTTP 200; account and settings APIs responded.
+
+## 2026-09-01 — Codex — v5.5.34 release preparation
+
+Changed:
+
+- Bumped the authoritative application version in `backend/version.py` and the updater manifest in `version.json` to `5.5.34`.
+- Synchronized the Inno Setup fallback version and documented the release/tag/asset verification checklist.
+- Kept update discovery release-based: the updater compares the manifest version fetched from jsDelivr/GitHub Raw and downloads the manifest’s `VortexSetup.exe` release asset.
+
+Build:
+
+- `build.bat` produced the v5.5.34 PyInstaller bundle (3,846 internal files) and `dist_installer/VortexSetup.exe` successfully.
