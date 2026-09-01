@@ -82,6 +82,7 @@ Changed:
 - Bumped the authoritative application version in `backend/version.py` and the updater manifest in `version.json` to `5.5.34`.
 - Synchronized the Inno Setup fallback version and documented the release/tag/asset verification checklist.
 - Kept update discovery release-based: the updater compares the manifest version fetched from jsDelivr/GitHub Raw and downloads the manifest’s `VortexSetup.exe` release asset.
+- Added GitHub’s latest-release API as the first update source so CDN-stale manifests cannot hide a newly published stable release; arbitrary commits remain excluded.
 
 Build:
 

@@ -1,8 +1,8 @@
 """
 Auto-update checker for Vortex Valorant Account Manager.
-Checks the version.json manifest committed at the root of the vortex repo,
-and if a newer version is available, downloads the Windows installer from the
-matching GitHub release and launches it so it can replace the running app.
+Checks the latest stable GitHub release (with version.json manifest mirrors as
+fallback), and if a newer version is available, downloads the Windows
+installer from that release and launches it so it can replace the running app.
 
 Manifest format (version.json in RheaIsCute/vortex):
     { "version": "5.5.21", "download_url": "...", "changelog": "..." }
@@ -31,6 +31,7 @@ VERSION_CHECK_URLS = [
     "https://cdn.jsdelivr.net/gh/RheaIsCute/vortex@master/version.json",
     "https://raw.githubusercontent.com/RheaIsCute/vortex/master/version.json",
 ]
+GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/RheaIsCute/vortex/releases/latest"
 REQUEST_TIMEOUT = 6.0
 
 # Environment variables the PyInstaller onefile bootloader uses to talk to the
@@ -65,9 +66,9 @@ PYI_ENV_VARS = (
 
 def check_for_update() -> Optional[Dict[str, Any]]:
     """
-    Queries the version.json manifest from the vortex repo (jsdelivr / GitHub Raw).
-    Returns a dict with 'version', 'url', and optional 'notes' if a newer
-    version is available, otherwise None.
+    Queries the latest stable GitHub release and version.json mirrors from the
+    vortex repo. Returns a dict with 'version', 'url', and optional 'notes' if
+    a newer version is available, otherwise None.
     Never raises - any network/parsing failure is treated as "no update".
     """
     headers = {
@@ -77,6 +78,39 @@ def check_for_update() -> Optional[Dict[str, Any]]:
 
     best: Optional[Dict[str, Any]] = None
     best_parsed = None
+
+    # GitHub's release API is the authoritative low-latency source after a
+    # release is published. CDN-backed version.json mirrors are retained as a
+    # fallback (and for release notes), but can legitimately lag a push for a
+    # few minutes. This remains release-based: commits and branch contents are
+    # never treated as user-facing updates.
+    try:
+        res = requests.get(
+            GITHUB_LATEST_RELEASE_URL,
+            headers={**headers, "Accept": "application/vnd.github+json"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if res.status_code == 200:
+            release = res.json()
+            remote_version = str(release.get("tag_name", "")).strip().lstrip("vV")
+            asset_url = ""
+            for asset in release.get("assets", []) or []:
+                if str(asset.get("name", "")).strip().lower() == "vortexsetup.exe":
+                    asset_url = str(asset.get("browser_download_url", "")).strip()
+                    break
+            if remote_version and asset_url:
+                try:
+                    best_parsed = parse_version(remote_version)
+                    best = {
+                        "version": remote_version,
+                        "url": asset_url,
+                        "notes": release.get("body", "") or "",
+                    }
+                except InvalidVersion:
+                    best = None
+                    best_parsed = None
+    except Exception:
+        pass
 
     # Every source is consulted rather than stopping at the first reachable
     # one: GitHub Raw is CDN-cached for minutes after a release, so the first

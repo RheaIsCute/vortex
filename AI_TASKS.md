@@ -21,7 +21,7 @@ Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setu
 
 Dependencies:
 
-Notes: Updater inspection confirms version.json manifest checks over jsDelivr/GitHub Raw; release-based updates remain intentional. v5.5.34 source and production artifacts are built; publish/tag/verify remain.
+Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 source and production artifacts are built; publish/tag/verify remain.
 
 ### Claude
 
