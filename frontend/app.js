@@ -1057,6 +1057,9 @@ function stopCheckAccountsUi(hideBar = true) {
         DOM.btnCheckAllAccounts.classList.remove("is-checking");
         DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
     }
+    if (DOM.checkAllIcon) {
+        DOM.checkAllIcon.className = "fa-solid fa-list-check";
+    }
     if (hideBar && DOM.syncProgressBar) {
         DOM.syncProgressBar.style.display = "none";
         if (DOM.syncProgressFill) DOM.syncProgressFill.style.width = "0%";
@@ -1075,8 +1078,13 @@ async function handleCheckAllAccounts() {
     }
 
     state.isCheckingAccounts = true;
-    DOM.btnCheckAllAccounts.classList.add("is-checking");
-    DOM.btnCheckAllAccounts.setAttribute("aria-busy", "true");
+    if (DOM.btnCheckAllAccounts) {
+        DOM.btnCheckAllAccounts.classList.add("is-checking");
+        DOM.btnCheckAllAccounts.setAttribute("aria-busy", "true");
+    }
+    if (DOM.checkAllIcon) {
+        DOM.checkAllIcon.className = "fa-solid fa-spinner rotating";
+    }
     DOM.syncProgressBar.style.display = "block";
     DOM.syncProgressFill.style.width = "10%";
     DOM.syncProgressText.textContent = "Starting account verification...";
@@ -1097,13 +1105,15 @@ async function handleCheckAllAccounts() {
         const res = await fetch("/api/accounts/check-all", { method: "POST" });
         const startData = await res.json();
 
-        if (!startData.success && startData.message) {
-            showToast(startData.message, "info");
+        if (!startData.success) {
+            if (startData.message) showToast(startData.message, "info");
+            stopCheckAccountsUi(true);
+            return;
         }
-        // Nothing to check / refused to start: don't sit on a spinner.
-        if (startData.success && startData.to_check_count === 0) {
-            DOM.syncProgressText.textContent = startData.message || "All accounts are already checked.";
-            setTimeout(() => stopCheckAccountsUi(true), 2000);
+        // Nothing to check: don't sit on a spinner.
+        if (startData.to_check_count === 0) {
+            if (startData.message) showToast(startData.message, "info");
+            stopCheckAccountsUi(true);
             return;
         }
 
@@ -4111,11 +4121,11 @@ async function openDashboard() {
     state._dashTransitioning = false;
 }
 
-function closeDashboard() {
+async function closeDashboard() {
     if (!state.dashboardOpen || state._dashTransitioning) return;
     state._dashTransitioning = true;
 
-    runViewSlide(() => {
+    await runViewSlide(() => {
         state.dashboardOpen = false;
 
         document.body.classList.remove("dashboard-mode");
@@ -4128,9 +4138,9 @@ function closeDashboard() {
         stopLiveTimers();
         clearTimeout(state._statsTimer);
         window.scrollTo({ top: 0, behavior: "auto" });
-    }, { back: true }).then(() => {
-        state._dashTransitioning = false;
-    });
+    }, { back: true });
+
+    state._dashTransitioning = false;
 }
 
 function toggleDashboard() {

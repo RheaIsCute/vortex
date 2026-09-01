@@ -377,6 +377,37 @@ def main():
             easy_drag=True
         )
         _startup_log("main WebView created")
+
+        def saveBackup(contents, filename):
+            """Save a locally generated backup through WebView2's native dialog."""
+            if not isinstance(contents, str):
+                return {"success": False}
+            safe_name = os.path.basename(filename or "vortex_backup.json")
+            if not safe_name.lower().endswith(".json"):
+                safe_name += ".json"
+            try:
+                destination = window.create_file_dialog(
+                    webview.SAVE_DIALOG,
+                    save_filename=safe_name,
+                    file_types=("JSON files (*.json)",),
+                )
+                if not destination:
+                    return {"success": False, "cancelled": True}
+                # pywebview returns a path for SAVE_DIALOG; tolerate a one-item
+                # sequence for older backends without ever logging its content.
+                if isinstance(destination, (tuple, list)):
+                    destination = destination[0] if destination else ""
+                if not destination:
+                    return {"success": False, "cancelled": True}
+                temp_path = str(destination) + ".tmp"
+                with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(contents)
+                os.replace(temp_path, destination)
+                return {"success": True}
+            except OSError:
+                return {"success": False}
+
+        window.expose(saveBackup)
         hud_enabled_at_start = db.get_settings().get("live_hud_enabled", "0") != "0"
         live_hud_window = _create_live_hud_window() if hud_enabled_at_start else None
         _startup_log("Live Aim HUD WebView " + ("created" if live_hud_window else "skipped (disabled)"))

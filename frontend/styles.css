@@ -763,9 +763,19 @@ body.effects-paused .scroll-top-btn {
     transform-origin: 50% 50%;
 }
 
-/* Dedicated activity indicator for Check Accounts. The list-check glyph is
-   the action's identity, not its progress animation, so it never spins. */
-.check-accounts-loader,
+/* Dedicated icon styling for Check Accounts button to ensure rock-solid bounding box */
+#check-all-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+    text-align: center;
+}
+
 .account-check-loader {
     display: none;
     width: 15px;
@@ -778,14 +788,12 @@ body.effects-paused .scroll-top-btn {
     animation: check-loader-spin 0.72s linear infinite;
 }
 
-#btn-check-all-accounts.is-checking #check-all-icon,
 .btn-check-card.is-checking > i,
 .btn-launch-card.is-checking > i,
 .btn-icon.is-checking > i {
     display: none;
 }
 
-#btn-check-all-accounts.is-checking .check-accounts-loader,
 .btn-check-card.is-checking .account-check-loader,
 .btn-launch-card.is-checking .account-check-loader,
 .btn-icon.is-checking .account-check-loader {
@@ -867,7 +875,7 @@ body.effects-paused .scroll-top-btn {
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
     box-shadow: var(--shadow-sm), var(--bevel);
-    animation: rise-in var(--dur-4) var(--ease-out) 0.06s backwards;
+    animation: rise-in var(--dur-4) var(--ease-out) backwards;
 }
 
 /* --- Search --- */
@@ -4663,6 +4671,12 @@ body.dashboard-mode .accounts-view {
 
 .view-swap.is-sliding > .view-entering {
     will-change: transform, opacity;
+}
+
+.view-swap.is-sliding .controls-bar,
+.view-swap.is-sliding .accounts-table-wrapper,
+.view-swap.is-sliding .empty-state {
+    animation: none !important;
 }
 
 /* Forward = heading into the dashboard: roster exits left, dashboard in from right. */

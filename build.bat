@@ -77,9 +77,27 @@ if not exist %ISCC% (
 
 echo.
 echo Building VortexSetup.exe installer...
-%ISCC% "/DAppVersion=%APP_VERSION%" installer\vortex_setup.iss
+
+REM Inno Setup still has legacy source-path handling in a few compiler paths.
+REM This repository's nested location plus the bundled Valorant asset tree can
+REM exceed MAX_PATH, causing it to silently omit hundreds of runtime assets.
+REM Stage the completed bundle under the short temp path before compiling so
+REM the installer always receives every file that PyInstaller produced.
+set "VORTEX_STAGE_DIR=%TEMP%\VortexInstallerStage"
+if exist "%VORTEX_STAGE_DIR%" rmdir /s /q "%VORTEX_STAGE_DIR%"
+mkdir "%VORTEX_STAGE_DIR%"
+robocopy "dist\Vortex" "%VORTEX_STAGE_DIR%" /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 >nul
+set "VORTEX_COPY_RESULT=%ERRORLEVEL%"
+if %VORTEX_COPY_RESULT% GEQ 8 (
+    echo.
+    echo Installer build FAILED - staging dist\Vortex returned robocopy code %VORTEX_COPY_RESULT%.
+    exit /b 1
+)
+
+%ISCC% "/DAppVersion=%APP_VERSION%" "/DBundleDir=%VORTEX_STAGE_DIR%" installer\vortex_setup.iss
 
 if exist dist_installer\VortexSetup.exe (
+    rmdir /s /q "%VORTEX_STAGE_DIR%"
     echo.
     echo Installer built: dist_installer\VortexSetup.exe
 ) else (

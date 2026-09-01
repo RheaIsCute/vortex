@@ -89,6 +89,9 @@ class AccountCreate(BaseModel):
     card_small_url: Optional[str] = None
     status: Optional[str] = None
     favorite: Optional[bool] = None
+    # Filled from the local Riot Client when available. This is Riot's stable
+    # per-account identifier and is never shown as a credential.
+    puuid: Optional[str] = ""
 
 
 class AccountUpdate(BaseModel):
@@ -547,6 +550,14 @@ async def get_accounts(
     return {"accounts": accounts}
 
 
+@app.post("/api/accounts/reconcile")
+async def reconcile_account_library():
+    """Reload and repair the local account library without a Riot API sync."""
+    result = await asyncio.to_thread(db.reconcile_accounts)
+    invalidate_live_snapshot()
+    return {"success": True, **result}
+
+
 @app.get("/api/banned-accounts")
 async def get_banned_accounts():
     """Returns accounts moved to the Banned tab - data is kept, not deleted."""
@@ -696,21 +707,27 @@ async def add_account(account: AccountCreate, background_tasks: BackgroundTasks)
             account_dict["peak_rank_division"] = info.get("peak_rank_division", "")
             account_dict["peak_rank_icon_url"] = info.get("peak_rank_icon_url", "")
             account_dict["status"] = info.get("status", "PLAYABLE")
+            account_dict["puuid"] = info.get("puuid", "")
 
-    # Don't create a duplicate of something already stored, whether it's in
-    # the main roster or sitting in the banned list.
-    existing = db.account_exists(account_dict.get("username", ""))
-    if existing == "banned":
+    # Username checks alone could not catch the same Riot account added via
+    # different credentials. Prefer the PUUID captured from the local Riot
+    # Client; a Riot ID fallback is deliberately limited to unknown PUUIDs.
+    conflict = db.find_account_conflict(
+        account_dict.get("username", ""),
+        account_dict.get("puuid", ""),
+        account_dict.get("display_name", ""),
+    )
+    if conflict and conflict["location"] == "banned":
         return {
             "success": False,
             "duplicate": True,
-            "message": f"'{account_dict.get('username', '')}' is already in your Banned Accounts."
+            "message": "This Riot account is already in your Banned Accounts."
         }
-    if existing == "active":
+    if conflict:
         return {
             "success": False,
             "duplicate": True,
-            "message": f"'{account_dict.get('username', '')}' is already in your accounts."
+            "message": "This Riot account is already in your accounts."
         }
 
     lvl = int(account_dict.get("level", 1) or 1)

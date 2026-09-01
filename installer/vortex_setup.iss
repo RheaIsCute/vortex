@@ -1,14 +1,21 @@
 ; Inno Setup script for Vortex | Valorant Account Manager.
-; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=4.3.0
+; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=5.5.31
 ; (AppVersion defaults below if not passed on the command line.)
 
 #ifndef AppVersion
-  #define AppVersion "4.3.0"
+  #define AppVersion "5.5.31"
 #endif
 
 #define AppName "Vortex"
 #define AppPublisher "Vortex"
 #define AppExeName "Vortex.exe"
+
+; build.bat passes a short temporary staging path.  Keeping this override
+; preserves direct ISCC builds while avoiding MAX_PATH omissions when this
+; project lives in a deeply nested folder.
+#ifndef BundleDir
+  #define BundleDir "..\dist\Vortex"
+#endif
 
 [Setup]
 AppId={{7B7C6A6E-6C3B-4E9C-9E3C-2E0B7B6C4B10}
@@ -42,8 +49,8 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [Files]
 ; The build is now a one-directory bundle (Vortex.exe + _internal\), not a
 ; single .exe - see build_exe.spec for why. Ship the whole folder.
-Source: "..\dist\Vortex\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
-Source: "..\dist\Vortex\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BundleDir}\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+Source: "{#BundleDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"

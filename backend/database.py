@@ -310,6 +310,170 @@ class Database:
         finally:
             conn.close()
 
+    @staticmethod
+    def _normalized_identity(value: Any) -> str:
+        """Canonical form for locally comparing Riot/account identifiers."""
+        return (value or "").strip().casefold()
+
+    @classmethod
+    def _duplicate_account_groups(cls, accounts: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """Group records that are demonstrably the same Riot account.
+
+        PUUID is the authoritative Riot identity.  A normalized username also
+        identifies an exact local credential record.  Riot ID is deliberately
+        only a fallback: it may join records when none of the matching rows
+        disagree on a PUUID, never when it would collapse two known accounts.
+        """
+        if not accounts:
+            return []
+
+        parent = {acc["id"]: acc["id"] for acc in accounts}
+
+        def find(item_id: int) -> int:
+            while parent[item_id] != item_id:
+                parent[item_id] = parent[parent[item_id]]
+                item_id = parent[item_id]
+            return item_id
+
+        def union(left: int, right: int) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        def join_on(field: str, accept=lambda value: bool(value)) -> None:
+            seen: Dict[str, int] = {}
+            for acc in accounts:
+                value = cls._normalized_identity(acc.get(field))
+                if not accept(value):
+                    continue
+                if value in seen:
+                    union(acc["id"], seen[value])
+                else:
+                    seen[value] = acc["id"]
+
+        join_on("username")
+        join_on("puuid")
+
+        # Riot IDs are mutable display identifiers, so use them only to join
+        # blank/unknown PUUID records to one known identity (or each other).
+        by_riot_id: Dict[str, List[Dict[str, Any]]] = {}
+        for acc in accounts:
+            riot_id = cls._normalized_identity(acc.get("display_name"))
+            if riot_id and "#" in riot_id:
+                by_riot_id.setdefault(riot_id, []).append(acc)
+        for matches in by_riot_id.values():
+            known_puuids = {
+                cls._normalized_identity(acc.get("puuid"))
+                for acc in matches if cls._normalized_identity(acc.get("puuid"))
+            }
+            if len(known_puuids) <= 1:
+                first = matches[0]["id"]
+                for acc in matches[1:]:
+                    union(first, acc["id"])
+
+        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        for acc in accounts:
+            grouped.setdefault(find(acc["id"]), []).append(acc)
+        return list(grouped.values())
+
+    @staticmethod
+    def _canonical_account(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Keep the oldest record addressable; never pick based on password."""
+        return min(records, key=lambda acc: acc["id"])
+
+    _SAFE_DUPLICATE_FILL_FIELDS = (
+        "password", "puuid", "display_name", "region", "notes",
+        "rank_tier", "rank_division", "rank_icon_url", "peak_rank_tier",
+        "peak_rank_division", "peak_rank_icon_url", "peak_rank_season",
+        "card_small_url", "last_login", "last_updated",
+    )
+
+    @classmethod
+    def _safe_duplicate_fill(cls, canonical: Dict[str, Any], records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Fill only missing canonical data; conflicting credentials stay intact."""
+        changes: Dict[str, Any] = {}
+        for field in cls._SAFE_DUPLICATE_FILL_FIELDS:
+            if canonical.get(field):
+                continue
+            for record in records:
+                if record["id"] != canonical["id"] and record.get(field):
+                    changes[field] = record[field]
+                    canonical[field] = record[field]
+                    break
+        return changes
+
+    def reconcile_accounts(self) -> Dict[str, int]:
+        """Repair local roster state without contacting Riot or deleting rows.
+
+        Existing duplicate records remain stored (including their credentials),
+        but one canonical record is used for the account list.  Missing,
+        non-conflicting canonical fields may be filled from its duplicate.
+        """
+        repaired = self.repair_ghost_accounts()
+        conn = self.get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM accounts WHERE (status IS NULL OR UPPER(status) NOT IN ('BANNED', 'SUSPENDED'))"
+            ).fetchall()
+            accounts = [self._row_to_dict(row) for row in rows]
+            groups = self._duplicate_account_groups(accounts)
+            duplicate_records = 0
+            merged_fields = 0
+            for records in groups:
+                if len(records) < 2:
+                    continue
+                duplicate_records += len(records) - 1
+                canonical = self._canonical_account(records)
+                changes = self._safe_duplicate_fill(canonical, records)
+                if changes:
+                    fields = ", ".join(f"{key} = ?" for key in changes)
+                    conn.execute(
+                        f"UPDATE accounts SET {fields} WHERE id = ?",
+                        list(changes.values()) + [canonical["id"]],
+                    )
+                    merged_fields += len(changes)
+            conn.commit()
+            return {
+                "stored_accounts": len(accounts),
+                "visible_accounts": len(groups),
+                "duplicate_records": duplicate_records,
+                "merged_fields": merged_fields,
+                "repaired_ghosts": repaired,
+            }
+        finally:
+            conn.close()
+
+    def find_account_conflict(
+        self, username: str = "", puuid: str = "", display_name: str = ""
+    ) -> Optional[Dict[str, str]]:
+        """Find an existing account with the same stable/local identity.
+
+        Username and PUUID are direct identifiers.  Riot ID is used only for
+        records with no PUUID on either side, which prevents a renamed display
+        ID from joining two separately verified Riot accounts.
+        """
+        username_key = self._normalized_identity(username)
+        puuid_key = self._normalized_identity(puuid)
+        riot_id_key = self._normalized_identity(display_name)
+        conn = self.get_connection()
+        try:
+            for table, location in (("accounts", "active"), ("banned_accounts", "banned")):
+                rows = [dict(row) for row in conn.execute(f"SELECT * FROM {table}").fetchall()]
+                for row in rows:
+                    if username_key and self._normalized_identity(row.get("username")) == username_key:
+                        return {"location": location, "identifier": "username"}
+                    if puuid_key and self._normalized_identity(row.get("puuid")) == puuid_key:
+                        return {"location": location, "identifier": "puuid"}
+                    if (
+                        not puuid_key and not self._normalized_identity(row.get("puuid"))
+                        and riot_id_key and "#" in riot_id_key
+                        and self._normalized_identity(row.get("display_name")) == riot_id_key
+                    ):
+                        return {"location": location, "identifier": "riot_id"}
+            return None
+        finally:
+            conn.close()
+
     def get_all_accounts(
         self,
         search: str = "",
@@ -382,8 +546,15 @@ class Database:
                 query += " ORDER BY favorite DESC, level DESC"
 
             cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [self._row_to_dict(row) for row in rows]
+            rows = [self._row_to_dict(row) for row in cursor.fetchall()]
+            # Hide legacy duplicate records from the rendered library while
+            # retaining every row (and its credentials) in local storage.
+            visible = []
+            for records in self._duplicate_account_groups(rows):
+                canonical = self._canonical_account(records).copy()
+                self._safe_duplicate_fill(canonical, records)
+                visible.append(canonical)
+            return visible
         finally:
             conn.close()
 
@@ -722,37 +893,35 @@ class Database:
             conn.close()
 
     def get_stats_summary(self) -> Dict[str, Any]:
+        # Use the same reconciled roster as the UI, otherwise duplicate
+        # stored credential rows would make header totals disagree with cards.
+        accounts = self.get_all_accounts(sort_by="name")
+        regions: Dict[str, int] = {}
+        for account in accounts:
+            region = account.get("region") or "NA"
+            regions[region] = regions.get(region, 0) + 1
+
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as total FROM accounts")
-            total = cursor.fetchone()["total"]
-
-            cursor.execute("SELECT COUNT(*) as mains FROM accounts WHERE UPPER(tag) = 'MAIN'")
-            mains = cursor.fetchone()["mains"]
-
-            cursor.execute("SELECT COUNT(*) as ranked FROM accounts WHERE level >= 20 OR UPPER(tag) = 'RANKED'")
-            ranked = cursor.fetchone()["ranked"]
-
-            cursor.execute("SELECT COUNT(*) as unrated FROM accounts WHERE level < 20 AND UPPER(tag) NOT IN ('MAIN', 'ALT', 'RANKED')")
-            unrated = cursor.fetchone()["unrated"]
-
-            cursor.execute("SELECT region, COUNT(*) as count FROM accounts GROUP BY region")
-            regions = {row["region"]: row["count"] for row in cursor.fetchall()}
-
-            cursor.execute("SELECT COUNT(*) as banned FROM banned_accounts")
-            banned = cursor.fetchone()["banned"]
-
-            return {
-                "total_accounts": total,
-                "main_accounts": mains,
-                "ranked_accounts": ranked,
-                "unrated_accounts": unrated,
-                "banned_accounts": banned,
-                "regions": regions
-            }
+            banned = conn.execute("SELECT COUNT(*) AS count FROM banned_accounts").fetchone()["count"]
         finally:
             conn.close()
+
+        return {
+            "total_accounts": len(accounts),
+            "main_accounts": sum((account.get("tag") or "").upper() == "MAIN" for account in accounts),
+            "ranked_accounts": sum(
+                (account.get("level") or 0) >= 20 or (account.get("tag") or "").upper() == "RANKED"
+                for account in accounts
+            ),
+            "unrated_accounts": sum(
+                (account.get("level") or 0) < 20
+                and (account.get("tag") or "").upper() not in ("MAIN", "ALT", "RANKED")
+                for account in accounts
+            ),
+            "banned_accounts": banned,
+            "regions": regions,
+        }
 
     def get_settings(self) -> Dict[str, str]:
         conn = self.get_connection()
@@ -804,6 +973,19 @@ class Database:
             uname_key = (acc.get("username") or "").strip().lower()
             if not uname_key or uname_key in seen_in_batch:
                 skipped_existing += 1
+                continue
+
+            # Backups from older versions may contain different credential
+            # rows for the same known Riot account. Do not import a second
+            # visible copy just because its username differs.
+            identity_conflict = self.find_account_conflict(
+                acc.get("username", ""), acc.get("puuid", ""), acc.get("display_name", "")
+            )
+            if identity_conflict and identity_conflict["identifier"] != "username":
+                if identity_conflict["location"] == "banned":
+                    skipped_banned += 1
+                else:
+                    skipped_existing += 1
                 continue
 
             existing = self.account_exists(acc["username"])

@@ -1,5 +1,5 @@
 {
-  "version": "5.5.30",
+  "version": "5.5.31",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.30: a follow-up to 5.5.29. The full match scoreboard was covering each agent's portrait with its small role badge - the agent art is visible again, badge back in the corner. Players whose agent hasn't resolved yet no longer show a random real agent portrait and a line like \"Miks - Agent\"; they show a plain silhouette and \"Agent resolving...\" instead. The account card's WIN RATE and match count were read from a stored figure that resets to zero whenever the last background stat sync failed, so a card could read \"WIN RATE 0%\" and \"Matches (0)\" next to a match list with wins in it - it now counts the matches it actually has. And the Check Accounts button can no longer spin forever: if the verification run hits an error partway through it always cleans up, one bad account doesn't abort the batch, and the button gives up on its own if the check stops responding."
+  "changelog": "Vortex v5.5.31: fixes production packaging from deeply nested folders so the installer ships the complete runtime bundle, removes unnecessary hidden WebView startup work, and keeps update handoff paths compatible with current Python builds."
 }

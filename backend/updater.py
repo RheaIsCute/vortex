@@ -294,7 +294,7 @@ def apply_and_relaunch(installer_path: str, target_version: str = "") -> bool:
         ps_var_list = ", ".join(f"'{v}'" for v in PYI_ENV_VARS)
         dir_arg = f' /DIR=\"{current_dir}\"' if current_dir else ""
 
-        ps1_content = f"""# Vortex Automated Background Updater
+        ps1_content = rf"""# Vortex Automated Background Updater
 $logFile = "{LOG_FILE}"
 $readyFlag = "{READY_FLAG}"
 $goFlag = "{GO_FLAG}"
@@ -354,7 +354,7 @@ Get-Process -Name "Vortex" -ErrorAction SilentlyContinue | Stop-Process -Force -
 
 # WebView2 children whose command line points at the Vortex install.
 Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.CommandLine -like "*\\Programs\\Vortex\\*" -or $_.CommandLine -like "*\\Vortex\\_internal\\*" }} |
+    Where-Object {{ $_.CommandLine -like "*\Programs\Vortex\*" -or $_.CommandLine -like "*\Vortex\_internal\*" }} |
     ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 
 # Overwolf holds Vortex's VCRUNTIME140.dll. Stop it (and its browser procs);
@@ -373,7 +373,7 @@ if ($vxInternal) {{
         Get-Process -ErrorAction SilentlyContinue | ForEach-Object {{
             $proc = $_
             try {{
-                if ($proc.Modules | Where-Object {{ $_.FileName -like "$vxInternal\\*" }}) {{
+                if ($proc.Modules | Where-Object {{ $_.FileName -like "$vxInternal\*" }}) {{
                     Write-Log ("Killing {{0}} ({{1}}) - holds a Vortex _internal DLL" -f $proc.ProcessName, $proc.Id)
                     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
                 }}
@@ -400,7 +400,7 @@ Start-Sleep -Seconds 1
 $candidates = @(
     '{exe_path}',
     '{default_target}',
-    "$env:LOCALAPPDATA\\Programs\\Vortex\\Vortex.exe",
+    "$env:LOCALAPPDATA\Programs\Vortex\Vortex.exe",
     '{local_target}',
     '{alt_target}',
     '{x86_target}'
@@ -408,7 +408,7 @@ $candidates = @(
 
 # Inno records DisplayName as "<AppName> version <AppVersion>", so an exact
 # match on "Vortex" never hits - hence the wildcard.
-$reg = Get-ItemProperty "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*" -ErrorAction SilentlyContinue |
+$reg = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
        Where-Object {{ $_.DisplayName -like "Vortex*" -and $_.InstallLocation }}
 foreach ($r in $reg) {{
     $candidates = @((Join-Path $r.InstallLocation "Vortex.exe")) + $candidates
@@ -496,7 +496,7 @@ Write-Log "Update cycle complete (relaunched: $running)."
         vbs_content = (
             'CreateObject("Wscript.Shell").Run '
             '"powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass '
-            f'-File ""{updater_ps1}""", 0, False\n'
+            + '-File ""' + updater_ps1 + '""", 0, False\n'
         )
         with open(updater_vbs, "w", encoding="utf-8") as f:
             f.write(vbs_content)
