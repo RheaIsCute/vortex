@@ -21,7 +21,7 @@ Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setu
 
 Dependencies:
 
-Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 is built, pushed, tagged, published, and verified. An in-place GUI upgrade was not run because an existing legacy Vortex process could not be safely terminated in this session.
+Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 is built, pushed, tagged, published, and verified. The installer passed an isolated temporary install test; an in-place GUI upgrade was not run because an existing legacy Vortex process could not be safely terminated in this session.
 
 ### Claude
 
