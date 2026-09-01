@@ -440,7 +440,8 @@ class CachedNamesTests(unittest.TestCase):
 class MatchScoreboardTests(unittest.TestCase):
     def _details(self):
         return {
-            "matchInfo": {"matchId": "scoreboard-1", "mapId": "map-1", "queueID": "competitive"},
+            "matchInfo": {"matchId": "scoreboard-1", "mapId": "map-1", "queueID": "competitive",
+                          "gameStartMillis": 1724956800000},
             "players": [
                 {"subject": "p1", "teamId": "Blue", "characterId": "a1",
                  "stats": {"kills": 12, "deaths": 7, "assists": 3, "score": 3200, "roundsPlayed": 20}},
@@ -470,6 +471,22 @@ class MatchScoreboardTests(unittest.TestCase):
         self.assertEqual(160, parsed["roster"][0]["acs"])
         self.assertEqual(480, parsed["roster"][0]["damage"])
         self.assertEqual("", parsed["roster"][0]["riot_id"])
+
+    @patch.object(vc, "resolve_map", return_value={"name": "Ascent"})
+    @patch.object(vc, "agent_by_id", side_effect=lambda agent: {"name": agent, "icon": f"/{agent}.png"})
+    def test_parsed_match_exposes_game_date_like_account_manager(self, _agent, _map):
+        # The Dashboard / Live Stats path must surface the same `game_date`
+        # string field the Account-Manager path shows, formatted from the
+        # match's epoch start. Missing timestamp -> "" (fall back to "Recent").
+        parsed = vc._parse_match(self._details(), "p1")
+        self.assertIn("game_date", parsed)
+        self.assertRegex(parsed["game_date"], r"^[A-Z][a-z]+, [A-Z][a-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M$")
+        self.assertEqual(1724956800000, parsed["started_at"])
+
+        no_ts = self._details()
+        no_ts["matchInfo"].pop("gameStartMillis")
+        self.assertEqual("", vc._parse_match(no_ts, "p1")["game_date"])
+        self.assertEqual("", vc._format_match_date(0))
 
     def test_puuid_placeholders_resolve_to_full_riot_ids(self):
         match = {"roster": [

@@ -2381,6 +2381,100 @@ async function openMatchesModal(id) {
     }
 }
 
+// A recent match arrives in one of two shapes: the Account-Manager path
+// (HenrikDev scrape: `outcome` VICTORY/DEFEAT, `kdr`, `hs_pct`, `game_date`
+// string) and the Dashboard / Live Stats path (local client: `result`
+// Win/Loss, `kd`, `hs`, `started_at` epoch millis). These helpers normalise
+// both so a single card component renders either identically.
+
+function matchOutcome(m) {
+    const raw = String(m.outcome || m.result || "").toUpperCase();
+    if (raw === "VICTORY" || raw === "WIN") return { text: "VICTORY", cls: "outcome-victory" };
+    if (raw === "DEFEAT" || raw === "LOSS") return { text: "DEFEAT", cls: "outcome-defeat" };
+    return { text: raw || "DRAW", cls: "outcome-draw" };
+}
+
+// Same date the Account-Manager rows show: prefer the server-formatted
+// `game_date` string, fall back to formatting the epoch `started_at` locally
+// (same wording), and finally to "Recent" - exactly the Account-Manager
+// fallback. No separate date system.
+function matchDateLabel(m) {
+    if (m && m.game_date) return m.game_date;
+    const millis = Number(m && (m.started_at || m.game_start_millis) || 0);
+    if (millis > 0) {
+        const d = new Date(millis);
+        if (!isNaN(d)) {
+            const h12 = d.getHours() % 12 || 12;
+            const mer = d.getHours() < 12 ? "AM" : "PM";
+            const day = d.toLocaleDateString(undefined, { weekday: "long" });
+            const month = d.toLocaleDateString(undefined, { month: "long" });
+            return `${day}, ${month} ${d.getDate()}, ${d.getFullYear()} ${h12}:${String(d.getMinutes()).padStart(2, "0")} ${mer}`;
+        }
+    }
+    return "Recent";
+}
+
+/** One match row - the shared component for both entry points. */
+function matchCardHtml(m, i, source) {
+    const outcome = matchOutcome(m);
+    const mapAsset = ValorantAssets.getMap(m.map);
+    const agentAsset = ValorantAssets.getAgent(m.agent || m.character);
+    const agentIcon = m.agent_icon || agentAsset.icon;
+    const kdrVal = Number(m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed(2);
+    const kdrClass = kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative");
+    const hsPct = m.hs_pct ?? m.hs ?? 0;
+    const score = m.placement ? `#${m.placement}` : `${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}`;
+
+    return `
+        <button class="match-card ${outcome.cls}" style="--i:${i}; --map-splash: url('${mapAsset.splash}');" type="button" onclick="openMatchDetail(${i}, '${source}')" title="Open full match details">
+            <div class="match-card-bg-mask"></div>
+            <div class="match-card-inner">
+                <div class="match-agent-section">
+                    <div class="match-agent-avatar-wrap ${agentIcon ? "" : "is-empty"}">
+                        ${agentIcon
+                            ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.closest('.match-agent-avatar-wrap').classList.add('is-empty'); this.remove();">`
+                            : `<span class="match-agent-avatar is-placeholder"><i class="fa-solid fa-user"></i></span>`}
+                        ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="match-role-badge" title="${agentAsset.role}">` : ''}
+                    </div>
+                    <div class="match-agent-info">
+                        <h4>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)}</h4>
+                        <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}${m.surrendered ? ' · Surrender' : ''}</span>
+                    </div>
+                </div>
+
+                <div class="match-map-section">
+                    <span class="match-map-name">${escapeHtml(mapAsset.displayName)}</span>
+                    <span class="match-date-label">${escapeHtml(matchDateLabel(m))}</span>
+                </div>
+
+                <div class="match-score-section">
+                    <span class="match-outcome-badge">${escapeHtml(outcome.text)}</span>
+                    <span class="match-rounds-score">${escapeHtml(score)}</span>
+                </div>
+
+                <div class="match-stats-section">
+                    <div class="stat-box">
+                        <span class="stat-box-label">K / D / A</span>
+                        <span class="stat-box-val">${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-box-label">KD Ratio</span>
+                        <span class="stat-box-val ${kdrClass}">${kdrVal}</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-box-label">Headshot</span>
+                        <span class="stat-box-val text-hs">${hsPct}%</span>
+                    </div>
+                </div>
+
+                <div class="match-card-arrow">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </div>
+            </div>
+        </button>
+    `;
+}
+
 function renderMatchHistoryList(matches) {
     if (!matches || matches.length === 0) {
         DOM.matchesListContainer.innerHTML = `
@@ -2393,68 +2487,7 @@ function renderMatchHistoryList(matches) {
         return;
     }
 
-    DOM.matchesListContainer.innerHTML = matches.map((m, i) => {
-        const outcome = (m.outcome || m.result || "VICTORY").toUpperCase();
-        const outcomeClass = outcome === "VICTORY" ? "outcome-victory" : (outcome === "DEFEAT" ? "outcome-defeat" : "outcome-draw");
-        const mapAsset = ValorantAssets.getMap(m.map);
-        const agentAsset = ValorantAssets.getAgent(m.agent || m.character);
-        const agentIcon = m.agent_icon || agentAsset.icon;
-        const kdrVal = Number(m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed(2);
-        const kdrClass = kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative");
-
-        return `
-            <button class="match-card ${outcomeClass}" style="--i:${i}; --map-splash: url('${mapAsset.splash}');" type="button" onclick="openMatchDetail(${i}, 'account')" title="Open full match details">
-                <div class="match-card-bg-mask"></div>
-                <div class="match-card-inner">
-                    <!-- Agent Section -->
-                    <div class="match-agent-section">
-                        <div class="match-agent-avatar-wrap ${agentIcon ? "" : "is-empty"}">
-                            ${agentIcon
-                                ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" class="match-agent-avatar" onerror="this.closest('.match-agent-avatar-wrap').classList.add('is-empty'); this.remove();">`
-                                : `<span class="match-agent-avatar is-placeholder"><i class="fa-solid fa-user"></i></span>`}
-                            ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="match-role-badge" title="${agentAsset.role}">` : ''}
-                        </div>
-                        <div class="match-agent-info">
-                            <h4>${escapeHtml(agentAsset.unresolved ? "Agent" : agentAsset.name)}</h4>
-                            <span class="match-mode-label">${escapeHtml(m.mode || 'Competitive')}</span>
-                        </div>
-                    </div>
-
-                    <!-- Map Section -->
-                    <div class="match-map-section">
-                        <span class="match-map-name">${escapeHtml(mapAsset.displayName)}</span>
-                        <span class="match-date-label">${escapeHtml(m.game_date || 'Recent')}</span>
-                    </div>
-
-                    <!-- Score Section -->
-                    <div class="match-score-section">
-                        <span class="match-outcome-badge">${outcome}</span>
-                        <span class="match-rounds-score">${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}</span>
-                    </div>
-
-                    <!-- Stats Section -->
-                    <div class="match-stats-section">
-                        <div class="stat-box">
-                            <span class="stat-box-label">K / D / A</span>
-                            <span class="stat-box-val">${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-box-label">KD Ratio</span>
-                            <span class="stat-box-val ${kdrClass}">${kdrVal}</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-box-label">Headshot</span>
-                            <span class="stat-box-val text-hs">${m.hs_pct ?? m.hs ?? 0}%</span>
-                        </div>
-                    </div>
-
-                    <div class="match-card-arrow">
-                        <i class="fa-solid fa-chevron-right"></i>
-                    </div>
-                </div>
-            </button>
-        `;
-    }).join("");
+    DOM.matchesListContainer.innerHTML = matches.map((m, i) => matchCardHtml(m, i, "account")).join("");
 }
 
 // The "Recent Winrate" figure in the match modal should reflect the matches
@@ -2791,7 +2824,7 @@ function openMatchDetail(index, source) {
     }
 
     DOM.detailModalTitle.textContent = `${mapAsset.displayName} · ${outcome}`;
-    DOM.detailModalSub.textContent = `${m.mode || "Competitive"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${m.game_date || "Recent"}`;
+    DOM.detailModalSub.textContent = `${m.mode || "Competitive"} · ${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0} · ${matchDateLabel(m)}`;
 
     DOM.matchDetailContent.innerHTML = `
         <!-- Match Hero Splash Banner -->
@@ -2807,7 +2840,7 @@ function openMatchDetail(index, source) {
                     <div class="match-hero-meta">
                         <span class="match-hero-mode">${escapeHtml(m.mode || "Competitive")}</span>
                         <h2 class="match-hero-map">${escapeHtml(mapAsset.displayName)}</h2>
-                        <span class="match-hero-date"><i class="fa-regular fa-clock"></i> ${escapeHtml(m.game_date || "Recent")}</span>
+                        <span class="match-hero-date"><i class="fa-regular fa-clock"></i> ${escapeHtml(matchDateLabel(m))}</span>
                     </div>
                 </div>
 
@@ -5755,42 +5788,8 @@ function renderPlayerStats() {
         ${(s.recent || []).length ? `
         <div class="stat-block">
             <h5 class="stat-block-title"><i class="fa-solid fa-clock-rotate-left"></i> Match History & Performance</h5>
-            <div class="stat-matches">
-                ${s.recent.map((m, i) => {
-                    const isWin = m.result === "Win";
-                    const isLoss = m.result === "Loss";
-                    const outcomeText = isWin ? "VICTORY" : (isLoss ? "DEFEAT" : "DRAW");
-                    const scoreText = m.placement ? `#${m.placement}` : `${m.rounds_won} – ${m.rounds_lost}`;
-                    return `
-                    <button type="button" class="stat-match ${isWin ? "is-win" : (isLoss ? "is-loss" : "")}" onclick="openMatchDetail(${i}, 'dashboard')" title="Open full match details">
-                        <span class="stat-match-flag"></span>
-                        <div class="stat-match-agent-wrap">
-                            <img src="${m.agent_icon}" alt="${escapeHtml(m.agent)}" class="stat-match-agent-img" onerror="this.style.visibility='hidden';">
-                        </div>
-                        <div class="stat-match-meta">
-                            <div class="stat-match-title-row">
-                                <span class="stat-match-outcome ${isWin ? 'is-win' : (isLoss ? 'is-loss' : '')}">${outcomeText}</span>
-                                <strong class="stat-match-map">${escapeHtml(m.map || "Unknown")}</strong>
-                                <span class="stat-match-score-pill">${scoreText}</span>
-                                ${m.surrendered ? `<span class="stat-match-surrender-pill" title="Match concluded early via surrender"><i class="fa-solid fa-flag"></i> Surrender</span>` : ""}
-                            </div>
-                            <div class="stat-match-details-row">
-                                <span class="stat-match-mode">${escapeHtml(m.mode || "Competitive")}</span>
-                                <span class="stat-match-metric is-hs" title="Match Headshot Accuracy"><i class="fa-solid fa-bullseye"></i> ${m.hs || 0}% HS</span>
-                                <span class="stat-match-metric is-adr" title="Average Damage per Round"><i class="fa-solid fa-fire-flame-curved"></i> ${m.adr || 0} ADR</span>
-                                <span class="stat-match-metric is-acs" title="Average Combat Score"><i class="fa-solid fa-bolt"></i> ${m.acs || 0} ACS</span>
-                            </div>
-                        </div>
-                        <div class="stat-match-kda-wrap">
-                            <div class="stat-match-kda-numbers">
-                                <span class="stat-kda-score">${m.kills} <small>/</small> ${m.deaths} <small>/</small> ${m.assists}</span>
-                            </div>
-                            <div class="stat-match-kd-pill ${m.kd >= 1 ? 'is-positive' : 'is-negative'}">
-                                ${m.kd} K/D
-                            </div>
-                        </div>
-                    </button>
-                `}).join("")}
+            <div class="matches-list matches-list-compact">
+                ${s.recent.map((m, i) => matchCardHtml(m, i, "dashboard")).join("")}
             </div>
         </div>` : ""}
     `;

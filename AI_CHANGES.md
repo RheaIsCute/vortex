@@ -137,3 +137,41 @@ Limitations:
 
 - The autolock re-arm confirmation reports success as soon as the backend accepts the new target; it does not wait for an in-progress agent-select lock to actually fire (that stays the watcher's job, surfaced through the existing status line).
 - The insta-lock agent switch was verified against the live API surface and unit tests; a full in-client agent-select run was not exercised in this environment.
+
+## 2026-09-01 — Claude — Unify dashboard match history + v5.5.36 release
+
+Changed:
+
+- Match history had two fully separate renderers: the Account-Manager modal (`renderMatchHistoryList` → `.match-card`, data from HenrikDev via `backend/scraper.py`: `outcome` VICTORY/DEFEAT, `kdr`, `hs_pct`, and a pre-formatted `game_date` string) and the Dashboard / Live Stats "Match History & Performance" block (`.stat-match*`, data from the local client via `_parse_match`: `result` Win/Loss, `kd`, `hs`, `started_at` epoch millis, **no date field**).
+- Extracted one shared row component `matchCardHtml(m, i, source)` plus `matchOutcome(m)` (accepts VICTORY/WIN and DEFEAT/LOSS) and `matchDateLabel(m)` (prefers `game_date`, else formats `started_at` locally with the same wording, else `"Recent"` — the same fallback the Account-Manager rows already use). `renderMatchHistoryList` and the dashboard block now both call `matchCardHtml`; the dashboard uses it inside `.matches-list.matches-list-compact`. The full match-detail modal (`openMatchDetail`, shared by both) now reads `matchDateLabel(m)` instead of `m.game_date || "Recent"`, so dashboard-sourced matches show their real date there too.
+- Backend: `_parse_match` now also returns `game_date`, formatted from `gameStartMillis` by a new `_format_match_date()` helper that mirrors HenrikDev's `game_start_patched` style ("Friday, August 29, 2025 5:00 PM"), in local time, "" when the timestamp is missing. `started_at` is unchanged. This makes the two paths agree on the date at the source, not just in the UI.
+- Deleted the duplicated `.stat-match*` CSS (~210 lines) and the `.stat-matches` markup; added `.matches-list-compact` overrides that tighten the shared `.match-card` for the narrower dashboard column and let the stat boxes wrap under the row below ~1180px instead of overflowing.
+
+Root causes:
+
+- **Dashboard had no date**: the Account-Manager path gets a ready-made `game_date` string from the HenrikDev API; the local-client path only ever had the raw `gameStartMillis`, and nothing formatted it. Not a timezone/formatting bug — the field simply did not exist on that path.
+- **Broken dashboard row layout**: `.stat-match` packed an outcome badge + map + score pill on one line and mode + three metric pills (HS/ADR/ACS) on a second, plus a right-hand KDA column, into the ~680px dashboard-left column. The second row wrapped and collided with the KDA column; the flag/agent art sat flush against text. The Account-Manager `.match-card` is a clean fixed-slot flex row (agent | map+date | score | stats) and does not have this problem.
+
+Files:
+
+- `frontend/app.js`, `frontend/styles.css`
+- `backend/valorant_client.py`
+- `tests/test_valorant_client.py`, `tests/test_settings_and_ui.py`
+- `backend/version.py`, `version.json`, `installer/vortex_setup.iss`
+- `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts:
+
+- None. `_parse_match` gains an additive `game_date` field on the existing live-stats `recent[]` payload (already covered by the "Live-match telemetry" contract's "availability/source indicators" — no shape change, only an added optional field). No endpoint changes.
+
+Tests:
+
+- `python -m pytest -q` → 68 passed (2 pre-existing FastAPI deprecation warnings). New: `test_parsed_match_exposes_game_date_like_account_manager` (backend date field + format + empty fallback), `test_match_history_is_unified_between_entry_points` (one shared component, old duplicated markup/CSS gone, single date helper).
+- `python -m compileall -q backend` passed.
+- `backend.valorant_client._format_match_date` spot-checked: `0 → ""`, `1724956800000 → "Thursday, August 29, 2024 12:40 PM"`.
+- `build.bat` → PyInstaller bundle (3846 `_internal` files) + `dist_installer/VortexSetup.exe`.
+
+Limitations:
+
+- A live side-by-side of the same match through both entry points needs VALORANT running and a signed-in account, which was not available in this environment; verified via the unit tests, the backend formatter, code review, and a production build. The in-memory `_MATCH_CACHE` is process-lifetime, so any match cached by a running older build is re-parsed (and gains `game_date`) on the next app start.
+- The player-profile lookup modal keeps its own compact `.detail-history-row` mini-list — a different view with a different purpose, explicitly out of scope for this task.

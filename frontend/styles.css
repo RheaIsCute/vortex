@@ -7151,219 +7151,36 @@ body.dashboard-mode .session-bar {
 
 .stat-agent-nums small { font-size: 10.5px; color: var(--text-dim); }
 
-/* Recent matches */
-.stat-matches {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.stat-match {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px 10px 0;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--stroke-1);
-    background: var(--surface-2);
-    overflow: hidden;
-    transition: transform var(--dur-2) var(--ease-spring), border-color var(--dur-2) ease, background var(--dur-2) ease;
-}
-
-.stat-match:hover {
-    transform: translateX(4px);
-    border-color: var(--stroke-2);
-    background: var(--surface-3);
-}
-
-.stat-match-flag {
-    align-self: stretch;
-    width: 4px;
-    background: var(--text-dim);
-    flex: none;
-}
-
-.stat-match.is-win .stat-match-flag {
-    background: #10b981;
-    box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
-}
-
-.stat-match.is-loss .stat-match-flag {
-    background: #f43f5e;
-    box-shadow: 0 0 10px rgba(244, 63, 94, 0.6);
-}
-
-.stat-match-agent-wrap {
-    flex: none;
-    width: 46px;
-    height: 46px;
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    background: var(--surface-3);
-    border: 1px solid var(--stroke-2);
-}
-
-.stat-match-agent-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    image-rendering: auto;
-}
-
-.stat-match-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-    flex: 1;
-}
-
-.stat-match-title-row {
-    display: flex;
-    align-items: center;
+/* Recent matches - the Dashboard / Live Stats path reuses the same .match-card
+   component as the Account Manager modal (see matchCardHtml), just inside a
+   tighter container so it fits the narrower dashboard column. */
+.matches-list-compact {
+    padding: 0;
     gap: 8px;
-    min-width: 0;
+    overflow: visible;
 }
 
-.stat-match-outcome {
-    font-size: 10.5px;
-    font-weight: 900;
-    letter-spacing: 0.6px;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-muted);
+.matches-list-compact .match-card-inner {
+    gap: 12px;
+    padding: 10px 14px;
 }
 
-.stat-match-outcome.is-win {
-    color: #10b981;
-    background: rgba(16, 185, 129, 0.12);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-}
+.matches-list-compact .match-agent-section { min-width: 132px; gap: 10px; }
+.matches-list-compact .match-agent-avatar-wrap { width: 40px; height: 40px; }
+.matches-list-compact .match-agent-info h4 { font-size: 13px; }
+.matches-list-compact .match-map-section { min-width: 104px; }
+.matches-list-compact .match-map-name { font-size: 13px; }
+.matches-list-compact .match-score-section { min-width: 84px; }
+.matches-list-compact .match-rounds-score { font-size: 15px; }
+.matches-list-compact .match-stats-section { gap: 14px; }
+.matches-list-compact .match-card-arrow { display: none; }
 
-.stat-match-outcome.is-loss {
-    color: #f43f5e;
-    background: rgba(244, 63, 94, 0.12);
-    border: 1px solid rgba(244, 63, 94, 0.3);
-}
-
-.stat-match-map {
-    font-size: 13.5px;
-    font-weight: 800;
-    color: var(--text-main);
-}
-
-.stat-match-score-pill {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    font-weight: 800;
-    color: var(--text-sub);
-    padding: 1px 6px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 4px;
-}
-
-.stat-match.is-win .stat-match-score-pill { color: #34d399; }
-.stat-match.is-loss .stat-match-score-pill { color: #fb7185; }
-
-.stat-match-surrender-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    background: rgba(251, 191, 36, 0.1);
-    border: 1px solid rgba(251, 191, 36, 0.3);
-    color: #fbbf24;
-}
-
-.stat-match-details-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-
-.stat-match-mode {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 600;
-}
-
-.stat-match-metric {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 700;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--stroke-1);
-    color: var(--text-sub);
-}
-
-.stat-match-metric.is-hs {
-    color: #fb7185;
-    background: rgba(251, 113, 133, 0.08);
-    border-color: rgba(251, 113, 133, 0.25);
-}
-
-.stat-match-metric.is-adr {
-    color: #f97316;
-    background: rgba(249, 115, 22, 0.08);
-    border-color: rgba(249, 115, 22, 0.25);
-}
-
-.stat-match-metric.is-acs {
-    color: #fbbf24;
-    background: rgba(251, 191, 36, 0.08);
-    border-color: rgba(251, 191, 36, 0.25);
-}
-
-.stat-match-kda-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 3px;
-    flex: none;
-}
-
-.stat-match-kda-numbers {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    font-weight: 800;
-    color: var(--text-main);
-}
-
-.stat-match-kda-numbers small {
-    color: var(--text-dim);
-    font-size: 11px;
-    font-weight: 500;
-    margin: 0 1px;
-}
-
-.stat-match-kd-pill {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 800;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--stroke-1);
-}
-
-.stat-match-kd-pill.is-positive {
-    color: #38bdf8;
-    background: rgba(56, 189, 248, 0.1);
-    border-color: rgba(56, 189, 248, 0.25);
-}
-
-.stat-match-kd-pill.is-negative {
-    color: var(--text-dim);
+/* Below the two-column dashboard breakpoint the left column gets narrow;
+   let the stat boxes wrap under the identity/score instead of overflowing. */
+@media (max-width: 1180px) {
+    .matches-list-compact .match-card-inner { flex-wrap: wrap; row-gap: 8px; }
+    .matches-list-compact .match-stats-section { width: 100%; justify-content: space-between; gap: 10px; }
+    .matches-list-compact .stat-box { align-items: flex-start; }
 }
 
 /* --- 10.14 Inventory ---------------------------------------------------- */
@@ -7549,7 +7366,7 @@ body.dashboard-mode .session-bar {
     background: rgba(var(--danger-rgb), 0.08);
 }
 
-button.match-card, button.stat-match, button.dash-player {
+button.match-card, button.dash-player {
     width: 100%;
     color: inherit;
     font: inherit;

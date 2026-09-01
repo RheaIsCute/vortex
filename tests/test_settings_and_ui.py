@@ -90,3 +90,25 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("image-rendering: auto", agent_img_block)
         self.assertNotIn("transform:", agent_img_block)
         self.assertNotIn("image-rendering: pixelated", styles_css)
+
+    def test_match_history_is_unified_between_entry_points(self):
+        root = Path(__file__).parent.parent
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        # 1. One shared match-row component, used by both entry points.
+        self.assertIn("function matchCardHtml(", app_js)
+        self.assertIn('matchCardHtml(m, i, "account")', app_js)
+        self.assertIn('matchCardHtml(m, i, "dashboard")', app_js)
+
+        # 2. The old duplicated dashboard-only match markup is gone.
+        self.assertNotIn("stat-match-kda-wrap", app_js)
+        self.assertNotIn("stat-match-details-row", app_js)
+        self.assertNotIn(".stat-match ", styles_css)
+        self.assertNotIn(".stat-match-", styles_css)
+
+        # 3. A single date helper, with the Account-Manager fallback ("Recent").
+        self.assertIn("function matchDateLabel(", app_js)
+        self.assertIn('"Recent"', app_js)
+        # The detail modal reads the same helper, not a raw field.
+        self.assertNotIn('m.game_date || "Recent"', app_js)

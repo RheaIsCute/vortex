@@ -2004,6 +2004,26 @@ def current_act_id() -> str:
     return found
 
 
+def _format_match_date(start_millis: int) -> str:
+    """
+    Human-readable local start time for a recent match, matching the string the
+    Account-Manager path already shows (HenrikDev's `game_start_patched`), e.g.
+    "Friday, August 29, 2025 5:00 PM". Returns "" when the timestamp is missing
+    so callers can fall back exactly like the Account-Manager rows do.
+    """
+    if not start_millis:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(start_millis / 1000)
+    except (OSError, OverflowError, ValueError):
+        return ""
+    # %-d / %#d (no-leading-zero day/hour) is platform-specific, so assemble the
+    # numeric parts explicitly. Result: "Friday, August 29, 2025 5:00 PM".
+    hour_12 = dt.hour % 12 or 12
+    meridiem = "AM" if dt.hour < 12 else "PM"
+    return f"{dt:%A, %B} {dt.day}, {dt.year} {hour_12}:{dt.minute:02d} {meridiem}"
+
+
 def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]]:
     """One recent-match row, from this player's point of view."""
     info = details.get("matchInfo") or {}
@@ -2171,6 +2191,7 @@ def _parse_match(details: Dict[str, Any], puuid: str) -> Optional[Dict[str, Any]
         "shots": shots,
         "rounds": rounds,
         "started_at": int(info.get("gameStartMillis", 0) or 0),
+        "game_date": _format_match_date(int(info.get("gameStartMillis", 0) or 0)),
         "ranked": bool(info.get("isRanked", False)),
         "teams": team_summaries,
         "round_results": round_timeline,
