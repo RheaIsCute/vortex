@@ -271,12 +271,6 @@ async def background_auto_detect_and_link(account_id: int):
                     "[%s] stay-signed-in after login: %s", target_username, persisted
                 )
 
-            # Force borderless now rather than only on a Vortex-initiated
-            # launch, so the setting still holds if the game gets started from
-            # the Riot Client's own Play button.
-            session_puuid = (info.get("puuid") or "").strip() or                 await asyncio.to_thread(_current_puuid)
-            await _apply_launch_prefs(session_puuid)
-
             # Start the game straight away when the user has asked for it, so
             # Login behaves like Play without needing the second click.
             if _auto_launch_pref():
@@ -1595,11 +1589,6 @@ class InstalockRequest(BaseModel):
 
 class LockNowRequest(BaseModel):
     agent_id: str
-
-
-class GameConfigBorderlessRequest(BaseModel):
-    account_id: Optional[int] = None  # omitted = whoever's signed in now
-    all_accounts: bool = False        # set every account that has config here
 
 
 class TelemetryEventRequest(BaseModel):
@@ -3031,113 +3020,6 @@ def _current_puuid() -> str:
     return ""
 
 
-# Set while the in-lobby borderless watcher is running, so a second launch
-# doesn't stack another one on top of it.
-_BORDERLESS_WATCH: Dict[str, Any] = {"running": False, "applied_for": ""}
-
-
-def _borderless_when_in_lobby(puuid: str) -> None:
-    """
-    Forces windowed borderless once the game is actually up and sitting in
-    the menus, rather than before it launches.
-
-    VALORANT reads its video config at startup and writes it back from memory
-    afterwards, so a pre-launch write is racing the game's own save and gets
-    silently undone. Waiting until the client reports MENUS means the game has
-    finished its startup read and settled, so the value written is the one
-    still on disk when it next starts.
-
-    Runs on its own thread and gives up quietly - a launch the user cancels,
-    or a game that never reaches the menus, must not leave anything behind.
-    """
-    if not puuid or _BORDERLESS_WATCH["running"]:
-        return
-
-    def watch() -> None:
-        _BORDERLESS_WATCH["running"] = True
-        try:
-            deadline = time.time() + 300  # five minutes covers a slow cold start
-            while time.time() < deadline:
-                time.sleep(3.0)
-                if not launcher.is_valorant_running():
-                    continue
-                try:
-                    client = valorant_client.ValorantLiveClient()
-                    if not client.connect():
-                        continue
-                    state = (client.presence().get("sessionLoopState") or "").upper()
-                except Exception:
-                    continue
-
-                # MENUS is "in the lobby" - past the startup read, not in a match.
-                if state != "MENUS":
-                    continue
-
-                result = game_config.force_borderless(puuid)
-                _BORDERLESS_WATCH["applied_for"] = puuid
-                client_launcher.login_logger.info(
-                    "forced borderless for %s once in the lobby: %s", puuid[:8], result
-                )
-                return
-        finally:
-            _BORDERLESS_WATCH["running"] = False
-
-    threading.Thread(target=watch, daemon=True).start()
-
-
-async def _arm_launch_prefs(puuid: str) -> None:
-    """Apply the optional in-lobby borderless preference around a launch."""
-    if db.get_settings().get("force_borderless", "1") != "0":
-        _borderless_when_in_lobby(puuid)
-
-
-# --------------------------------------------------------------------------
-# LOCAL GAME CONFIG - optional forced borderless
-# --------------------------------------------------------------------------
-
-@app.post("/api/game-config/force-borderless")
-async def force_borderless_now(req: GameConfigBorderlessRequest):
-    """Applies windowed-borderless immediately, without waiting for the next launch."""
-    if req.all_accounts:
-        def run_all() -> Dict[str, Any]:
-            done, skipped = [], []
-            for acc in db.get_all_accounts():
-                name = acc.get("display_name") or acc.get("username", "")
-                pu = (acc.get("puuid") or "").strip()
-                if not pu or game_config.force_borderless(pu) is not True:
-                    skipped.append(name)
-                else:
-                    done.append(name)
-            return {"done": done, "skipped": skipped}
-
-        res = await asyncio.to_thread(run_all)
-        done, skipped = res["done"], res["skipped"]
-        if not done:
-            return {"success": False, "message":
-                    "No account has VALORANT settings on this PC yet, so there's nothing to set."}
-        msg = f"Set {len(done)} account{'s' if len(done) != 1 else ''} to windowed borderless."
-        if skipped:
-            msg += f" {len(skipped)} skipped (never played on this PC)."
-        return {"success": True, "message": msg, "done": done, "skipped": skipped}
-
-    if req.account_id:
-        acc = db.get_account_by_id(req.account_id)
-        if not acc or not acc.get("puuid"):
-            return {"success": False, "message": "Account not found or has no known PUUID yet - check it in once first."}
-        puuid = acc["puuid"]
-    else:
-        puuid = await asyncio.to_thread(_current_puuid)
-        if not puuid:
-            return {"success": False, "message": "No account is signed into the Riot Client right now."}
-
-    result = await asyncio.to_thread(game_config.force_borderless, puuid)
-    if result is None:
-        return {"success": False, "message": "This account hasn't signed into VALORANT on this PC yet - log in and reach the main menu once first."}
-    if result is False:
-        return {"success": False, "message": "Couldn't write the settings file - is VALORANT currently running for this account?"}
-    return {"success": True, "message": "Set to windowed borderless."}
-
-
 @app.get("/api/overwolf/status")
 async def overwolf_status():
     """Whether the live-combat provider is installed, running, or installing."""
@@ -3330,7 +3212,6 @@ async def live_launch():
     settings = db.get_settings()
     client_path = settings.get("riot_client_path", "") or ""
 
-    await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
     result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
     invalidate_live_snapshot()
     return {**result, "launch": valorant_client.launch_state()}
@@ -3343,8 +3224,7 @@ async def live_launch_state():
 
 async def _launch_game_for_current_session() -> None:
     """
-    Starts VALORANT for whoever just signed in, applying the optional
-    forced-borderless preference first.
+    Starts VALORANT for whoever just signed in.
 
     Used by "start the game after a plain Login". Never raises - it runs
     detached from any request, so a failure here must not take down the
@@ -3357,9 +3237,6 @@ async def _launch_game_for_current_session() -> None:
         # The Riot Client needs a moment after auth before it will accept a
         # launch request for the new session.
         await asyncio.sleep(1.5)
-
-        puuid = await asyncio.to_thread(_current_puuid)
-        await _arm_launch_prefs(puuid)
 
         settings = db.get_settings()
         client_path = settings.get("riot_client_path", "") or             await asyncio.to_thread(launcher.detect_riot_client_path)
@@ -3397,7 +3274,6 @@ async def background_login_then_play(account_id: int):
                 )
                 return  # banned/suspended - don't launch
             await asyncio.sleep(1.5)
-            await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
             launch = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
             if launch.get("success"):
                 client_launcher._set_login_stage(
@@ -3439,7 +3315,6 @@ async def play_account(account_id: int, background_tasks: BackgroundTasks):
             return {"success": True, "already_running": True, "switched": False,
                     "message": "VALORANT is already running for this account."}
 
-        await _arm_launch_prefs(await asyncio.to_thread(_current_puuid))
         result = await asyncio.to_thread(valorant_client.launch_valorant, client_path)
         if not result.get("success"):
             return {"success": False, "message": result.get("message") or

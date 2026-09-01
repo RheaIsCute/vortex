@@ -101,10 +101,6 @@
 
             <!-- Header Action Buttons -->
             <div class="header-actions" id="header-actions">
-                <button class="btn btn-secondary is-dash-toggle" id="btn-toggle-dashboard" title="Live match dashboard">
-                    <i class="fa-solid fa-gauge-high"></i>
-                    <span>Dashboard</span>
-                </button>
                 <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status">
                     <i class="fa-solid fa-list-check" id="check-all-icon"></i>
                     <span>Check Accounts</span>
@@ -751,47 +747,19 @@
                 </div>
 
                 <div class="form-group">
-                    <label><i class="fa-solid fa-chart-line"></i> Live Aim HUD</label>
+                    <label><i class="fa-solid fa-satellite-dish"></i> Live Match Features</label>
                     <p class="field-help">
-                        A compact click-through display in the upper-right corner showing this match's live K/D/A,
-                        headshot chance, and round-by-round aim trace. It never sends input to VALORANT.
-                    </p>
-
-                    <div class="switch-row">
-                        <label class="switch">
-                            <input type="checkbox" id="settings-live-hud-enabled">
-                            <span class="switch-track"><span class="switch-thumb"></span></span>
-                        </label>
-                        <div class="switch-row-text">
-                            <strong>Show live aim HUD in matches</strong>
-                            <span>Requires the installed Overwolf event provider for exact current-game stats.</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label><i class="fa-solid fa-satellite-dish"></i> Optional Live Telemetry</label>
-                    <p class="field-help">
-                        Vortex works normally without Overwolf or Valorant Tracker. Enable only the provider you want for exact current-match combat data.
+                        Enables live match tracking and the in-game aim HUD. Vortex will
+                        automatically use the required telemetry providers.
                     </p>
                     <div class="switch-row">
                         <label class="switch">
-                            <input type="checkbox" id="settings-overwolf-enabled">
+                            <input type="checkbox" id="settings-live-match-enabled">
                             <span class="switch-track"><span class="switch-thumb"></span></span>
                         </label>
                         <div class="switch-row-text">
-                            <strong>Enable Overwolf / Vortex Telemetry</strong>
-                            <span>Allows Vortex to start or install Overwolf when VALORANT runs and accept its live event feed.</span>
-                        </div>
-                    </div>
-                    <div class="switch-row">
-                        <label class="switch">
-                            <input type="checkbox" id="settings-valorant-tracker-enabled">
-                            <span class="switch-track"><span class="switch-thumb"></span></span>
-                        </label>
-                        <div class="switch-row-text">
-                            <strong>Use Valorant Tracker as a fallback</strong>
-                            <span>Allows Vortex to install it if missing and read its local event log. Requires the Overwolf option above.</span>
+                            <strong>Enable Live Match Features</strong>
+                            <span>Exact current-game K/D/A, headshot chance and a click-through aim HUD. Off by default; Vortex works normally without it.</span>
                         </div>
                     </div>
                 </div>
@@ -839,23 +807,6 @@
                             <span>Makes the Login button behave like Play - the game starts by itself as soon as the login lands.</span>
                         </div>
                     </div>
-                </div>
-
-                <div class="form-group">
-                    <label><i class="fa-solid fa-display"></i> Launch Display Mode</label>
-                    <div class="switch-row">
-                        <label class="switch">
-                            <input type="checkbox" id="settings-force-borderless">
-                            <span class="switch-track"><span class="switch-thumb"></span></span>
-                        </label>
-                        <div class="switch-row-text">
-                            <strong>Always launch in windowed borderless</strong>
-                            <span>Applied once the game is up and sitting in the menus, not before launch - VALORANT rewrites its video config from memory at startup, so anything set beforehand gets undone. Takes effect from the next launch onward.</span>
-                        </div>
-                    </div>
-                    <button type="button" class="btn btn-secondary btn-sm btn-borderless-all" id="btn-borderless-all">
-                        <i class="fa-solid fa-wand-magic-sparkles"></i> Set every account to borderless now
-                    </button>
                 </div>
 
                 <div class="modal-footer">

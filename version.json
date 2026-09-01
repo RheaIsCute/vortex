@@ -1,5 +1,5 @@
 {
-  "version": "5.5.31",
+  "version": "5.5.33",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.31: fixes production packaging from deeply nested folders so the installer ships the complete runtime bundle, removes unnecessary hidden WebView startup work, and keeps update handoff paths compatible with current Python builds."
+  "changelog": "Vortex v5.5.33: a simpler Settings menu, plus roster and packaging fixes. The \"Launch Display Mode\" / windowed-borderless option is gone - it never applied reliably. The three live-telemetry switches (Live Aim HUD, Overwolf / Vortex Telemetry, Valorant Tracker fallback) are now one switch, \"Enable Live Match Features\", which turns on the aim HUD and pulls in whichever telemetry providers it needs. Everything optional still defaults off except \"Stay signed in\", and your saved preferences are untouched. The Dashboard button was removed from the top header - the live match Dashboard now opens from the signed-in account card. Duplicate account rows (the same Riot account added under different credentials) are now collapsed to one entry in the library and the header counts, without deleting anything. Backup export uses a native save dialog. The installer build no longer drops runtime files when the project sits in a deeply nested folder, and the update handoff is fixed for current Python builds."
 }
