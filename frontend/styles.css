@@ -2782,15 +2782,13 @@ select.form-control option {
     display: block;
     width: 100%;
     background-color: var(--surface-1);
-    background-image: var(--map-splash);
-    background-size: cover;
-    background-position: center right;
     border: 1px solid var(--stroke-1);
     border-left: 3px solid var(--stroke-2);
     border-radius: var(--radius-md);
     padding: 0;
     position: relative;
     overflow: hidden;
+    isolation: isolate;
     animation: row-in var(--dur-3) var(--ease-out) backwards;
     animation-delay: calc(var(--i, 0) * 40ms);
     transition: transform var(--dur-2) var(--ease-spring),
@@ -2802,11 +2800,29 @@ select.form-control option {
     font: inherit;
 }
 
+/* The map splash is a mood layer, not content. It is a dedicated element (not
+   the card's own background-image) so a single scrim on top of it is enough to
+   keep every stat readable, whatever the map. Kept subtle on the right where
+   the numbers live. */
+.match-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background-image: var(--map-splash);
+    background-size: cover;
+    background-position: center right;
+    opacity: 0.35;
+}
+
 .match-card-bg-mask {
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(13, 17, 23, 0.96) 0%, rgba(13, 17, 23, 0.88) 45%, rgba(13, 17, 23, 0.35) 100%);
-    backdrop-filter: blur(2px);
+    z-index: 1;
+    background: linear-gradient(90deg,
+        rgba(13, 17, 23, 0.97) 0%,
+        rgba(13, 17, 23, 0.92) 55%,
+        rgba(13, 17, 23, 0.82) 100%);
     transition: background var(--dur-2) ease;
 }
 
@@ -2817,7 +2833,7 @@ select.form-control option {
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 12px 18px;
+    padding: 11px 18px;
 }
 
 .match-card:hover {
@@ -2826,8 +2842,13 @@ select.form-control option {
     box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5);
 }
 
+.match-card:hover::before { opacity: 0.5; }
+
 .match-card:hover .match-card-bg-mask {
-    background: linear-gradient(90deg, rgba(13, 17, 23, 0.92) 0%, rgba(13, 17, 23, 0.78) 45%, rgba(13, 17, 23, 0.2) 100%);
+    background: linear-gradient(90deg,
+        rgba(13, 17, 23, 0.94) 0%,
+        rgba(13, 17, 23, 0.86) 55%,
+        rgba(13, 17, 23, 0.72) 100%);
 }
 
 .match-card.outcome-victory {
@@ -2924,7 +2945,8 @@ select.form-control option {
 
 .match-date-label {
     font-size: 11px;
-    color: var(--text-dim);
+    color: var(--text-sub);
+    white-space: nowrap;
 }
 
 .match-score-section {
@@ -2969,7 +2991,7 @@ select.form-control option {
 
 .stat-box-label {
     font-size: 9.5px;
-    color: var(--text-dim);
+    color: var(--text-sub);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-weight: 700;
@@ -2979,7 +3001,7 @@ select.form-control option {
     font-size: 13.5px;
     font-weight: 700;
     font-family: var(--font-mono);
-    color: var(--text-main);
+    color: #fff;
 }
 
 .stat-box-val.is-stellar {
@@ -2992,7 +3014,7 @@ select.form-control option {
     font-weight: 800;
 }
 .stat-box-val.is-negative {
-    color: var(--text-dim);
+    color: var(--text-sub);
 }
 
 .text-hs {

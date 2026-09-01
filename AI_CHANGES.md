@@ -175,3 +175,62 @@ Limitations:
 
 - A live side-by-side of the same match through both entry points needs VALORANT running and a signed-in account, which was not available in this environment; verified via the unit tests, the backend formatter, code review, and a production build. The in-memory `_MATCH_CACHE` is process-lifetime, so any match cached by a running older build is re-parsed (and gains `game_date`) on the next app start.
 - The player-profile lookup modal keeps its own compact `.detail-history-row` mini-list — a different view with a different purpose, explicitly out of scope for this task.
+
+## 2026-09-01 — Claude — Match-card readability fix + v5.5.37 release
+
+Follow-up to the v5.5.36 unification: a screenshot showed the shared
+`.match-card` rows (Account-Manager matches modal, and now the dashboard)
+with the map splash washing out the right-side stats and the date, even
+though the stored `match_history` data was complete (`kills`, `deaths`,
+`kdr`, `hs_pct`, `game_date` all present and valid in `database.sqlite`).
+
+Root cause: `.match-card` painted `var(--map-splash)` as its own
+`background-image`, and `.match-card-bg-mask` faded to `rgba(...,0.35)` at
+the right edge — exactly where K/D/A, KD ratio, headshot % and the date
+sit — over `background-position: center right` (the busiest part of the
+art). The numbers were rendered but unreadable.
+
+Changed:
+
+- `frontend/styles.css` — the map splash is now a dedicated `.match-card::before`
+  layer at `opacity: 0.35` (0.5 on hover), behind a near-opaque
+  `.match-card-bg-mask` scrim (`rgba(13,17,23, 0.97 → 0.92 → 0.82)`,
+  left→right) with explicit `z-index` stacking (`::before` 0, mask 1, inner 2)
+  and `isolation: isolate` on the card. Removed the fragile
+  `backdrop-filter: blur(2px)`. Stat values are now `#fff` (was
+  `var(--text-main)`), the low-KD variant and the date label moved off
+  `var(--text-dim)` to `var(--text-sub)`, and the date label is `white-space: nowrap`.
+  Row padding trimmed 12px → 11px.
+- `frontend/app.js` (`matchCardHtml`) — a match with no combat line
+  (degraded scrape, some placement/TDM rows) now shows `—` for K/D/A, KD
+  ratio and headshot instead of a misleading `0 / 0 / 0` / `0.00` / `0%`,
+  and the round score is omitted when absent rather than shown as `0 : 0`.
+- Version bumped to 5.5.37 across `backend/version.py`, `version.json`,
+  `installer/vortex_setup.iss`.
+
+Files:
+
+- `frontend/app.js`, `frontend/styles.css`
+- `backend/version.py`, `version.json`, `installer/vortex_setup.iss`
+- `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts: none.
+
+Tests:
+
+- `python -m pytest -q` → 68 passed (2 pre-existing FastAPI deprecation
+  warnings). `test_match_history_is_unified_between_entry_points` extended
+  to assert the splash is a low-opacity layer behind a dark scrim and that
+  the dash fallback exists.
+- `build.bat` → PyInstaller bundle + `dist_installer/VortexSetup.exe`
+  (installer ProductVersion 5.5.37); built app `GET /api/app-version` →
+  `{"version":"5.5.37"}`.
+- Confirmed against real data: `database.sqlite` accounts carry complete
+  per-match stats and `game_date` strings — the screenshot's blank values
+  were a rendering/contrast bug, not missing data or a missing date field.
+
+Limitations:
+
+- Verified via unit tests, a production build, direct inspection of the
+  stored match data, and CSS review. No pixel screenshot of the rendered
+  modal was captured in this environment (no browser-automation tooling).

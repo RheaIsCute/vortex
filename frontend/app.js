@@ -2420,10 +2420,20 @@ function matchCardHtml(m, i, source) {
     const mapAsset = ValorantAssets.getMap(m.map);
     const agentAsset = ValorantAssets.getAgent(m.agent || m.character);
     const agentIcon = m.agent_icon || agentAsset.icon;
-    const kdrVal = Number(m.kdr ?? m.kd ?? (m.kills / Math.max(1, m.deaths || 1))).toFixed(2);
-    const kdrClass = kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative");
-    const hsPct = m.hs_pct ?? m.hs ?? 0;
-    const score = m.placement ? `#${m.placement}` : `${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}`;
+
+    // Some sources (a degraded scrape, a placement/TDM match) carry the map,
+    // agent and result but no per-round combat line. Show a dash rather than a
+    // misleading string of zeros.
+    const hasCombat = m.kills != null || m.deaths != null || m.kdr != null || m.kd != null;
+    const kdrRaw = m.kdr ?? m.kd ?? (m.deaths != null ? m.kills / Math.max(1, m.deaths || 1) : null);
+    const kdrVal = kdrRaw != null ? Number(kdrRaw).toFixed(2) : "—";
+    const kdrClass = kdrVal === "—" ? "is-negative"
+        : (kdrVal >= 1.5 ? "is-stellar" : (kdrVal >= 1.0 ? "is-positive" : "is-negative"));
+    const kda = hasCombat ? `${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}` : "—";
+    const hsRaw = m.hs_pct ?? m.hs;
+    const hsPct = hsRaw != null ? `${hsRaw}%` : "—";
+    const score = m.placement ? `#${m.placement}`
+        : (m.rounds_won != null || m.rounds_lost != null ? `${m.rounds_won ?? 0} : ${m.rounds_lost ?? 0}` : "");
 
     return `
         <button class="match-card ${outcome.cls}" style="--i:${i}; --map-splash: url('${mapAsset.splash}');" type="button" onclick="openMatchDetail(${i}, '${source}')" title="Open full match details">
@@ -2449,21 +2459,21 @@ function matchCardHtml(m, i, source) {
 
                 <div class="match-score-section">
                     <span class="match-outcome-badge">${escapeHtml(outcome.text)}</span>
-                    <span class="match-rounds-score">${escapeHtml(score)}</span>
+                    ${score ? `<span class="match-rounds-score">${escapeHtml(score)}</span>` : ""}
                 </div>
 
                 <div class="match-stats-section">
                     <div class="stat-box">
                         <span class="stat-box-label">K / D / A</span>
-                        <span class="stat-box-val">${m.kills ?? 0} / ${m.deaths ?? 0} / ${m.assists ?? 0}</span>
+                        <span class="stat-box-val">${escapeHtml(kda)}</span>
                     </div>
                     <div class="stat-box">
                         <span class="stat-box-label">KD Ratio</span>
-                        <span class="stat-box-val ${kdrClass}">${kdrVal}</span>
+                        <span class="stat-box-val ${kdrClass}">${escapeHtml(kdrVal)}</span>
                     </div>
                     <div class="stat-box">
                         <span class="stat-box-label">Headshot</span>
-                        <span class="stat-box-val text-hs">${hsPct}%</span>
+                        <span class="stat-box-val text-hs">${escapeHtml(hsPct)}</span>
                     </div>
                 </div>
 

@@ -1,5 +1,5 @@
 {
-  "version": "5.5.36",
+  "version": "5.5.37",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.36: the Dashboard / Live Stats match history now uses the same clean row layout as the Account Manager - the same map, agent, result, K/D/A, KD, headshot % and match date, with no more compressed or overlapping rows."
+  "changelog": "Vortex v5.5.37: match-history rows are readable again - the map artwork is now a faint backdrop behind a solid scrim instead of washing out the K/D/A, KD ratio, headshot % and date. Matches with no recorded combat line show a dash instead of a misleading row of zeros."
 }

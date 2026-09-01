@@ -112,3 +112,16 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"Recent"', app_js)
         # The detail modal reads the same helper, not a raw field.
         self.assertNotIn('m.game_date || "Recent"', app_js)
+
+        # 4. The map splash must not sit under the stats: it is a low-opacity
+        #    layer behind a near-opaque scrim, and stat values are light, so a
+        #    bright map never washes out the numbers or the date.
+        card_block = styles_css.split(".match-card {", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("background-image: var(--map-splash)", card_block)
+        before_block = styles_css.split(".match-card::before {", 1)[1].split("}", 1)[0]
+        self.assertIn("opacity: 0.35", before_block)
+        mask_block = styles_css.split(".match-card-bg-mask {", 1)[1].split("}", 1)[0]
+        self.assertIn("rgba(13, 17, 23, 0.82)", mask_block)  # right edge stays dark
+        # Missing per-match combat data shows a dash, not a misleading "0 / 0 / 0".
+        self.assertIn('const hasCombat =', app_js)
+        self.assertIn('"—"', app_js)
