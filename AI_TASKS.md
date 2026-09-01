@@ -13,7 +13,7 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ### Codex
 
-Status: IN PROGRESS
+Status: DONE
 
 Scope: Prepare, publish, and verify the v5.5.34 production release and auto-update flow.
 
@@ -21,7 +21,7 @@ Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setu
 
 Dependencies:
 
-Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 source and production artifacts are built; publish/tag/verify remain.
+Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 is built, pushed, tagged, published, and verified. An in-place GUI upgrade was not run because an existing legacy Vortex process could not be safely terminated in this session.
 
 ### Claude
 
