@@ -282,9 +282,12 @@ const DOM = {
 
     searchInput: document.getElementById("search-input"),
     searchClear: document.getElementById("search-clear"),
-    regionFilter: document.getElementById("region-filter"),
-    tagFilter: document.getElementById("tag-filter"),
-    sortFilter: document.getElementById("sort-filter"),
+    filterControl: document.getElementById("filter-control"),
+    btnFilters: document.getElementById("btn-filters"),
+    filterPopover: document.getElementById("filter-popover"),
+    filterCount: document.getElementById("filter-count"),
+    filterActiveSummary: document.getElementById("filter-active-summary"),
+    btnResetFilters: document.getElementById("btn-reset-filters"),
     viewGridBtn: document.getElementById("view-grid-btn"),
     viewTableBtn: document.getElementById("view-table-btn"),
     accountsGrid: document.getElementById("accounts-grid"),
@@ -328,6 +331,12 @@ const DOM = {
     fileComboInput: document.getElementById("file-combo-input"),
     comboTextInput: document.getElementById("combo-text-input"),
     comboCountPreview: document.getElementById("combo-count-preview"),
+    comboInvalidPreview: document.getElementById("combo-invalid-preview"),
+    comboResult: document.getElementById("combo-result"),
+    comboResDetected: document.getElementById("combo-res-detected"),
+    comboResImported: document.getElementById("combo-res-imported"),
+    comboResDupes: document.getElementById("combo-res-dupes"),
+    comboResInvalid: document.getElementById("combo-res-invalid"),
     btnDoComboImport: document.getElementById("btn-do-combo-import"),
 
     // Clean Add/Edit Account Modal
@@ -772,22 +781,7 @@ function initEventListeners() {
         fetchAccounts();
     });
 
-    if (DOM.regionFilter) {
-        DOM.regionFilter.addEventListener("change", (e) => {
-            state.currentRegion = e.target.value;
-            fetchAccounts();
-        });
-    }
-
-    DOM.tagFilter.addEventListener("change", (e) => {
-        state.currentTag = e.target.value;
-        fetchAccounts();
-    });
-
-    DOM.sortFilter.addEventListener("change", (e) => {
-        state.currentSort = e.target.value;
-        fetchAccounts();
-    });
+    initFilterPopover();
 
     DOM.viewGridBtn.addEventListener("click", () => setViewMode("grid"));
     DOM.viewTableBtn.addEventListener("click", () => setViewMode("table"));
@@ -801,8 +795,8 @@ function initEventListeners() {
     DOM.btnEmptyAdd.addEventListener("click", () => openAccountModal());
 
     // Batch Import Combo & Drag and Drop
-    if (DOM.btnImportCombo) DOM.btnImportCombo.addEventListener("click", () => openModal(DOM.modalImportCombo));
-    if (DOM.btnEmptyImport) DOM.btnEmptyImport.addEventListener("click", () => openModal(DOM.modalImportCombo));
+    if (DOM.btnImportCombo) DOM.btnImportCombo.addEventListener("click", openComboModal);
+    if (DOM.btnEmptyImport) DOM.btnEmptyImport.addEventListener("click", openComboModal);
     if (DOM.modalImportComboClose) DOM.modalImportComboClose.addEventListener("click", () => closeModal(DOM.modalImportCombo));
     if (DOM.btnCancelCombo) DOM.btnCancelCombo.addEventListener("click", () => closeModal(DOM.modalImportCombo));
 
@@ -842,7 +836,10 @@ function initEventListeners() {
     }
 
     if (DOM.comboTextInput) {
-        DOM.comboTextInput.addEventListener("input", updateComboPreviewCount);
+        DOM.comboTextInput.addEventListener("input", () => {
+            resetComboResult();
+            updateComboPreviewCount();
+        });
     }
 
     if (DOM.btnDoComboImport) {
@@ -961,12 +958,12 @@ function initEventListeners() {
     initLiveEventListeners();
 
     document.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-            e.preventDefault();
-            DOM.searchInput.focus();
-            DOM.searchInput.select();
-        }
         if (e.key === "Escape") {
+            // The filter popover is the lightest layer, so it yields first.
+            if (DOM.filterPopover && DOM.filterPopover.classList.contains("is-open")) {
+                closeFilterPopover();
+                return;
+            }
             // A modal sits on top of the dashboard, so it closes first.
             const openModalEl = document.querySelector(".modal-overlay.active");
             if (openModalEl) closeAllModals();
@@ -975,39 +972,67 @@ function initEventListeners() {
     });
 }
 
+function openComboModal() {
+    resetComboResult();
+    if (DOM.comboTextInput) DOM.comboTextInput.value = "";
+    updateComboPreviewCount();
+    openModal(DOM.modalImportCombo);
+    if (DOM.comboTextInput) setTimeout(() => DOM.comboTextInput.focus(), 60);
+}
+
+function resetComboResult() {
+    if (DOM.comboResult) DOM.comboResult.hidden = true;
+    if (DOM.btnCancelCombo) DOM.btnCancelCombo.textContent = "Cancel";
+}
+
 function readComboFile(file) {
     const reader = new FileReader();
     reader.onload = (event) => {
         DOM.comboTextInput.value = event.target.result;
+        resetComboResult();
         updateComboPreviewCount();
         showToast(`Loaded ${file.name}`, "info");
     };
     reader.readAsText(file);
 }
 
+// Client-side mirror of database.import_from_text's line rules — used only to
+// preview what will happen. A line "counts" if it has a separator with a
+// non-empty value on each side.
+function parseComboLines(text) {
+    let valid = 0, invalid = 0;
+    for (const raw of (text || "").split("\n")) {
+        const line = raw.trim();
+        if (!line || line.startsWith("#") || line.startsWith("//")) continue;
+        const sep = [":", "|", ",", "\t"].find(s => line.includes(s));
+        const parts = sep ? line.split(sep).map(p => p.trim()) : [];
+        if (parts.length >= 2 && parts[0] && parts[1]) valid++;
+        else invalid++;
+    }
+    return { valid, invalid };
+}
+
 function updateComboPreviewCount() {
     if (!DOM.comboTextInput || !DOM.comboCountPreview) return;
-    const lines = DOM.comboTextInput.value.split("\n");
-    let validCount = 0;
-    for (const l of lines) {
-        const trimmed = l.trim();
-        if (trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("//")) {
-            if (trimmed.includes(":") || trimmed.includes("|") || trimmed.includes(",")) {
-                validCount++;
-            }
-        }
+    const { valid, invalid } = parseComboLines(DOM.comboTextInput.value);
+    DOM.comboCountPreview.innerHTML = `<strong>${valid}</strong> detected`;
+    if (DOM.comboInvalidPreview) {
+        DOM.comboInvalidPreview.hidden = invalid === 0;
+        DOM.comboInvalidPreview.innerHTML = `<strong>${invalid}</strong> line${invalid === 1 ? "" : "s"} need <code>user:pass</code>`;
     }
-    DOM.comboCountPreview.innerHTML = `Parsed: <strong>${validCount}</strong> accounts ready`;
 }
 
 async function handleBatchTextImport() {
     const rawText = DOM.comboTextInput.value.trim();
     if (!rawText) {
-        showToast("Please paste accounts or drop a .txt file", "error");
+        showToast("Paste some accounts, or drop a .txt / .csv file", "error");
         return;
     }
 
+    const preview = parseComboLines(rawText);
     const btn = DOM.btnDoComboImport;
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true;
     btn.innerHTML = '<i class="fa-solid fa-spinner rotating"></i> Importing...';
 
     try {
@@ -1018,10 +1043,23 @@ async function handleBatchTextImport() {
         });
         const data = await res.json();
         if (data.success) {
-            showToast(buildImportMessage(data), data.imported_count > 0 ? "success" : "info");
-            DOM.comboTextInput.value = "";
+            const imported = data.imported_count || 0;
+            const dupes = data.skipped_existing || 0;
+            const rejected = (data.skipped_banned || 0) + preview.invalid;
+
+            // Show the breakdown in the modal rather than only a fleeting toast.
+            if (DOM.comboResult) {
+                DOM.comboResDetected.textContent = preview.valid;
+                DOM.comboResImported.textContent = imported;
+                DOM.comboResDupes.textContent = dupes;
+                DOM.comboResInvalid.textContent = rejected;
+                DOM.comboResult.hidden = false;
+            }
+            if (DOM.btnCancelCombo) DOM.btnCancelCombo.textContent = "Done";
+
+            showToast(buildImportMessage(data), imported > 0 ? "success" : "info");
+            DOM.comboTextInput.value = "";           // never keep plaintext around
             updateComboPreviewCount();
-            closeModal(DOM.modalImportCombo);
             fetchAccounts();
             fetchStatsSummary();
         } else {
@@ -1030,7 +1068,8 @@ async function handleBatchTextImport() {
     } catch (err) {
         showToast("Import communication error", "error");
     } finally {
-        btn.innerHTML = '<i class="fa-solid fa-check"></i> Import Accounts';
+        btn.disabled = false;
+        btn.innerHTML = originalLabel;
     }
 }
 
@@ -1193,7 +1232,7 @@ async function fetchAccounts(silent = false) {
             url += "&status=BANNED";
         } else if (tagParam === "PLAYABLE") {
             url += "&status=PLAYABLE";
-        } else if (tagParam !== "ALL") {
+        } else if (tagParam !== "ALL" && tagParam !== "LEGACY_RANKED") {
             url += `&tag=${encodeURIComponent(tagParam)}`;
         }
 
@@ -1203,6 +1242,9 @@ async function fetchAccounts(silent = false) {
 
         if (tagParam === "FAVORITES") {
             newAccounts = newAccounts.filter(a => a.favorite);
+        } else if (tagParam === "LEGACY_RANKED") {
+            // Backend-derived flag: below the level gate but Competitive-eligible.
+            newAccounts = newAccounts.filter(a => a.is_legacy_ranked_eligible);
         }
 
         // Avoid unnecessary DOM rebuilds if data hasn't changed
@@ -1386,7 +1428,23 @@ function applyTheme(themeName) {
     }
 }
 
+// Brief, interruptible cross-fade of the accent-driven colours when the user
+// picks a new theme. Only runs on an explicit switch — the initial applyTheme()
+// on load stays instant. Repeated rapid switches just keep extending the timer.
+let _accentAnimTimer = null;
+function runAccentTransition() {
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    document.body.classList.add("accent-anim");
+    clearTimeout(_accentAnimTimer);
+    _accentAnimTimer = setTimeout(() => {
+        document.body.classList.remove("accent-anim");
+    }, 320);
+}
+
 async function selectTheme(themeName) {
+    if (themeName === state.settings.theme) return;
+    runAccentTransition();
     applyTheme(themeName);
     state.settings.theme = themeName;
     try {
@@ -1397,6 +1455,114 @@ async function selectTheme(themeName) {
         });
     } catch (err) {
         // Non-critical - the theme still applied locally this session.
+    }
+}
+
+// ==========================================================================
+// FILTERS POPOVER
+// --------------------------------------------------------------------------
+// One "Filters" button opens a compact popover holding Region / Account Type /
+// Sort By. The radios drive the same state.current* values the old three
+// dropdowns did, so fetchAccounts() and every downstream consumer are
+// unchanged. "LEGACY_RANKED" is the one account-type value handled client-side.
+// ==========================================================================
+
+const FILTER_DEFAULTS = { region: "ALL", tag: "ALL", sort: "recent" };
+
+function initFilterPopover() {
+    if (!DOM.btnFilters || !DOM.filterPopover) return;
+
+    DOM.btnFilters.addEventListener("click", (e) => {
+        e.stopPropagation();
+        DOM.filterPopover.classList.contains("is-open") ? closeFilterPopover() : openFilterPopover();
+    });
+
+    DOM.filterPopover.addEventListener("change", (e) => {
+        const input = e.target.closest("input[type=radio]");
+        if (!input) return;
+        const group = input.closest(".filter-options");
+        if (group) {
+            group.querySelectorAll(".filter-chip").forEach(chip =>
+                chip.classList.toggle("is-selected", chip.contains(input) && input.checked));
+        }
+        const kind = group && group.dataset.filter;
+        if (kind === "region") state.currentRegion = input.value;
+        else if (kind === "tag") state.currentTag = input.value;
+        else if (kind === "sort") state.currentSort = input.value;
+        syncFilterIndicators();
+        fetchAccounts();
+    });
+
+    if (DOM.btnResetFilters) {
+        DOM.btnResetFilters.addEventListener("click", () => {
+            state.currentRegion = FILTER_DEFAULTS.region;
+            state.currentTag = FILTER_DEFAULTS.tag;
+            state.currentSort = FILTER_DEFAULTS.sort;
+            applyFilterStateToInputs();
+            syncFilterIndicators();
+            fetchAccounts();
+        });
+    }
+
+    // Outside-click closes it; clicks inside the popover or on the button don't.
+    document.addEventListener("click", (e) => {
+        if (!DOM.filterPopover.classList.contains("is-open")) return;
+        if (DOM.filterControl && DOM.filterControl.contains(e.target)) return;
+        closeFilterPopover();
+    });
+
+    applyFilterStateToInputs();
+    syncFilterIndicators();
+}
+
+function openFilterPopover() {
+    DOM.filterPopover.classList.add("is-open");
+    DOM.btnFilters.classList.add("is-open");
+    DOM.btnFilters.setAttribute("aria-expanded", "true");
+}
+
+function closeFilterPopover() {
+    DOM.filterPopover.classList.remove("is-open");
+    DOM.btnFilters.classList.remove("is-open");
+    DOM.btnFilters.setAttribute("aria-expanded", "false");
+}
+
+function applyFilterStateToInputs() {
+    const map = {
+        "flt-region": state.currentRegion,
+        "flt-tag": state.currentTag,
+        "flt-sort": state.currentSort,
+    };
+    Object.entries(map).forEach(([name, value]) => {
+        DOM.filterPopover.querySelectorAll(`input[name="${name}"]`).forEach(input => {
+            const on = input.value === value;
+            input.checked = on;
+            const chip = input.closest(".filter-chip");
+            if (chip) chip.classList.toggle("is-selected", on);
+        });
+    });
+}
+
+function activeFilterCount() {
+    let n = 0;
+    if (state.currentRegion !== FILTER_DEFAULTS.region) n++;
+    if (state.currentTag !== FILTER_DEFAULTS.tag) n++;
+    if (state.currentSort !== FILTER_DEFAULTS.sort) n++;
+    return n;
+}
+
+function syncFilterIndicators() {
+    const n = activeFilterCount();
+    if (DOM.filterCount) {
+        DOM.filterCount.textContent = n;
+        DOM.filterCount.hidden = n === 0;
+    }
+    if (DOM.btnFilters) DOM.btnFilters.classList.toggle("has-active", n > 0);
+    if (DOM.btnResetFilters) DOM.btnResetFilters.disabled = n === 0;
+    if (DOM.filterActiveSummary) {
+        DOM.filterActiveSummary.textContent = n === 0
+            ? "No filters"
+            : `${n} active filter${n === 1 ? "" : "s"}`;
     }
 }
 
@@ -1615,7 +1781,8 @@ function buildAccountView(acc) {
     const rankInfo = TIER_ICONS[tier] || TIER_ICONS.UNRANKED;
     const effectiveTag = acc.tag && !['Smurf', 'Ranked', 'Unrated', ''].includes(acc.tag)
         ? acc.tag
-        : (acc.level >= 20 ? 'Ranked' : 'Unrated');
+        : ((acc.ranked_capable || acc.competitive_queue_eligible || acc.level >= 20)
+            ? 'Ranked' : 'Unrated');
     const winrate = accountWinrate(acc);
 
     // The signed-in account gets a live badge and a PLAY button instead of
@@ -1623,6 +1790,9 @@ function buildAccountView(acc) {
     const isActive = state.activeAccountId === acc.id;
     const needsCheck = acc.needs_check === true;
     const isHighlighted = state.highlightId === acc.id;
+    // Backend-derived: this account is under the level gate but Riot still
+    // reports it as Competitive-eligible ("Legacy Ranked").
+    const isLegacyRanked = !!acc.is_legacy_ranked_eligible;
 
     const lastLoginFormatted = isActive
         ? '<span class="last-login-val is-active"><span class="live-dot-mini"></span> Active Now</span>'
@@ -1633,8 +1803,15 @@ function buildAccountView(acc) {
     return {
         isActive,
         needsCheck,
-        cardFlags: [isActive ? "is-active-session" : "", isHighlighted ? "is-highlighted" : ""]
-            .filter(Boolean).join(" "),
+        isLegacyRanked,
+        cardFlags: [
+            isActive ? "is-active-session" : "",
+            isHighlighted ? "is-highlighted" : "",
+            isLegacyRanked ? "is-legacy-ranked" : "",
+        ].filter(Boolean).join(" "),
+        legacyBadge: isLegacyRanked
+            ? '<span class="badge-legacy" title="Legacy Ranked Access&#10;This account can access Competitive below the normal level requirement."><i class="fa-solid fa-gem"></i> Legacy Ranked</span>'
+            : "",
         liveBadge: isActive
             ? '<span class="badge-live"><span class="live-dot"></span> LOGGED IN</span>'
             : "",
@@ -1686,6 +1863,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                     <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
                     <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
                     ${v.statusBadge}
+                    ${v.legacyBadge}
                     <span class="session-state-chip ${sessionInfo.cls}">${isValRunning ? sessionInfo.label : "Riot Session Active"}</span>
                     <span class="hero-last-login"><i class="fa-regular fa-clock"></i> Last Login: <strong>Active Now</strong></span>
                 </div>
@@ -1923,6 +2101,7 @@ function renderGridView() {
                             <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
                             ${v.statusBadge}
                         `}
+                        ${v.legacyBadge}
                         ${v.liveBadge}
                     </div>
                     <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
@@ -2060,7 +2239,7 @@ function renderTableView() {
                         <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
                     </button>
                 </td>
-                <td>${v.statusBadge}${v.liveBadge}</td>
+                <td>${v.statusBadge}${v.legacyBadge}${v.liveBadge}</td>
                 <td>
                     <div class="table-summoner">
                         <span class="table-name">${escapeHtml(v.displayName)}</span>
@@ -3330,8 +3509,8 @@ async function saveSettings() {
     const liveMatchOn = !!DOM.settingsLiveMatchEnabled?.checked;
     const payload = {
         settings: {
-            riot_client_path: DOM.settingsClientPath.value.trim(),
-            riot_api_key: DOM.settingsApiKey.value.trim(),
+            riot_client_path: DOM.settingsClientPath ? DOM.settingsClientPath.value.trim() : (state.settings.riot_client_path || ""),
+            riot_api_key: DOM.settingsApiKey ? DOM.settingsApiKey.value.trim() : (state.settings.riot_api_key || ""),
             live_hud_enabled: liveMatchOn ? "1" : "0",
             overwolf_enabled: liveMatchOn ? "1" : "0",
             valorant_tracker_enabled: liveMatchOn ? "1" : "0",
@@ -4030,13 +4209,14 @@ function runViewSlide(swap, { back = false } = {}) {
     }
 
     // Pin the slot to its current height and hold the outgoing panel in place
-    // (absolute, on top) so the class flips inside swap() - which may await a
-    // network round-trip - don't cause a visible jump before the slide starts.
+    // (absolute, on top) while the synchronous view-state flip makes the
+    // incoming panel available for measurement.
     swapEl.style.height = swapEl.offsetHeight + "px";
     swapEl.classList.add("is-sliding");
     leaving.classList.add("view-leaving");
 
-    return Promise.resolve(swap()).then(() => new Promise(resolve => {
+    swap();
+    return new Promise(resolve => {
         entering.classList.add("view-entering");
 
         // Ease the slot between the two panel heights alongside the slide,
@@ -4071,14 +4251,14 @@ function runViewSlide(swap, { back = false } = {}) {
         entering.addEventListener("animationend", onEnd);
         // Safety net in case animationend never lands (tab hidden mid-slide).
         window.setTimeout(finish, 900);
-    }));
+    });
 }
 
 async function openDashboard() {
     if (state.dashboardOpen || state._dashTransitioning) return;
     state._dashTransitioning = true;
 
-    await runViewSlide(async () => {
+    const transition = runViewSlide(() => {
         state.dashboardOpen = true;
 
         document.body.classList.add("dashboard-mode");
@@ -4087,12 +4267,6 @@ async function openDashboard() {
             DOM.dashView.setAttribute("aria-hidden", "false");
         }
 
-        // Reload every open: the agent list is static but its per-account
-        // "owned" flags are not.
-        await loadLiveAgents();
-        renderModeGrid();
-        renderAgentGrid();
-        refreshInstalockStatus(true);
         moveTabGlide();
 
         if (state.live) renderDashboard(state.live);
@@ -4101,6 +4275,18 @@ async function openDashboard() {
         // top rather than leaving the view stranded mid-document.
         window.scrollTo({ top: 0, behavior: "auto" });
     });
+
+    // The incoming view is now mounted and the slide has been scheduled.
+    // Loading agent ownership must never delay first motion or expose an
+    // intermediate overlap; update the already-visible dashboard afterward.
+    void loadLiveAgents().then(() => {
+        if (!state.dashboardOpen) return;
+        renderModeGrid();
+        renderAgentGrid();
+        refreshInstalockStatus(true);
+    });
+
+    await transition;
 
     state._dashTransitioning = false;
 }

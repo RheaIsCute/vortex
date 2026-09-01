@@ -900,7 +900,7 @@ body.effects-paused .scroll-top-btn {
 .search-wrapper input {
     width: 100%;
     height: 40px;
-    padding: 0 78px 0 40px;
+    padding: 0 38px 0 40px;
     background: var(--bg-input);
     border: 1px solid var(--stroke-1);
     border-radius: var(--radius-sm);
@@ -2549,6 +2549,82 @@ select.form-control option {
 .theme-swatch.active .theme-swatch-label,
 .theme-swatch:hover .theme-swatch-label {
     color: #fff;
+}
+
+/* --- Advanced / Developer Settings Accordion --- */
+.settings-advanced {
+    margin-top: 4px;
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
+    overflow: hidden;
+    transition: border-color var(--dur-2) ease, background var(--dur-2) ease;
+}
+
+.settings-advanced[open] {
+    border-color: var(--stroke-2);
+    background: var(--surface-2);
+}
+
+.settings-advanced-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-sub);
+    transition: color var(--dur-2) ease, background var(--dur-2) ease;
+}
+
+.settings-advanced-toggle::-webkit-details-marker {
+    display: none;
+}
+
+.settings-advanced-toggle:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.settings-advanced-toggle span {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.settings-advanced-toggle span i {
+    color: var(--text-dim);
+    font-size: 11px;
+    width: 12px;
+}
+
+.settings-advanced-toggle .toggle-icon {
+    font-size: 10px;
+    color: var(--text-dim);
+    transition: transform var(--dur-2) var(--ease-spring), color var(--dur-2) ease;
+}
+
+.settings-advanced[open] .settings-advanced-toggle .toggle-icon {
+    transform: rotate(180deg);
+    color: var(--a-soft);
+}
+
+.settings-advanced-body {
+    padding: 14px;
+    border-top: 1px solid var(--stroke-1);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.advanced-action-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 /* ==========================================================================
@@ -8513,5 +8589,357 @@ button.match-card, button.stat-match, button.dash-player {
 
 .dash-me-section.is-recent .dash-me-tiles {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* ==========================================================================
+   11. UI/UX POLISH PASS
+   --------------------------------------------------------------------------
+   Additive layer: smooth accent-theme transitions, the consolidated Filters
+   popover, the Legacy Ranked card treatment, and the raw-import result panel.
+   Everything here is single-class and self-contained.
+   ========================================================================== */
+
+/* --- 11.1 Smooth accent-theme transition ------------------------------------
+   selectTheme() adds .accent-anim to <body> for ~260ms while the accent ramp
+   swaps. Only accent-driven colour properties transition, and only for that
+   short window, so there is no lasting per-frame cost. Gradients cannot
+   interpolate, so the `background` shorthand is deliberately excluded — those
+   few elements snap while everything else eases. (The class is not named
+   `theme-*` because applyTheme() strips every `theme-`-prefixed body class.) */
+:root { --theme-anim-dur: 0.24s; }
+
+body.accent-anim,
+body.accent-anim *,
+body.accent-anim *::before,
+body.accent-anim *::after {
+    transition-property: background-color, border-color, color, fill, stroke,
+                         box-shadow, outline-color;
+    transition-duration: var(--theme-anim-dur) !important;
+    transition-timing-function: var(--ease-snap) !important;
+    transition-delay: 0s !important;
+}
+
+/* --- 11.2 Consolidated Filters control ------------------------------------- */
+/* The bar sits above the roster so the popover is never covered by cards
+   (backdrop-filter on .controls-bar already makes it a stacking context). */
+.controls-bar { position: relative; z-index: 20; }
+
+.filter-control {
+    position: relative;
+    display: flex;
+}
+
+.btn-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 13px;
+    background: var(--bg-input);
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-sm);
+    color: var(--text-sub);
+    font-family: var(--font-main);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    white-space: nowrap;
+    transition: background var(--dur-2) ease, border-color var(--dur-2) ease,
+                color var(--dur-2) ease, box-shadow var(--dur-2) ease;
+}
+
+.btn-filters:hover {
+    background: var(--surface-2);
+    border-color: var(--stroke-2);
+    color: #fff;
+}
+
+.btn-filters:focus-visible,
+.btn-filters.is-open {
+    border-color: var(--edge-strong);
+    box-shadow: var(--ring);
+    color: #fff;
+}
+
+.btn-filters.has-active {
+    border-color: var(--edge);
+    color: #fff;
+}
+
+.btn-filters .filter-icon { font-size: 11.5px; color: var(--text-muted); }
+.btn-filters:hover .filter-icon,
+.btn-filters.is-open .filter-icon { color: var(--a-soft); }
+
+.btn-filters .filter-caret {
+    font-size: 9px;
+    color: var(--text-dim);
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.btn-filters.is-open .filter-caret { transform: rotate(180deg); }
+
+.filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: var(--grad-primary);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    box-shadow: 0 2px 8px -3px rgba(var(--a-rgb), 0.9);
+}
+
+.filter-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 320px;
+    max-width: min(320px, calc(100vw - 40px));
+    background: var(--panel-raised);
+    border: 1px solid var(--stroke-2);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0, 0, 0, 0.5), var(--bevel);
+    transform-origin: top right;
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+    pointer-events: none;
+    transition: opacity var(--dur-2) var(--ease-out),
+                transform var(--dur-2) var(--ease-out);
+}
+
+.filter-popover.is-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+.filter-popover-scroll {
+    max-height: min(68vh, 520px);
+    overflow-y: auto;
+    padding: 6px 14px 4px;
+}
+
+.filter-section { padding: 12px 0; }
+.filter-section + .filter-section { border-top: 1px solid var(--stroke-1); }
+
+.filter-section-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 9px;
+}
+
+.filter-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.filter-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    background: var(--surface-1);
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-full);
+    color: var(--text-sub);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--dur-1) ease, border-color var(--dur-1) ease,
+                color var(--dur-1) ease;
+}
+
+.filter-chip:hover { background: var(--surface-3); color: #fff; }
+
+.filter-chip input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.filter-chip.is-selected {
+    background: var(--tint-2);
+    border-color: var(--edge-strong);
+    color: #fff;
+}
+
+.filter-chip.is-selected::before {
+    content: '\f00c';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 8.5px;
+    color: var(--a-soft);
+}
+
+.filter-chip:focus-within {
+    box-shadow: var(--ring);
+}
+
+.filter-popover-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--stroke-2);
+    background: var(--surface-1);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.filter-active-summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+.btn-reset-filters {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 6px 9px;
+    border-radius: var(--radius-xs);
+    transition: color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.btn-reset-filters:hover { color: #fff; background: var(--surface-3); }
+.btn-reset-filters:disabled { opacity: 0.35; cursor: default; }
+.btn-reset-filters:disabled:hover { background: none; color: var(--text-muted); }
+
+/* --- 11.3 Legacy Ranked account treatment -------------------------------- */
+.account-card.is-legacy-ranked {
+    border-color: rgba(255, 255, 255, 0.24);
+    box-shadow: var(--shadow-md),
+                0 0 0 1px rgba(255, 255, 255, 0.09),
+                0 0 26px -8px rgba(255, 255, 255, 0.30),
+                var(--bevel);
+}
+
+.account-card.is-legacy-ranked:hover {
+    border-color: rgba(255, 255, 255, 0.42);
+    box-shadow: var(--shadow-lg),
+                0 0 34px -8px rgba(255, 255, 255, 0.42),
+                0 0 44px -18px rgba(var(--a-rgb), 0.8),
+                var(--bevel);
+}
+
+.badge-legacy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: var(--radius-full);
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    color: #f4f6fb;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    cursor: help;
+}
+
+.badge-legacy i { font-size: 9px; color: #fff; }
+
+.accounts-table tr.is-legacy-ranked td {
+    background: rgba(255, 255, 255, 0.035);
+}
+.accounts-table tr.is-legacy-ranked td:first-child {
+    box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.55);
+}
+
+/* --- 11.4 Raw import: slim dropzone, format hint, result panel ----------- */
+.combo-dropzone.combo-dropzone-slim {
+    padding: 11px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: left;
+}
+
+.combo-dropzone-slim .combo-upload-icon {
+    font-size: 15px;
+    margin: 0;
+}
+
+.combo-dropzone-slim .dropzone-text {
+    margin: 0;
+    font-size: 12px;
+}
+
+.combo-dropzone-slim .dropzone-sub { display: none; }
+
+.combo-format-hint {
+    font-size: 11.5px;
+    color: var(--text-dim);
+    line-height: 1.7;
+    font-family: var(--font-mono);
+    padding: 2px 2px 0;
+}
+.combo-format-hint code { color: var(--text-muted); }
+
+.combo-info-bar .combo-invalid { color: var(--warn); }
+.combo-info-bar .combo-invalid strong { color: var(--warn); }
+.combo-info-bar .combo-dupe { color: var(--text-sub); }
+
+.combo-result {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    border: 1px solid var(--stroke-1);
+}
+
+.combo-result-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 8px;
+    border-radius: var(--radius-xs);
+    background: var(--surface-1);
+}
+
+.combo-result-num {
+    font-family: var(--font-mono);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+.combo-result-num.is-good { color: var(--ok); }
+.combo-result-num.is-warn { color: var(--warn); }
+.combo-result-num.is-dim { color: var(--text-dim); }
+
+.combo-result-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+/* --- 11.5 Toolbar responsiveness --------------------------------------- */
+@media (max-width: 720px) {
+    .controls-bar { gap: 10px; }
+    .search-wrapper { min-width: 0; max-width: none; flex: 1 1 100%; order: -1; }
+    .secondary-controls { width: 100%; justify-content: space-between; }
+    .filter-popover { width: min(320px, calc(100vw - 32px)); }
 }
 

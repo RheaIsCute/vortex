@@ -1,0 +1,64 @@
+import unittest
+from pathlib import Path
+from backend import server
+from backend.database import Database
+
+class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_settings_api_persistence(self):
+        # 1. Test get_settings
+        settings = await server.get_settings()
+        self.assertIn("riot_api_key", settings)
+
+        # 2. Test update_settings
+        req = server.SettingsUpdate(settings={
+            "riot_client_path": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
+            "riot_api_key": "HDEV-test-custom-key-12345",
+            "live_hud_enabled": "1",
+            "overwolf_enabled": "1",
+            "valorant_tracker_enabled": "1",
+            "stay_signed_in": "1",
+            "auto_launch_after_login": "0",
+            "post_valorant_launch_enabled": "1",
+            "post_valorant_launch_path": "C:\\test\\app.exe"
+        })
+        res = await server.update_settings(req)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["settings"]["riot_api_key"], "HDEV-test-custom-key-12345")
+        self.assertEqual(res["settings"]["post_valorant_launch_enabled"], "1")
+        self.assertEqual(res["settings"]["post_valorant_launch_path"], "C:\\test\\app.exe")
+
+    async def test_login_log_path_api(self):
+        res = await server.login_log_path()
+        self.assertIn("path", res)
+
+    async def test_app_version_api(self):
+        res = await server.app_version()
+        self.assertIn("version", res)
+
+    def test_frontend_settings_and_search_markup(self):
+        root = Path(__file__).parent.parent
+        index_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        # 1. Ctrl K removed
+        self.assertNotIn("Ctrl K", index_html)
+        self.assertNotIn('search-kbd', index_html)
+        self.assertNotIn('e.key.toLowerCase() === "k"', app_js)
+        self.assertNotIn('ctrlKey', app_js)
+
+        # 2. Search placeholder remains
+        self.assertIn("Search accounts, Riot IDs, notes...", index_html)
+
+        # 3. Renamed sections
+        self.assertIn("Post-Game Actions", index_html)
+        self.assertIn("Launch & Login", index_html)
+        self.assertNotIn("After VALORANT Closes", index_html)
+        self.assertNotIn("Login Behaviour", index_html)
+
+        # 4. Advanced / Developer settings exists and contains API key and debug log button
+        self.assertIn("Advanced / Developer Settings", index_html)
+        self.assertIn('id="settings-api-key"', index_html)
+        self.assertIn('id="btn-open-log"', index_html)
+
+        # 5. Normal settings does not contain the old settings-log-path input box
+        self.assertNotIn('id="settings-log-path"', index_html)

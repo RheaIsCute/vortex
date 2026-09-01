@@ -117,6 +117,8 @@ class Database:
                     status TEXT DEFAULT 'PLAYABLE',
                     favorite INTEGER DEFAULT 0,
                     puuid TEXT DEFAULT '',
+                    competitive_queue_eligible INTEGER,
+                    ranked_eligibility_source TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT ''
@@ -141,7 +143,12 @@ class Database:
                 # account's local VALORANT settings folder is keyed on this -
                 # without it, crosshair/keybind copying can never find a
                 # source or a target.
-                ("puuid", "TEXT DEFAULT ''")
+                ("puuid", "TEXT DEFAULT ''"),
+                # NULL deliberately means that Riot has not exposed a party
+                # eligibility response for this account yet; it is not a
+                # guess that the account cannot play Competitive.
+                ("competitive_queue_eligible", "INTEGER"),
+                ("ranked_eligibility_source", "TEXT DEFAULT ''")
             ]
 
             for col_name, col_def in new_columns:
@@ -181,6 +188,8 @@ class Database:
                     status TEXT DEFAULT 'BANNED',
                     favorite INTEGER DEFAULT 0,
                     puuid TEXT DEFAULT '',
+                    competitive_queue_eligible INTEGER,
+                    ranked_eligibility_source TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT '',
@@ -191,7 +200,9 @@ class Database:
             cursor.execute("PRAGMA table_info(banned_accounts)")
             existing_banned_cols = [col["name"] for col in cursor.fetchall()]
             for col_name, col_def in (("last_login", "TEXT DEFAULT ''"),
-                                      ("puuid", "TEXT DEFAULT ''")):
+                                      ("puuid", "TEXT DEFAULT ''"),
+                                      ("competitive_queue_eligible", "INTEGER"),
+                                      ("ranked_eligibility_source", "TEXT DEFAULT ''")):
                 if col_name not in existing_banned_cols:
                     try:
                         cursor.execute(f"ALTER TABLE banned_accounts ADD COLUMN {col_name} {col_def}")
@@ -215,7 +226,7 @@ class Database:
             # Default settings
             defaults = [
                 ("riot_client_path", r"C:\Riot Games\Riot Client\RiotClientServices.exe"),
-                ("riot_api_key", "HDEV-259b6c27-0a83-4445-9f36-f66a3147f24c"),
+                ("riot_api_key", ""),
                 ("theme", "blue"),
                 ("auto_minimize_on_launch", "true"),
                 # Tick Riot's "Stay signed in" during automated logins, so a
@@ -508,9 +519,9 @@ class Database:
 
             if tag and tag.upper() != "ALL":
                 if tag.upper() == "RANKED":
-                    query += " AND (level >= 20 OR UPPER(tag) = 'RANKED')"
+                    query += " AND (level >= 20 OR competitive_queue_eligible = 1 OR UPPER(tag) = 'RANKED')"
                 elif tag.upper() == "UNRATED":
-                    query += " AND (level < 20 OR UPPER(tag) = 'UNRATED')"
+                    query += " AND level < 20 AND COALESCE(competitive_queue_eligible, 0) = 0 AND UPPER(tag) = 'UNRATED'"
                 else:
                     query += " AND UPPER(tag) = ?"
                     params.append(tag.upper())
@@ -625,7 +636,7 @@ class Database:
             lvl_val = int(account.get("level", 1) or 1)
             raw_tag = (account.get("tag") or "").strip()
             if not raw_tag or raw_tag.lower() == "smurf":
-                tag_val = "Ranked" if lvl_val >= 20 else "Unrated"
+                tag_val = self.category_for_account(account)
             else:
                 tag_val = raw_tag
 
@@ -635,8 +646,9 @@ class Database:
                     rank_tier, rank_division, lp, level, winrate, games_played,
                     top_champs, rank_icon_url, peak_rank_tier, peak_rank_division,
                     peak_rank_icon_url, peak_rank_season, card_small_url,
-                    match_history, status, favorite, puuid, last_updated, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    match_history, status, favorite, puuid, competitive_queue_eligible,
+                    ranked_eligibility_source, last_updated, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 account.get("username", "").strip(),
                 account.get("password", "").strip(),
@@ -661,6 +673,9 @@ class Database:
                 (account.get("status") or "PLAYABLE"),
                 1 if account.get("favorite") else 0,
                 (account.get("puuid") or "").strip(),
+                (None if account.get("competitive_queue_eligible") is None
+                 else int(bool(account.get("competitive_queue_eligible")))),
+                (account.get("ranked_eligibility_source") or "").strip(),
                 now,
                 now
             ))
@@ -683,8 +698,17 @@ class Database:
     STICKY_NON_EMPTY_FIELDS = {
         "password",
         "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url", "peak_rank_season",
-        "match_history", "top_champs", "puuid"
+        "match_history", "top_champs", "puuid", "ranked_eligibility_source"
     }
+
+    @staticmethod
+    def is_ranked_capable(account: Dict[str, Any]) -> bool:
+        """True for modern level-20 accounts or a Riot-confirmed exception."""
+        return int(account.get("level", 0) or 0) >= 20 or bool(account.get("competitive_queue_eligible"))
+
+    @classmethod
+    def category_for_account(cls, account: Dict[str, Any]) -> str:
+        return "Ranked" if cls.is_ranked_capable(account) else "Unrated"
 
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> bool:
         conn = self.get_connection()
@@ -699,6 +723,10 @@ class Database:
                 if key in self.STICKY_NON_EMPTY_FIELDS and not val:
                     # Don't blank out a previously-synced value with an
                     # empty result from a failed/partial fetch.
+                    continue
+                if key == "competitive_queue_eligible" and val is None:
+                    # Riot may not expose eligible queues on every refresh;
+                    # unknown must not erase a confirmed result.
                     continue
                 if key == "status" and not val:
                     # Never write a NULL/blank status - it would make the row
@@ -755,7 +783,8 @@ class Database:
         "rank_tier", "rank_division", "lp", "level", "winrate", "games_played",
         "top_champs", "rank_icon_url", "peak_rank_tier", "peak_rank_division",
         "peak_rank_icon_url", "peak_rank_season", "card_small_url",
-        "match_history", "status", "favorite", "puuid", "last_login",
+        "match_history", "status", "favorite", "puuid", "competitive_queue_eligible",
+        "ranked_eligibility_source", "last_login",
         "last_updated", "created_at"
     ]
 
@@ -910,13 +939,11 @@ class Database:
         return {
             "total_accounts": len(accounts),
             "main_accounts": sum((account.get("tag") or "").upper() == "MAIN" for account in accounts),
-            "ranked_accounts": sum(
-                (account.get("level") or 0) >= 20 or (account.get("tag") or "").upper() == "RANKED"
-                for account in accounts
-            ),
+            "ranked_accounts": sum(self.is_ranked_capable(account) for account in accounts),
             "unrated_accounts": sum(
                 (account.get("level") or 0) < 20
-                and (account.get("tag") or "").upper() not in ("MAIN", "ALT", "RANKED")
+                and not self.is_ranked_capable(account)
+                and (account.get("tag") or "").upper() not in ("MAIN", "ALT")
                 for account in accounts
             ),
             "banned_accounts": banned,
@@ -1054,19 +1081,25 @@ class Database:
         text itself. Returns the created accounts plus skip counts.
         """
         created_accounts = []
+        malformed_lines = []
         skipped_existing = 0
         skipped_banned = 0
         seen_in_batch = set()
-        lines = raw_text.strip().splitlines()
+        lines = (raw_text or "").splitlines()
 
-        for line in lines:
+        for line_number, line in enumerate(lines, start=1):
             cleaned = line.strip()
             if not cleaned or cleaned.startswith("#") or cleaned.startswith("//"):
                 continue
 
+            # Combo lists are USER:PASSWORD.  Split *once*: Riot passwords
+            # legitimately contain colons and every character after the first
+            # separator belongs to the password.  Delimited TXT variants keep
+            # their historical multi-field handling below.
             parts = []
             if ":" in cleaned:
-                parts = cleaned.split(":")
+                username, password = (part.strip() for part in cleaned.split(":", 1))
+                parts = [username, password]
             elif "|" in cleaned:
                 parts = [p.strip() for p in cleaned.split("|")]
             elif "," in cleaned:
@@ -1077,6 +1110,9 @@ class Database:
             if len(parts) >= 2:
                 username = parts[0].strip()
                 password = parts[1].strip()
+                if not username or not password:
+                    malformed_lines.append({"line": line_number, "reason": "missing username or password"})
+                    continue
                 region = "NA"
                 tag = ""
                 display_name = ""
@@ -1129,12 +1165,25 @@ class Database:
                 acc_id = self.add_account(acc_data)
                 acc_data["id"] = acc_id
                 created_accounts.append(acc_data)
+            else:
+                malformed_lines.append({"line": line_number, "reason": "missing account separator"})
 
         return {
             "created": created_accounts,
             "skipped_existing": skipped_existing,
-            "skipped_banned": skipped_banned
+            "skipped_banned": skipped_banned,
+            "malformed_lines": malformed_lines,
         }
+
+    def import_accounts_from_raw(self, raw_text: str) -> Dict[str, Any]:
+        """Import pasted ``USER:PASSWORD`` rows through the normal pipeline.
+
+        The parser treats the first colon as the separator, keeping any
+        additional punctuation in the password.  This named entry point lets
+        callers distinguish raw paste imports while sharing duplicate checks,
+        secure storage, and malformed-row reporting with TXT imports.
+        """
+        return self.import_from_text(raw_text)
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         d = dict(row)
@@ -1156,4 +1205,10 @@ class Database:
 
         d["favorite"] = bool(d.get("favorite", 0))
         d["status"] = d.get("status") or "PLAYABLE"
+        eligible = d.get("competitive_queue_eligible")
+        d["competitive_queue_eligible"] = None if eligible is None else bool(eligible)
+        d["is_legacy_ranked_eligible"] = bool(
+            d["competitive_queue_eligible"] and int(d.get("level", 0) or 0) < 20
+        )
+        d["ranked_capable"] = self.is_ranked_capable(d)
         return d

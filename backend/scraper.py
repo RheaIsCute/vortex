@@ -55,8 +55,9 @@ def get_official_rank_icon(tier: str, division: str = "") -> str:
 
 
 class StatScraper:
-    def __init__(self, riot_api_key: Optional[str] = "HDEV-259b6c27-0a83-4445-9f36-f66a3147f24c"):
-        self.riot_api_key = riot_api_key or "HDEV-259b6c27-0a83-4445-9f36-f66a3147f24c"
+    def __init__(self, riot_api_key: Optional[str] = ""):
+        # API keys are user-provided settings, never application defaults.
+        self.riot_api_key = riot_api_key or ""
 
     def _get_headers(self) -> Dict[str, str]:
         headers = {

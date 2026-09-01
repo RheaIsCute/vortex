@@ -685,6 +685,53 @@ class ValorantLiveClient:
             return {}
         return res.json()
 
+    def eligible_queue_ids(self) -> Optional[set]:
+        """Return the party's Riot-advertised queue ids, or ``None`` if unknown.
+
+        This read-only party endpoint is the only useful signal for a legacy
+        low-level account: it answers whether the signed-in party may select
+        Competitive now.  It does not enqueue, change a queue, or infer
+        eligibility from account age/rank history.
+        """
+        pid = self.party_id(retries=1)
+        if not pid:
+            return None
+        try:
+            res = self._remote("GET", f"{self.glz}/parties/v1/parties/{pid}/eligiblequeues")
+        except LiveClientError:
+            return None
+        if res.status_code != 200:
+            return None
+        try:
+            payload = res.json()
+        except Exception:
+            return None
+
+        entries = payload.get("Queues") if isinstance(payload, dict) else payload
+        if isinstance(payload, dict) and entries is None:
+            # Riot has used both ``Queues`` and ``EligibleQueues`` casing in
+            # different client builds; accept either without changing the
+            # semantics of an unavailable response.
+            entries = (
+                payload.get("EligibleQueues")
+                or payload.get("eligibleQueues")
+                or payload.get("queueIDs")
+                or payload.get("QueueIDs")
+            )
+        if isinstance(entries, dict):
+            entries = entries.get("Queues") or entries.get("queueIDs") or entries.get("QueueIDs") or []
+        if not isinstance(entries, list):
+            return None
+        ids = set()
+        for entry in entries:
+            if isinstance(entry, str):
+                ids.add(entry.lower())
+            elif isinstance(entry, dict):
+                queue_id = entry.get("QueueID") or entry.get("queueID") or entry.get("id")
+                if queue_id:
+                    ids.add(str(queue_id).lower())
+        return ids
+
     def change_queue(self, queue_id: str) -> Dict[str, Any]:
         pid = self.party_id()
         if not pid:

@@ -214,7 +214,11 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
     # the fact - the UI only ever shows the last message, this keeps the
     # full sequence that led up to it.
     level = logging.ERROR if stage == "error" else logging.INFO
-    login_logger.log(level, "[%s] stage=%s msg=%s", LOGIN_PROGRESS.get("username", ""), stage, message)
+    elapsed = time.time() - float(LOGIN_PROGRESS.get("started_at") or time.time())
+    login_logger.log(
+        level, "[%s] stage=%s elapsed=%.2fs msg=%s",
+        LOGIN_PROGRESS.get("username", ""), stage, elapsed, message,
+    )
 
 
 def _elevation_blocked_login(username: Optional[str] = None) -> bool:
@@ -665,7 +669,11 @@ class ClientLauncher:
             "peak_rank_division": "",
             "peak_rank_icon_url": "",
             "status": "PLAYABLE",
-            "puuid": ""
+            "puuid": "",
+            # None is important: a client that is not in a usable party is
+            # not evidence that Competitive is locked.
+            "competitive_queue_eligible": None,
+            "ranked_eligibility_source": ""
         }
 
         # 1. Parse official userinfo payload
@@ -833,6 +841,23 @@ class ClientLauncher:
                             result["peak_rank_icon_url"] = f"{TIER_BASE_URL}/{peak_tier_num}/largeicon.png"
         except Exception:
             pass
+
+        # Riot's eligible-queues party response is an actual matchmaking
+        # capability signal.  In particular it can identify a grandfathered
+        # sub-level-20 account without making an age/Beta-era guess.  This is
+        # read-only and intentionally best-effort: no party/API response must
+        # remain unknown rather than being stored as "not eligible".
+        if result["found"]:
+            try:
+                from backend.valorant_client import ValorantLiveClient
+                live_client = ValorantLiveClient()
+                if live_client.connect() and live_client.puuid == result.get("puuid"):
+                    eligible_queues = live_client.eligible_queue_ids()
+                    if eligible_queues is not None:
+                        result["competitive_queue_eligible"] = "competitive" in eligible_queues
+                        result["ranked_eligibility_source"] = "party_eligible_queues"
+            except Exception as exc:
+                login_logger.debug("competitive eligibility unavailable: %s", exc)
 
         return result
 
@@ -1558,10 +1583,10 @@ class ClientLauncher:
                         cls.api_sign_out()
                         cls.wait_for_signed_out(timeout=8.0)
                         _set_login_stage("waiting_window", "Loading the sign-in page...", username)
-                        # The client's own sign-out animation needs a beat to
-                        # tear the home screen down and mount the login form;
-                        # racing it leaves UIA reading half-built controls.
-                        time.sleep(1.5)
+                        # Yield briefly for the teardown, then let the
+                        # credential-control wait be the readiness signal.
+                        # This replaced a fixed 1.5s tax on every warm swap.
+                        time.sleep(0.2)
                     else:
                         _set_login_stage("waiting_window", "Opening the sign-in page...", username)
 
@@ -1646,7 +1671,7 @@ class ClientLauncher:
                 )
             # Windows needs a moment to release the client's file locks and
             # its single-instance mutex, or the relaunch is swallowed.
-            time.sleep(1.2)
+            time.sleep(0.7)
 
             subprocess.Popen([target_path], shell=False)
             _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)

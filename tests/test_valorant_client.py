@@ -56,6 +56,29 @@ class _IncrementingMatchClient(vc.ValorantLiveClient):
         return {}
 
 
+class _EligibleQueueClient(vc.ValorantLiveClient):
+    def __init__(self, payload):
+        super().__init__()
+        self.puuid = "player-a"
+        self.payload = payload
+
+    def party_id(self, retries=3):
+        return "party-a"
+
+    def _remote(self, method, url, payload=None, timeout=5.0):
+        return _Response(self.payload)
+
+
+class EligibilitySignalTests(unittest.TestCase):
+    def test_eligible_queue_signal_accepts_riot_payload_variants(self):
+        client = _EligibleQueueClient({"EligibleQueues": ["unrated", "competitive"]})
+        self.assertEqual({"unrated", "competitive"}, client.eligible_queue_ids())
+
+    def test_missing_eligible_queue_payload_is_unknown(self):
+        client = _EligibleQueueClient({"unexpected": []})
+        self.assertIsNone(client.eligible_queue_ids())
+
+
 class MatchCacheTests(unittest.TestCase):
     def setUp(self):
         with vc._MATCH_DETAILS_LOCK:

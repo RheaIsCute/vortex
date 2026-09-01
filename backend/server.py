@@ -92,6 +92,8 @@ class AccountCreate(BaseModel):
     # Filled from the local Riot Client when available. This is Riot's stable
     # per-account identifier and is never shown as a credential.
     puuid: Optional[str] = ""
+    competitive_queue_eligible: Optional[bool] = None
+    ranked_eligibility_source: Optional[str] = ""
 
 
 class AccountUpdate(BaseModel):
@@ -115,6 +117,8 @@ class AccountUpdate(BaseModel):
     card_small_url: Optional[str] = None
     status: Optional[str] = None
     favorite: Optional[bool] = None
+    competitive_queue_eligible: Optional[bool] = None
+    ranked_eligibility_source: Optional[str] = None
 
 
 class CopyRequest(BaseModel):
@@ -193,6 +197,19 @@ def apply_account_update(account_id: int, update_payload: dict) -> bool:
     doesn't linger in the main roster. Returns True if it was moved.
     """
     status = (update_payload.get("status") or "").upper()
+    # Keep automatically managed Ranked/Unrated tags in sync with Riot's
+    # actual queue signal.  A refresh can discover legacy Competitive access
+    # without going through the explicit account-check endpoint.
+    if "level" in update_payload or "competitive_queue_eligible" in update_payload:
+        current = db.get_account_by_id(account_id)
+        if current and current.get("tag") in ("Smurf", "Ranked", "Unrated", "", None):
+            merged = dict(current)
+            merged.update({
+                key: value for key, value in update_payload.items()
+                if not (key == "competitive_queue_eligible" and value is None)
+            })
+            update_payload = dict(update_payload)
+            update_payload["tag"] = db.category_for_account(merged)
     db.update_account(account_id, update_payload)
     if status in ("BANNED", "SUSPENDED"):
         db.move_to_banned(account_id)
@@ -255,7 +272,7 @@ async def background_auto_detect_and_link(account_id: int):
             lvl = int(info.get("level", 1) or 1)
             current_acc = db.get_account_by_id(account_id)
             if current_acc and current_acc.get("tag") in ("Smurf", "Ranked", "Unrated", "", None):
-                update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
+                update_payload["tag"] = db.category_for_account(info)
 
             if apply_account_update(account_id, update_payload):
                 break
@@ -460,12 +477,10 @@ async def run_batch_account_check():
                         update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
                         update_payload["last_updated"] = datetime.now().isoformat()
 
-                        # Automatically tag level >= 20 as Ranked and < 20 as Unrated
-                        lvl = int(detected_info.get("level", 1) or 1)
-                        if acc.get("tag") in ("Ranked", "Unrated", "Smurf", "", None):
-                            update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
-
-                        db.update_account(acc["id"], update_payload)
+                        # Keep the category tied to confirmed queue eligibility;
+                        # apply_account_update also preserves a prior signal
+                        # when this refresh returns eligibility as unknown.
+                        apply_account_update(acc["id"], update_payload)
                         CHECK_PROGRESS["verified"] += 1
 
                         # Scrape match history if display_name found
@@ -702,6 +717,8 @@ async def add_account(account: AccountCreate, background_tasks: BackgroundTasks)
             account_dict["peak_rank_icon_url"] = info.get("peak_rank_icon_url", "")
             account_dict["status"] = info.get("status", "PLAYABLE")
             account_dict["puuid"] = info.get("puuid", "")
+            account_dict["competitive_queue_eligible"] = info.get("competitive_queue_eligible")
+            account_dict["ranked_eligibility_source"] = info.get("ranked_eligibility_source", "")
 
     # Username checks alone could not catch the same Riot account added via
     # different credentials. Prefer the PUUID captured from the local Riot
@@ -726,7 +743,7 @@ async def add_account(account: AccountCreate, background_tasks: BackgroundTasks)
 
     lvl = int(account_dict.get("level", 1) or 1)
     if account_dict.get("tag") in ("Smurf", "Ranked", "Unrated", "", None):
-        account_dict["tag"] = "Ranked" if lvl >= 20 else "Unrated"
+        account_dict["tag"] = db.category_for_account(account_dict)
 
     account_id = db.add_account(account_dict)
     
@@ -1514,7 +1531,32 @@ async def import_text_accounts(req: ImportTextRequest, background_tasks: Backgro
         "imported_count": len(created),
         "skipped_existing": result["skipped_existing"],
         "skipped_banned": result["skipped_banned"],
+        "malformed_lines": result["malformed_lines"],
         "accounts": created
+    }
+
+
+@app.post("/api/import-raw")
+async def import_raw_accounts(req: ImportTextRequest, background_tasks: BackgroundTasks):
+    """UI-facing alias for pasted USER:PASSWORD lists.
+
+    It deliberately shares the TXT parser and creation pipeline, so imported
+    credentials have identical duplicate checks and storage behaviour.
+    """
+    result = db.import_accounts_from_raw(req.text)
+    created = result["created"]
+    for acc in created:
+        if acc.get("display_name"):
+            background_tasks.add_task(
+                background_scrape_account, acc["id"], acc["display_name"], acc.get("region", "NA")
+            )
+    return {
+        "success": True,
+        "imported_count": len(created),
+        "skipped_existing": result["skipped_existing"],
+        "skipped_banned": result["skipped_banned"],
+        "malformed_lines": result["malformed_lines"],
+        "accounts": created,
     }
 
 
@@ -2836,7 +2878,9 @@ def build_live_snapshot() -> Dict[str, Any]:
                         "peak_rank_tier": info.get("peak_rank_tier", ""),
                         "peak_rank_division": info.get("peak_rank_division", ""),
                         "peak_rank_icon_url": info.get("peak_rank_icon_url", ""),
-                        "tag": "Ranked" if int(info.get("level", 0) or 0) >= 20 else "Unrated",
+                        "competitive_queue_eligible": info.get("competitive_queue_eligible"),
+                        "ranked_eligibility_source": info.get("ranked_eligibility_source", ""),
+                        "tag": db.category_for_account(info),
                         "status": "PLAYABLE",
                         "notes": "Auto-detected active session"
                     })
@@ -3377,10 +3421,6 @@ async def check_single_account(account_id: int):
     update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
     update_payload["last_updated"] = datetime.now().isoformat()
 
-    lvl = int(detected_info.get("level", 1) or 1)
-    if account.get("tag") in ("Smurf", "Ranked", "Unrated", "", None):
-        update_payload["tag"] = "Ranked" if lvl >= 20 else "Unrated"
-
     status = (detected_info.get("status") or "").upper()
     if status in ("BANNED", "SUSPENDED"):
         apply_account_update(account_id, update_payload)
@@ -3391,7 +3431,7 @@ async def check_single_account(account_id: int):
             "message": f"{account['username']} is {status.lower()} - moved to Banned Accounts."
         }
 
-    db.update_account(account_id, update_payload)
+    apply_account_update(account_id, update_payload)
 
     # Fill in match history too, so the card is complete after one check.
     if detected_info.get("display_name"):
