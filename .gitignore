@@ -20,6 +20,20 @@ dist_installer/
 *.spec.bak
 installer_output/
 
+# Test and local tooling artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+!overwolf/**/*.log
+
+# Windows crash and installer by-products
+*.dmp
+*.tmp
+*.bak
+*.orig
+
 # Leftover/unrelated
 lol-account-manager-main/
 .ui_backup/

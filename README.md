@@ -28,12 +28,40 @@ A tactical, purple and obsidian-black desktop account manager and rank tracker f
 ## Quick Start
 
 ### 1. Run the App
-Double-click `run_app.bat` or run in terminal:
-```bash
+Install dependencies once, then double-click `run_app.bat` or run:
+
+```powershell
+pip install -r requirements.txt
 python app.py
 ```
 
 ### 2. Browser Mode (Optional)
-```bash
+```powershell
 python app.py --browser
 ```
+
+## Project Structure
+
+```text
+app.py                 Desktop entry point
+backend/               FastAPI API, storage, Riot integration, live-match services
+frontend/              Static application UI, overlay, and shipped assets
+tests/                 Automated tests
+installer/             Inno Setup installer definition
+overwolf/              Optional Vortex Telemetry companion
+docs/                  Architecture, development, and build documentation
+build.bat              Windows packaging entry point
+```
+
+## Development
+
+```powershell
+python -m pytest -q
+.\build.bat
+```
+
+Vortex uses local SQLite storage. In a source checkout it is the ignored `database.sqlite` file; packaged builds use `%LOCALAPPDATA%\\Vortex`. Do not commit account data, logs, backups, build output, or secrets.
+
+For programmatic combo pastes, `POST /api/import-raw` accepts `{ "text": "USER:PASSWORD\\n..." }`. The first colon separates the username; blank/comment lines are ignored, malformed rows are reported, and duplicate detection/storage match the normal TXT import path. Account responses expose `competitive_queue_eligible` and derived `ranked_capable` / `is_legacy_ranked_eligible` when Riot provides a real queue-eligibility signal.
+
+For architecture, development workflow, and release details, see [Architecture](docs/ARCHITECTURE.md), [Development](docs/DEVELOPMENT.md), and [Build & Release](docs/BUILD.md). Agents collaborating on the repository should begin with [AI_CONTEXT.md](AI_CONTEXT.md) and [AI_RULES.md](AI_RULES.md).
