@@ -1,5 +1,5 @@
 {
-  "version": "5.5.34",
+  "version": "5.5.35",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.34: account imports now accept pasted USER:PASSWORD combos with clear malformed-row reporting; Ranked/Unrated classification recognizes Riot-confirmed legacy Competitive access; filters, theme transitions, settings, and account metadata are more consistent; Riot Client login recovery is faster; and the Dashboard slide starts immediately without the previous loading pause."
+  "changelog": "Vortex v5.5.35: switching your insta-lock agent while it is armed now re-targets the backend and confirms with a brief \"Autolock updated to ...\" toast (or a clear error if it fails); the Start-a-Match panel shows a PLAY action while VALORANT is closed instead of a dead Start Match button; the dashboard PLAY button now follows the active theme accent instead of always being green; and agent portraits render crisply on high-DPI displays."
 }

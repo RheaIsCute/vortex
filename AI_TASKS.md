@@ -25,15 +25,15 @@ Notes: Updater uses GitHub latest-release API first with version.json mirrors as
 
 ### Claude
 
-Status: TODO
+Status: DONE
 
-Scope:
+Scope: Polish Live Match / insta-lock UI — (1) confirm + feedback when the selected insta-lock agent changes while armed, (2) show a theme-accent PLAY action in the Start-a-Match area while VALORANT is not running, (3) sharpen agent portrait rendering. Bump to v5.5.35 and publish the release.
 
-Files likely owned:
+Files owned: `frontend/app.js`, `frontend/index.html`, `frontend/styles.css`, `backend/version.py`, `version.json`, `installer/vortex_setup.iss`, `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
 
-Dependencies:
+Dependencies: Continued from Codex's published `v5.5.34`.
 
-Notes:
+Notes: Insta-lock backend (`arm_instalock`) already fully replaces the target on re-arm; the gap was purely frontend. No cross-module contract changes. Details, tests, and release info in `AI_CHANGES.md` (2026-09-01 — Claude — Live Match polish + v5.5.35 release).
 
 ### Gemini
 

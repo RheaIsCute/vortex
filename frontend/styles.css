@@ -6196,6 +6196,12 @@ body.dashboard-mode .session-bar {
 
 .btn-ranked-cta i { font-size: 19px; flex: none; }
 
+/* Play action shown in the Start-a-Match slot while VALORANT is closed. It
+   reuses .btn-ranked-cta wholesale so it inherits the theme accent gradient -
+   no separate colour is defined for Play. */
+.btn-play-cta.is-launching { filter: saturate(0.85) brightness(0.95); cursor: progress; }
+.btn-play-cta[hidden] { display: none; }
+
 .ranked-cta-text {
     display: flex;
     flex-direction: column;
@@ -6362,8 +6368,11 @@ body.dashboard-mode .session-bar {
     width: 46px;
     height: 42px;
     object-fit: contain;
+    /* Source icons are 1024px square; let the browser downscale them with its
+       normal high-quality filter. A forced GPU raster layer here used to be
+       rasterized without device-pixel awareness, which is what made the
+       portraits look pixelated on high-DPI displays. */
     image-rendering: auto;
-    transform: translateZ(0);
 }
 
 .dash-agent-btn span {
@@ -6431,8 +6440,9 @@ body.dashboard-mode .session-bar {
     padding: 10px 20px;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    background: linear-gradient(135deg, #16d38a 0%, #0ea968 55%, #0b8f58 100%);
-    color: #04160e;
+    /* Follows the active theme accent - never a fixed green. */
+    background: var(--grad-primary);
+    color: #fff;
     font-family: var(--font-main);
     font-size: 13.5px;
     font-weight: 800;
@@ -6440,7 +6450,7 @@ body.dashboard-mode .session-bar {
     cursor: pointer;
     overflow: hidden;
     isolation: isolate;
-    box-shadow: 0 6px 22px -8px rgba(22, 211, 138, 0.9), var(--bevel);
+    box-shadow: 0 6px 22px -8px rgba(var(--a-rgb), 0.9), var(--bevel);
     transition: transform var(--dur-2) var(--ease-spring),
                 filter var(--dur-2) ease,
                 box-shadow var(--dur-2) ease,
@@ -6453,7 +6463,7 @@ body.dashboard-mode .session-bar {
 .btn-dash-play:hover:not(:disabled) {
     transform: translateY(-2px);
     filter: brightness(1.08);
-    box-shadow: 0 10px 28px -8px rgba(22, 211, 138, 1);
+    box-shadow: 0 10px 28px -8px rgba(var(--a-rgb), 1);
 }
 
 .btn-dash-play:active:not(:disabled) { transform: scale(0.97); }

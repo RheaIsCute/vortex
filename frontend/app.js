@@ -448,6 +448,10 @@ const DOM = {
     dashCtaTitle: document.getElementById("dash-cta-title"),
     dashCtaSub: document.getElementById("dash-cta-sub"),
     dashCtaIcon: document.getElementById("dash-cta-icon"),
+    btnSidePlay: document.getElementById("btn-side-play"),
+    sidePlayIcon: document.getElementById("side-play-icon"),
+    sidePlayTitle: document.getElementById("side-play-title"),
+    sidePlaySub: document.getElementById("side-play-sub"),
     instalockLabel: document.getElementById("instalock-label"),
     dashRiotId: document.getElementById("dash-riot-id"),
     dashIdentitySub: document.getElementById("dash-identity-sub"),
@@ -5157,10 +5161,46 @@ function renderPlayButton(live) {
     }
 }
 
+/**
+ * The Start-a-Match-slot PLAY button. Only rendered while it is visible (i.e.
+ * VALORANT reported not running), and shares the same one-click launch state
+ * as the header PLAY button. Styling comes entirely from CSS / the theme
+ * accent - nothing here forces a colour.
+ */
+function renderSidePlayButton(live) {
+    if (!DOM.btnSidePlay) return;
+    const launch = (live && live.launch) || {};
+    const running = !!(live && live.valorant_running);
+    const launching = !!launch.active || (state.playPending && !running);
+
+    let title = "Play VALORANT";
+    let sub = "Starts the game for this account";
+    let icon = "fa-solid fa-play";
+    let disabled = false;
+
+    if (launching) {
+        title = "Starting VALORANT…";
+        sub = launch.message || "Launching the game";
+        icon = "fa-solid fa-circle-notch fa-spin";
+        disabled = true;
+    } else if (launch.stage === "failed") {
+        title = "VALORANT didn't start";
+        sub = "Tap to try again";
+        icon = "fa-solid fa-rotate-right";
+    }
+
+    if (DOM.sidePlayIcon) DOM.sidePlayIcon.className = icon;
+    if (DOM.sidePlayTitle) DOM.sidePlayTitle.textContent = title;
+    if (DOM.sidePlaySub) DOM.sidePlaySub.textContent = sub;
+    DOM.btnSidePlay.disabled = disabled;
+    DOM.btnSidePlay.classList.toggle("is-launching", launching);
+}
+
 async function forceLaunchValorant() {
     if (state.playPending) return;
     state.playPending = true;
     renderPlayButton(state.live);
+    renderSidePlayButton(state.live);
 
     try {
         const res = await fetch("/api/live/launch", { method: "POST" });
@@ -5170,10 +5210,12 @@ async function forceLaunchValorant() {
         if (!data.success) state.playPending = false;
         if (data.launch) state.live = { ...(state.live || {}), launch: data.launch };
         renderPlayButton(state.live);
+        renderSidePlayButton(state.live);
     } catch (err) {
         state.playPending = false;
         showToast("Couldn't reach the app's backend", "error");
         renderPlayButton(state.live);
+        renderSidePlayButton(state.live);
     }
 
     // The backend confirms the process itself; this just gets the first
@@ -5206,6 +5248,13 @@ function renderQueueControls(live) {
         state.pendingQueueId = null;
     }
 
+    // When VALORANT is specifically reported as not running (but a Riot
+    // session exists), the Start-a-Match action can't do anything useful, so
+    // the whole slot becomes a PLAY action instead. Both are never shown at
+    // once.
+    const sessionReady = !!live.available;
+    const valorantNotRunning = sessionReady && !live.valorant_running;
+
     // -- CTA -----------------------------------------------------------
     if (DOM.dashCtaIcon) DOM.dashCtaIcon.className = mode ? mode.icon : "fa-solid fa-trophy";
 
@@ -5225,6 +5274,13 @@ function renderQueueControls(live) {
 
     if (DOM.dashCtaTitle) DOM.dashCtaTitle.textContent = ctaTitle;
     if (DOM.dashCtaSub) DOM.dashCtaSub.textContent = ctaSub;
+
+    // Swap Start Match <-> Play depending on whether the game is up.
+    if (DOM.btnSidePlay) {
+        DOM.btnStartRanked.hidden = valorantNotRunning;
+        DOM.btnSidePlay.hidden = !valorantNotRunning;
+        if (valorantNotRunning) renderSidePlayButton(live);
+    }
 
     DOM.btnStartRanked.disabled = !canControl || inQueue || inMatch;
     DOM.btnStartRanked.classList.toggle("is-queued", inQueue);
@@ -5363,7 +5419,8 @@ function renderAgentGrid() {
         <button class="dash-agent-btn ${a.id === state.selectedAgentId ? "active" : ""} ${locked ? "locked" : ""}"
                 data-agent="${escapeHtml(a.id)}" ${locked ? "disabled" : ""}
                 title="${escapeHtml(a.name)}${a.role ? " · " + escapeHtml(a.role) : ""}${locked ? " · not owned on this account" : ""}">
-            <img src="${a.icon}" alt="${escapeHtml(a.name)}" onerror="this.style.visibility='hidden';">
+            <img src="${a.icon}" alt="${escapeHtml(a.name)}"
+                 loading="lazy" decoding="async" onerror="this.style.visibility='hidden';">
             <span>${escapeHtml(a.name)}</span>
         </button>`;
     }).join("");
@@ -5373,12 +5430,53 @@ function renderAgentGrid() {
     });
 }
 
-function selectAgent(agentId) {
+/**
+ * Picks an agent for insta-lock. When insta-lock is already armed, switching
+ * agents has to re-arm the backend with the new target - otherwise the UI
+ * highlight moves but the watcher keeps locking the previous agent. The
+ * highlight updates optimistically, then reverts if the backend rejects it.
+ */
+async function selectAgent(agentId) {
     const agent = state.agents.find(a => a.id === agentId);
     if (agent && agent.owned === false) return;
-    state.selectedAgentId = state.selectedAgentId === agentId ? null : agentId;
+
+    const previousId = state.selectedAgentId;
+    const nextId = previousId === agentId ? null : agentId;
+    const wasArmed = !!(state.instalock && state.instalock.enabled);
+
+    state.selectedAgentId = nextId;
     renderAgentGrid();
     updateInstalockControls();
+
+    // Only the "armed + actually changed to a different agent" case needs a
+    // backend round-trip and confirmation. Clearing the pick or picking while
+    // disarmed is purely local until INSTALOCK is pressed.
+    if (!wasArmed || !nextId || nextId === previousId) return;
+
+    try {
+        const res = await fetch("/api/live/instalock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true, agent_id: nextId })
+        });
+        const data = await res.json();
+
+        if (data.success && data.instalock && data.instalock.enabled &&
+            (data.instalock.agent_id || "").toLowerCase() === nextId.toLowerCase()) {
+            state.instalock = data.instalock;
+            updateInstalockControls();
+            showToast(`Autolock updated to ${agent ? agent.name : "your agent"}`, "success");
+        } else {
+            throw new Error(data.message || "target unchanged");
+        }
+    } catch (err) {
+        // Revert to the agent the backend still has armed.
+        state.selectedAgentId = previousId;
+        await refreshInstalockStatus(true);
+        renderAgentGrid();
+        updateInstalockControls();
+        showToast("Failed to update autolock agent", "error");
+    }
 }
 
 function updateInstalockControls() {
@@ -5798,6 +5896,7 @@ function initLiveEventListeners() {
     if (DOM.btnOpenDashboard) DOM.btnOpenDashboard.addEventListener("click", openDashboard);
     if (DOM.dashClose) DOM.dashClose.addEventListener("click", closeDashboard);
     if (DOM.btnDashPlay) DOM.btnDashPlay.addEventListener("click", forceLaunchValorant);
+    if (DOM.btnSidePlay) DOM.btnSidePlay.addEventListener("click", forceLaunchValorant);
 
     if (DOM.dashTabs) {
         DOM.dashTabs.querySelectorAll(".dash-tab").forEach(btn => {

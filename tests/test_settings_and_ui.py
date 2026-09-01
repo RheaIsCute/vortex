@@ -62,3 +62,31 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
 
         # 5. Normal settings does not contain the old settings-log-path input box
         self.assertNotIn('id="settings-log-path"', index_html)
+
+    def test_live_match_controls_markup(self):
+        root = Path(__file__).parent.parent
+        index_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        # 1. Start-a-Match slot has both the queue CTA and a Play alternative
+        self.assertIn('id="btn-start-ranked"', index_html)
+        self.assertIn('id="btn-side-play"', index_html)
+        self.assertIn("renderSidePlayButton", app_js)
+        self.assertIn("valorantNotRunning", app_js)
+
+        # 2. Insta-lock agent switch re-arms the backend and confirms
+        self.assertIn("Autolock updated to", app_js)
+        self.assertIn("Failed to update autolock agent", app_js)
+
+        # 3. Play button follows the theme accent - no hardcoded green
+        self.assertNotIn("#16d38a", styles_css)
+        self.assertNotIn("rgba(22, 211, 138", styles_css)
+        self.assertIn(".btn-dash-play", styles_css)
+
+        # 4. Agent portraits use smooth scaling, never hard-pixel rendering,
+        #    and are not pinned to a non-DPI-aware GPU raster layer.
+        agent_img_block = styles_css.split(".dash-agent-btn img {", 1)[1].split("}", 1)[0]
+        self.assertIn("image-rendering: auto", agent_img_block)
+        self.assertNotIn("transform:", agent_img_block)
+        self.assertNotIn("image-rendering: pixelated", styles_css)
