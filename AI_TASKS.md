@@ -13,15 +13,15 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ### Codex
 
-Status: DONE
+Status: IN PROGRESS
 
-Scope: Fix role-icon overlap in the shared recent-match row while preserving the established match-history layout.
+Scope: Publish the completed role-icon overlap fix as the v5.5.41 auto-update release.
 
-Files likely owned: `frontend/styles.css`, `frontend/app.js`, `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setup.iss`, `AI_CHANGES.md`, `AI_TASKS.md`
 
 Dependencies:
 
-Notes: Completed 2026-09-02. The shared recent-match row now gives the agent portrait its own selector and keeps the role icon as a 15px lower-right badge with readable contrast. Match-row data and responsive column layout were preserved.
+Notes: Completed 2026-09-01. Published v5.5.41 with the role-icon overlap fix; preserved the existing match-row data and responsive layout.
 
 ### Claude
 

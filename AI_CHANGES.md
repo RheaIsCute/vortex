@@ -77,6 +77,25 @@ Tests:
 - `python -m pytest -q` passed: 63 tests (2 existing FastAPI deprecation warnings).
 - `python -m compileall -q app.py backend tests` passed.
 - `git diff --check` passed.
+
+## 2026-09-01 - Codex - Publish v5.5.41 role-badge fix
+
+Changed:
+
+- Bumped `backend/version.py`, `version.json`, and `installer/vortex_setup.iss` from 5.5.40 to 5.5.41.
+- Built and published the installer containing the recent-match role-badge fix.
+
+Release:
+
+- GitHub release: https://github.com/RheaIsCute/vortex/releases/tag/v5.5.41
+- Installer: `VortexSetup.exe`, 277,253,898 bytes.
+- SHA-256: `0451C4F8CFB32F5065BA3AEF1E2DA6521B001514DFE025F50EB7B373D37578ED`.
+- Bundle contained 3,868 `_internal` files.
+
+Tests:
+
+- `python -m pytest -q` -> 79 passed (2 FastAPI deprecation warnings).
+- `git diff --check` passed.
 - `build.bat` passed: PyInstaller and Inno Setup completed successfully.
 
 Limitations:

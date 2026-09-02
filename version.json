@@ -1,5 +1,5 @@
 {
-  "version": "5.5.40",
+  "version": "5.5.41",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.40: failed Riot login attempts now cleanly reset across Login, Check Account, and batch checks; legacy-ranked eligibility consistently drives the white account glow; and WebView2 startup diagnostics improve frozen-app recovery."
+  "changelog": "Vortex v5.5.41: the recent match list now keeps role badges small, readable, and cleanly anchored to the agent portrait."
 }
