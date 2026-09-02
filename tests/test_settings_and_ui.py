@@ -63,6 +63,18 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         # 5. Normal settings does not contain the old settings-log-path input box
         self.assertNotIn('id="settings-log-path"', index_html)
 
+    def test_legacy_ranked_rendering_uses_backend_eligibility_and_repaints(self):
+        root = Path(__file__).parent.parent
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("function isLegacyRankedEligible(acc)", app_js)
+        self.assertIn("return acc && acc.is_legacy_ranked_eligible === true", app_js)
+        self.assertIn("newAccounts.filter(isLegacyRankedEligible)", app_js)
+        self.assertIn("const isLegacyRanked = isLegacyRankedEligible(acc)", app_js)
+        self.assertIn("a.is_legacy_ranked_eligible, a.ranked_capable", app_js)
+        self.assertIn(".account-card.is-legacy-ranked.is-favorite", styles_css)
+
     def test_live_match_controls_markup(self):
         root = Path(__file__).parent.parent
         index_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")

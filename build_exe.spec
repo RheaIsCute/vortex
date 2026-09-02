@@ -20,7 +20,7 @@ variables. That is what makes one-click updating work for copies of Vortex
 that are already installed and still carry the old updater.
 """
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 block_cipher = None
 
@@ -51,7 +51,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("frontend", "frontend"),
-    ],
+    ] + copy_metadata("pywebview") + copy_metadata("pythonnet") + copy_metadata("clr_loader"),
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

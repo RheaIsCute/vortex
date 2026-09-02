@@ -318,7 +318,8 @@ async def background_auto_detect_and_link(account_id: int):
 
 
 
-async def _wait_for_checked_account(username: str, timeout: float = 120.0) -> Dict[str, Any]:
+async def _wait_for_checked_account(username: str, timeout: float = 120.0,
+                                    cancel_with_batch: bool = True) -> Dict[str, Any]:
     """Wait for the asynchronous Riot login worker to actually finish.
 
     ``login_account`` returns as soon as its UI-automation thread starts.  The
@@ -332,7 +333,7 @@ async def _wait_for_checked_account(username: str, timeout: float = 120.0) -> Di
     saw_credentials = False
 
     while time.monotonic() < deadline:
-        if not CHECK_PROGRESS.get("running"):
+        if cancel_with_batch and not CHECK_PROGRESS.get("running"):
             return {"info": None, "cancelled": True, "invalid_credentials": False,
                     "message": "Verification cancelled."}
 
@@ -533,6 +534,13 @@ async def run_batch_account_check():
             await asyncio.to_thread(launcher.force_kill_riot_client)
         except Exception:
             client_launcher.login_logger.exception("batch check: final Riot Client close failed")
+        if client_launcher.LOGIN_PROGRESS.get("active"):
+            active_user = client_launcher.LOGIN_PROGRESS.get("username") or CHECK_PROGRESS.get("account") or "account"
+            client_launcher._set_login_stage(
+                "error",
+                "Verification ended before Riot confirmed the login; the account was kept for retry.",
+                active_user,
+            )
         if not CHECK_PROGRESS["running"]:
             was_cancelled = True
         CHECK_PROGRESS["running"] = False
@@ -3400,22 +3408,32 @@ async def check_single_account(account_id: int):
     settings = db.get_settings()
     custom_path = settings.get("riot_client_path", "")
 
-    await asyncio.to_thread(launcher.login_account, account["username"], account["password"],
-                            custom_path if custom_path else None, _stay_signed_in_pref())
-
-    detected_info = None
-    for _ in range(40):
-        await asyncio.sleep(0.5)
-        info = await asyncio.to_thread(launcher.get_active_riot_account, account["username"])
-        if info and info.get("found") and info.get("username", "").strip().lower() == account["username"].strip().lower():
-            detected_info = info
-            break
+    client_launcher.login_logger.info("[%s] account check attempt started mode=single-check", account["username"])
+    login_result = await asyncio.to_thread(
+        launcher.login_account, account["username"], account["password"],
+        custom_path if custom_path else None, _stay_signed_in_pref()
+    )
+    if login_result.get("success"):
+        check_result = await _wait_for_checked_account(
+            account["username"], timeout=120.0, cancel_with_batch=False
+        )
+    else:
+        check_result = {
+            "info": None, "cancelled": False, "invalid_credentials": False,
+            "message": login_result.get("message") or "The login could not be started.",
+        }
+    detected_info = check_result.get("info")
 
     if not detected_info:
+        message = check_result.get("message") or (
+            f"Couldn't verify {account['username']} - the login didn't go through. Check the username and password."
+        )
+        client_launcher.login_logger.warning("[%s] account check finished without verification: %s",
+                                             account["username"], message)
         return {
             "success": False,
             "verified": False,
-            "message": f"Couldn't verify {account['username']} - the login didn't go through. Check the username and password."
+            "message": message,
         }
 
     update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}

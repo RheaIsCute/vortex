@@ -204,6 +204,9 @@ _LOGIN_START_LOCK = threading.Lock()
 
 
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
+    terminal = stage in ("done", "error", "idle")
+    if terminal:
+        login_logger.info("[%s] login cleanup starting for terminal stage=%s", username or LOGIN_PROGRESS.get("username", ""), stage)
     LOGIN_PROGRESS["stage"] = stage
     LOGIN_PROGRESS["message"] = message
     LOGIN_PROGRESS["stage_at"] = time.time()
@@ -211,7 +214,7 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
         LOGIN_PROGRESS["username"] = username
     if stage in ("opening", "signout"):
         LOGIN_PROGRESS["active"] = True
-    if stage in ("done", "error", "idle"):
+    if terminal:
         LOGIN_PROGRESS["active"] = False
     LOGIN_PROGRESS["can_retry"] = (stage == "error")
     if stage != "error":
@@ -227,6 +230,9 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
         level, "[%s] stage=%s elapsed=%.2fs msg=%s",
         LOGIN_PROGRESS.get("username", ""), stage, elapsed, message,
     )
+    if terminal:
+        login_logger.info("[%s] login cleanup complete; state reset and next attempt allowed",
+                          LOGIN_PROGRESS.get("username", ""))
 
 
 def _elevation_blocked_login(username: Optional[str] = None) -> bool:
@@ -1075,6 +1081,28 @@ class ClientLauncher:
             return None
 
     @classmethod
+    def find_login_validation_error(cls, hwnd: Optional[int] = None) -> Optional[str]:
+        """Return known client-side form validation copy without reading credentials."""
+        auto = _uia()
+        if auto is None:
+            return None
+        try:
+            hwnd = hwnd or cls.find_riot_window()
+            if not hwnd:
+                return None
+            auto.SetGlobalSearchTimeout(0.5)
+            window = auto.ControlFromHandle(hwnd)
+            names = " ".join(
+                _normalise_ui_text(getattr(control, "Name", ""))
+                for control in _iter_uia_descendants(window)
+            )
+            if "special characters" in names and ("can't put" in names or "cannot put" in names):
+                return "unsupported special characters"
+        except Exception as exc:
+            login_logger.debug("login validation detection failed: %s", exc)
+        return None
+
+    @classmethod
     def click_transient_login_sign_out(cls, hwnd: Optional[int] = None) -> bool:
         """Click the detected modal action through UI Automation."""
         button = cls.find_transient_login_popup(hwnd)
@@ -1189,6 +1217,16 @@ class ClientLauncher:
                     return False
                 continue
 
+            validation_error = cls.find_login_validation_error()
+            if validation_error:
+                login_logger.warning("[%s] Riot client-side validation detected: %s", username, validation_error)
+                _set_login_stage(
+                    "error",
+                    "Riot rejected the sign-in form. Remove unsupported characters and try again.",
+                    username,
+                )
+                return False
+
             auth_error = cls.check_login_error()
             if auth_error in ("auth_failure", "invalid_credentials"):
                 _set_login_stage(
@@ -1203,7 +1241,10 @@ class ClientLauncher:
 
             time.sleep(0.5)
 
-        return None
+        message = "Riot did not confirm this sign-in before the attempt timed out. Please try again."
+        login_logger.warning("[%s] login result monitor timed out", username)
+        _set_login_stage("error", message, username)
+        return False
 
     # ------------------------------------------------------------------
     # Verified login steps
@@ -1731,6 +1772,8 @@ class ClientLauncher:
             LOGIN_PROGRESS["stay_signed_in"] = None
             LOGIN_PROGRESS["needs_elevation"] = False
             LOGIN_PROGRESS["active"] = True
+        login_logger.info("[%s] login attempt started mode=%s", username,
+                          "retry" if not restart_client else "standard")
         _set_login_stage("opening", "Preparing to sign in...", username)
 
         target_path = client_path or cls.detect_riot_client_path()

@@ -1220,7 +1220,9 @@ function accountsSignature(list) {
         a.rank_tier, a.rank_division, a.lp, a.level, a.winrate, a.games_played,
         a.rank_icon_url, a.peak_rank_tier, a.peak_rank_division,
         a.peak_rank_icon_url, a.peak_rank_season, a.status, a.favorite,
-        a.needs_check, minute(a.last_login)
+        a.needs_check, a.competitive_queue_eligible,
+        a.is_legacy_ranked_eligible, a.ranked_capable, a.ranked_eligibility_source,
+        minute(a.last_login)
     ].join("")).join("")
         + "|" + state.activeAccountId + "|" + state.viewMode;
 }
@@ -1248,7 +1250,7 @@ async function fetchAccounts(silent = false) {
             newAccounts = newAccounts.filter(a => a.favorite);
         } else if (tagParam === "LEGACY_RANKED") {
             // Backend-derived flag: below the level gate but Competitive-eligible.
-            newAccounts = newAccounts.filter(a => a.is_legacy_ranked_eligible);
+            newAccounts = newAccounts.filter(isLegacyRankedEligible);
         }
 
         // Avoid unnecessary DOM rebuilds if data hasn't changed
@@ -1779,6 +1781,11 @@ function accountWinrate(acc) {
     return Number(acc.winrate) || 0;
 }
 
+/** Backend-derived eligibility is the sole source for the badge, filter and glow. */
+function isLegacyRankedEligible(acc) {
+    return acc && acc.is_legacy_ranked_eligible === true;
+}
+
 /** Shared per-account view model used by both the grid and table renderers. */
 function buildAccountView(acc) {
     const tier = (acc.rank_tier || "UNRANKED").toUpperCase();
@@ -1796,7 +1803,7 @@ function buildAccountView(acc) {
     const isHighlighted = state.highlightId === acc.id;
     // Backend-derived: this account is under the level gate but Riot still
     // reports it as Competitive-eligible ("Legacy Ranked").
-    const isLegacyRanked = !!acc.is_legacy_ranked_eligible;
+    const isLegacyRanked = isLegacyRankedEligible(acc);
 
     const lastLoginFormatted = isActive
         ? '<span class="last-login-val is-active"><span class="live-dot-mini"></span> Active Now</span>'
@@ -3463,11 +3470,13 @@ async function launchAccount(id, inPlace = false) {
         .then(r => r.json())
         .then(data => {
             if (!data.success) {
+                stopLaunchPolling();
                 showToast(data.message || "Could not start login", "info");
                 renderLaunchProgress({ stage: "error", message: data.message || "Could not start login." });
             }
         })
         .catch(() => {
+            stopLaunchPolling();
             showToast("Failed to open Riot Client", "error");
             renderLaunchProgress({ stage: "error", message: "Failed to reach the app's backend." });
         });

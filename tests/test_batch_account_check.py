@@ -62,6 +62,41 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server.CHECK_PROGRESS["failed"], 1)
         self.assertIn("kept for retry", server.CHECK_PROGRESS["message"])
 
+    async def test_single_check_uses_shared_waiter_and_releases_failed_attempt(self):
+        account = {"id": 7, "username": "bad-then-good", "password": "saved"}
+        server.CHECK_PROGRESS["running"] = False
+        failed = {
+            "info": None, "cancelled": False, "invalid_credentials": False,
+            "message": "Riot rejected the sign-in form.",
+        }
+        with patch.object(server.db, "get_account_by_id", return_value=account), \
+             patch.object(server.db, "get_settings", return_value={}), \
+             patch.object(server.launcher, "login_account", return_value={"success": True}), \
+             patch.object(server, "_wait_for_checked_account", new=AsyncMock(return_value=failed)) as waiter:
+            result = await server.check_single_account(7)
+
+        self.assertFalse(result["success"])
+        self.assertIn("sign-in form", result["message"])
+        waiter.assert_awaited_once_with("bad-then-good", timeout=120.0, cancel_with_batch=False)
+
+    async def test_batch_finally_releases_a_leftover_login_attempt(self):
+        account = {"id": 7, "username": "example", "password": "saved", "tag": ""}
+        server.client_launcher.LOGIN_PROGRESS.update(
+            active=True, stage="submitted", username="example", message="Signing in..."
+        )
+        with patch.object(server.db, "get_all_accounts", return_value=[account]), \
+             patch.object(server, "account_needs_check", return_value=True), \
+             patch.object(server.db, "get_settings", return_value={}), \
+             patch.object(server.launcher, "force_kill_riot_client", return_value=True), \
+             patch.object(server.launcher, "kill_valorant", return_value=True), \
+             patch.object(server.launcher, "login_account", return_value={"success": False, "message": "busy"}), \
+             patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.asyncio, "sleep", new=AsyncMock()):
+            await server.run_batch_account_check()
+
+        self.assertFalse(server.client_launcher.LOGIN_PROGRESS["active"])
+        self.assertEqual(server.client_launcher.LOGIN_PROGRESS["stage"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()

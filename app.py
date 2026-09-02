@@ -64,6 +64,13 @@ import webview
 import win32gui
 import win32con
 import win32api
+from webview_diagnostics import (
+    REQUESTED_BACKEND,
+    initialize_and_instrument,
+    log_system_diagnostics,
+    prepare_user_data_dir,
+    show_webview2_error,
+)
 
 # When frozen by PyInstaller (onefile build), bundled data files live under
 # sys._MEIPASS (a temp extraction dir), not next to this script.
@@ -75,6 +82,7 @@ else:
 
 from backend.server import app, db, in_match_now
 from backend.client_launcher import is_valorant_foreground
+from backend.version import APP_VERSION
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
 
@@ -106,6 +114,11 @@ PORT = find_available_port(8765)
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
 STARTUP_LOG = os.path.join(os.environ.get("TEMP") or BASE_DIR, "vortex_startup.log")
+WEBVIEW2_USER_DATA_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.dirname(os.path.abspath(__file__)),
+    "Vortex",
+    "WebView2",
+)
 
 
 def _startup_log(message):
@@ -349,6 +362,21 @@ def _make_live_hud_controller(hud_window):
 
 def main():
     _startup_log("main entered")
+    log_system_diagnostics(
+        BASE_DIR, sys.executable, WEBVIEW2_USER_DATA_DIR, APP_VERSION, _startup_log
+    )
+    if not prepare_user_data_dir(WEBVIEW2_USER_DATA_DIR, _startup_log):
+        show_webview2_error(STARTUP_LOG)
+        return
+
+    if "--browser" not in sys.argv:
+        try:
+            initialize_and_instrument(_startup_log, STARTUP_LOG)
+        except Exception:
+            _startup_log("WebView2 preflight failure:\n" + traceback.format_exc())
+            show_webview2_error(STARTUP_LOG)
+            return
+
     # Start server in background thread
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
@@ -442,16 +470,16 @@ def main():
 
         window.events.closing += _on_main_closing
         _startup_log("entering WebView event loop")
-        webview.start(debug=False)
+        webview.start(
+            gui=REQUESTED_BACKEND,
+            debug=False,
+            private_mode=False,
+            storage_path=WEBVIEW2_USER_DATA_DIR,
+        )
         _startup_log("WebView event loop exited")
     except Exception:
         _startup_log("desktop startup failed:\n" + traceback.format_exc())
-        webbrowser.open(URL)
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            sys.exit(0)
+        show_webview2_error(STARTUP_LOG)
 
 
 if __name__ == "__main__":

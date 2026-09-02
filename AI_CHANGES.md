@@ -2,6 +2,33 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-01 — Codex — WebView2 diagnostic startup build
+
+Changed:
+
+- Forced pywebview 6.2.1 to request `edgechromium` on Windows instead of allowing its registry-based automatic EdgeChromium/MSHTML choice.
+- Added startup logging for application/Python/package/Windows versions, packaged WebView2 files, CLR initialization, runtime discovery, selected renderer, writable profile path, and asynchronous WebView2 environment/controller outcomes.
+- Added a persistent application-owned WebView2 profile at `%LOCALAPPDATA%\\Vortex\\WebView2` with a real create/write/delete probe before initialization.
+- Wrapped pywebview's WebView2 completion callback because 6.2.1 otherwise only logs `InitializationException` and leaves the malformed WinForms window open. Failure now writes the full diagnostic, shows a concise native dialog, and exits the GUI loop. No automatic browser fallback was added; explicit `--browser` mode remains available.
+- Bundled Python distribution metadata so frozen logs report the packaged pywebview/pythonnet/clr-loader versions.
+
+Files:
+
+- `app.py`, `webview_diagnostics.py`, `build_exe.spec`
+- `tests/test_webview_diagnostics.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Tests/build:
+
+- `python -m pytest -q` passed: 70 tests (2 existing FastAPI deprecation warnings).
+- `python -m compileall -q app.py webview_diagnostics.py tests` and `git diff --check` passed.
+- Normal source and frozen-bundle smoke tests selected `edgechromium`, discovered WebView2 152.0.4191.53, reported controller success, and started new `msedgewebview2` processes.
+- Diagnostic PyInstaller bundle contains 3,868 internal files. Inno Setup produced `dist_installer/VortexSetup.exe` (277,148,848 bytes). No GitHub release was created.
+
+Integration notes:
+
+- The normal `dist` output was locked by an already-running pre-task Vortex instance, so the verified fresh bundle was built in `dist_diagnostic` and staged directly into the existing installer definition. The running user process was not terminated.
+- No frontend, updater, account, Riot, or other feature files changed. No cross-module API changed.
+
 ## 2026-09-01 — Codex — Workspace reorganization baseline
 
 Changed:
@@ -339,3 +366,53 @@ Limitations:
   a live run needs VALORANT open, which was not available. The
   player-profile lookup returned no rows here (needs a Riot session) but
   is confirmed to use `matchCardHtml`, not the deleted `.detail-history-row`.
+
+## 2026-09-01 — Codex — Riot transient login popup recovery
+
+Changed:
+
+- Added UI Automation tree detection for Riot's transient login modal by requiring its `Unable to load` or sign-in failure copy together with a `Sign out` button. Combined text-node matching handles UIA message splits and avoids reacting to unrelated Riot dialogs or normal signed-in state.
+- Added a bounded recovery monitor after credential submission. It logs the detection, invokes `Sign out`, waits for the modal and session teardown to clear, waits three seconds, confirms the login form is ready, and reuses the existing verified credential-fill flow for the same account.
+- Limited the flow to three total attempts (initial submission plus two retries). Persistent failure ends with `Riot login temporarily unavailable after 3 attempts.`; the existing batch checker then retains that account and continues to the next one.
+- Kept all UI Automation calls on the login worker thread and made success confirmation require an exact active Riot username match.
+
+Files:
+
+- `backend/client_launcher.py`
+- `tests/test_login_flow.py`
+- `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts: none. The existing HTTP/login-progress boundary is unchanged.
+
+Tests:
+
+- `python -m pytest -q` → 74 passed (2 pre-existing FastAPI deprecation warnings).
+- `python -m pytest -q tests/test_login_flow.py` → 10 passed.
+- `python -m py_compile backend/client_launcher.py` and `git diff --check` passed.
+
+## 2026-09-01 - Codex - Failed-attempt cleanup and legacy-ranked treatment
+
+Changed:
+
+- Made terminal login stages the shared cleanup boundary: success, known errors, validation failures, timeouts, popup recovery failures, and worker exceptions release the active attempt and make the next action available.
+- Detects Riot client-side unsupported-special-character validation, records a non-sensitive validation log, and ends the attempt immediately. Submission monitoring now turns an unconfirmed result into a retryable terminal error instead of leaving the attempt active.
+- Routed single Check Account through the same bounded login waiter used by batch checks; batch finalization also releases any leftover active login after cancellation or an exception.
+- Added non-sensitive lifecycle logging for attempt mode/account, validation detection, cleanup start/completion, and next-attempt availability.
+- Made `is_legacy_ranked_eligible` the frontend source for the legacy badge, category filter, and card class. Eligibility fields now participate in silent-refresh signatures, so a confirmed check repaints immediately. The white glow explicitly wins over favorite/active accent styling.
+
+Files:
+
+- `backend/client_launcher.py`, `backend/server.py`
+- `frontend/app.js`, `frontend/styles.css`
+- `tests/test_login_flow.py`, `tests/test_batch_account_check.py`, `tests/test_settings_and_ui.py`
+- `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts: none. Existing login-progress and account eligibility response fields are unchanged.
+
+Tests:
+
+- `python -m pytest -q` -> 79 passed (2 FastAPI deprecation warnings).
+- `python -m pytest tests/test_login_flow.py tests/test_batch_account_check.py tests/test_settings_and_ui.py -q` -> 24 passed.
+- `python -m compileall -q backend` and `git diff --check` passed.
+
+No version bump, installer build, GitHub push, tag, or release was created.

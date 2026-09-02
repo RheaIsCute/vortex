@@ -15,13 +15,13 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 Status: DONE
 
-Scope: Prepare, publish, and verify the v5.5.34 production release and auto-update flow.
+Scope: Fix shared failed-attempt lifecycle cleanup across Riot login/check flows and make confirmed legacy-ranked eligibility drive beta card styling consistently.
 
-Files likely owned: `backend/version.py`, `version.json`, `installer/vortex_setup.iss`, `docs/BUILD.md`, `AI_CHANGES.md`, `AI_TASKS.md`
+Files likely owned: `backend/client_launcher.py`, `backend/server.py`, `frontend/app.js`, `frontend/styles.css`, `tests/test_login_flow.py`, `tests/test_batch_account_check.py`, `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
 
 Dependencies:
 
-Notes: Updater uses GitHub latest-release API first with version.json mirrors as fallback; release-based updates remain intentional. v5.5.34 is built, pushed, tagged, published, and verified. The installer passed an isolated temporary install test; an in-place GUI upgrade was not run because an existing legacy Vortex process could not be safely terminated in this session.
+Notes: Completed 2026-09-01. Terminal login stages now always release the attempt; normal Login, single Check Account, and batch Check Accounts share the same bounded waiter/cleanup path. Confirmed backend eligibility now drives the legacy-ranked badge, filter, and white card treatment. No updater, WebView2, history, autolock, theme, version, build, or release changes.
 
 ### Claude
 

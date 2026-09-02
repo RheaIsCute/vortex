@@ -1,5 +1,5 @@
 {
-  "version": "5.5.39",
+  "version": "5.5.40",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.39: Riot login now detects the transient 'Unable to load' popup, signs out, waits for a ready login screen, and retries the same account up to three total attempts without stalling multi-account checks."
+  "changelog": "Vortex v5.5.40: failed Riot login attempts now cleanly reset across Login, Check Account, and batch checks; legacy-ranked eligibility consistently drives the white account glow; and WebView2 startup diagnostics improve frozen-app recovery."
 }

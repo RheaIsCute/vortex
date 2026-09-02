@@ -190,6 +190,30 @@ class RiotTransientLoginPopupTests(unittest.TestCase):
         self.assertEqual(click.call_count, 2)
         self.assertEqual(fill.call_count, 2)
 
+    def test_result_monitor_timeout_releases_the_attempt(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", return_value=None), \
+             patch.object(cl.ClientLauncher, "find_transient_login_popup", return_value=None), \
+             patch.object(cl.ClientLauncher, "find_login_validation_error", return_value=None), \
+             patch.object(cl.ClientLauncher, "check_login_error", return_value=None), \
+             patch.object(cl.time, "monotonic", side_effect=[0.0, 1.0]), \
+             patch.object(cl.time, "sleep"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=0.5)
+
+        self.assertFalse(result)
+        self.assertEqual(cl.LOGIN_PROGRESS["stage"], "error")
+        self.assertFalse(cl.LOGIN_PROGRESS["active"])
+        self.assertTrue(cl.LOGIN_PROGRESS["can_retry"])
+
+    def test_client_validation_releases_the_attempt(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", return_value=None), \
+             patch.object(cl.ClientLauncher, "find_transient_login_popup", return_value=None), \
+             patch.object(cl.ClientLauncher, "find_login_validation_error", return_value="unsupported special characters"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=1)
+
+        self.assertFalse(result)
+        self.assertIn("Remove unsupported characters", cl.LOGIN_PROGRESS["message"])
+        self.assertFalse(cl.LOGIN_PROGRESS["active"])
+
 
 if __name__ == "__main__":
     unittest.main()

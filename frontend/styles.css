@@ -8436,10 +8436,20 @@ body.accent-anim *::after {
 
 /* --- 11.3 Legacy Ranked account treatment -------------------------------- */
 .account-card.is-legacy-ranked {
-    border-color: rgba(255, 255, 255, 0.24);
+    border-color: rgba(255, 255, 255, 0.42);
     box-shadow: var(--shadow-md),
-                0 0 0 1px rgba(255, 255, 255, 0.09),
-                0 0 26px -8px rgba(255, 255, 255, 0.30),
+                0 0 0 1px rgba(255, 255, 255, 0.18),
+                0 0 30px -8px rgba(255, 255, 255, 0.42),
+                var(--bevel);
+}
+
+/* This rule intentionally comes after normal accent/favorite card treatment. */
+.account-card.is-legacy-ranked.is-favorite,
+.account-card.is-legacy-ranked.is-active-session {
+    border-color: rgba(255, 255, 255, 0.52);
+    box-shadow: var(--shadow-md),
+                0 0 0 1px rgba(255, 255, 255, 0.22),
+                0 0 34px -8px rgba(255, 255, 255, 0.50),
                 var(--bevel);
 }
 
@@ -8554,4 +8564,3 @@ body.accent-anim *::after {
     .secondary-controls { width: 100%; justify-content: space-between; }
     .filter-popover { width: min(320px, calc(100vw - 32px)); }
 }
-
