@@ -1,7 +1,7 @@
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend import client_launcher as cl
 
@@ -95,6 +95,100 @@ class LoginThreadingTests(unittest.TestCase):
             res = cl.ClientLauncher.login_account("acc", "pw", client_path=__file__)
             self.assertTrue(res["success"])
             self.assertTrue(done.wait(5))
+
+
+class RiotTransientLoginPopupTests(unittest.TestCase):
+    def setUp(self):
+        self._orig = dict(cl.LOGIN_PROGRESS)
+        cl.LOGIN_PROGRESS.update(
+            active=True, stage="submitted", username="acc", message="Signing in...",
+        )
+
+    def tearDown(self):
+        cl.LOGIN_PROGRESS.clear()
+        cl.LOGIN_PROGRESS.update(self._orig)
+
+    @staticmethod
+    def _control(name, control_type="TextControl", children=None):
+        control = MagicMock()
+        control.Name = name
+        control.ControlTypeName = control_type
+        control.GetChildren.return_value = children or []
+        return control
+
+    def test_popup_detection_requires_failure_copy_and_sign_out_button(self):
+        failure = self._control("Sorry, we're having trouble signing you in")
+        failure_tail = self._control("right now.")
+        sign_out = self._control("Sign out", "ButtonControl")
+        root = self._control("Riot Client", children=[failure, failure_tail, sign_out])
+        auto = MagicMock()
+        auto.ControlFromHandle.return_value = root
+
+        with patch.object(cl, "_uia", return_value=auto), \
+             patch.object(cl.ClientLauncher, "find_riot_window", return_value=123):
+            self.assertIs(cl.ClientLauncher.find_transient_login_popup(), sign_out)
+
+        root = self._control("Riot Client", children=[self._control("Sign out", "ButtonControl")])
+        auto.ControlFromHandle.return_value = root
+        with patch.object(cl, "_uia", return_value=auto), \
+             patch.object(cl.ClientLauncher, "find_riot_window", return_value=123):
+            self.assertIsNone(cl.ClientLauncher.find_transient_login_popup())
+
+    def test_popup_retries_same_account_and_then_succeeds(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", side_effect=[
+                None, {"found": True, "username": "acc", "display_name": "Player#NA1"}]), \
+             patch.object(cl.ClientLauncher, "find_transient_login_popup", side_effect=[object(), None]), \
+             patch.object(cl.ClientLauncher, "click_transient_login_sign_out", return_value=True) as click, \
+             patch.object(cl.ClientLauncher, "wait_for_transient_login_popup_gone", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_signed_out", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_login_form", return_value=object()), \
+             patch.object(cl.ClientLauncher, "_attempt_login_fill", return_value=True) as fill, \
+             patch.object(cl.ClientLauncher, "check_login_error", return_value=None), \
+             patch.object(cl.time, "sleep"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=1)
+
+        self.assertTrue(result)
+        click.assert_called_once_with()
+        fill.assert_called_once_with("acc", "pw", True, tries=3, form_timeout=20.0)
+        self.assertEqual(cl.LOGIN_PROGRESS["stage"], "done")
+
+    def test_popup_stops_after_three_total_attempts(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", return_value=None), \
+             patch.object(cl.ClientLauncher, "find_transient_login_popup", return_value=object()), \
+             patch.object(cl.ClientLauncher, "click_transient_login_sign_out", return_value=True) as click, \
+             patch.object(cl.ClientLauncher, "wait_for_transient_login_popup_gone", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_signed_out", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_login_form", return_value=object()), \
+             patch.object(cl.ClientLauncher, "_attempt_login_fill", return_value=True) as fill, \
+             patch.object(cl.time, "sleep"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=1)
+
+        self.assertFalse(result)
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(fill.call_count, 2)
+        self.assertEqual(
+            cl.LOGIN_PROGRESS["message"],
+            "Riot login temporarily unavailable after 3 attempts.",
+        )
+        self.assertFalse(cl.LOGIN_PROGRESS["active"])
+
+    def test_two_popups_allow_the_third_attempt_to_succeed(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", side_effect=[
+                None, None, None, {"found": True, "username": "acc"}]), \
+             patch.object(cl.ClientLauncher, "find_transient_login_popup", side_effect=[
+                 object(), object(), None]), \
+             patch.object(cl.ClientLauncher, "click_transient_login_sign_out", return_value=True) as click, \
+             patch.object(cl.ClientLauncher, "wait_for_transient_login_popup_gone", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_signed_out", return_value=True), \
+             patch.object(cl.ClientLauncher, "wait_for_login_form", return_value=object()), \
+             patch.object(cl.ClientLauncher, "_attempt_login_fill", return_value=True) as fill, \
+             patch.object(cl.ClientLauncher, "check_login_error", return_value=None), \
+             patch.object(cl.time, "sleep"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=1)
+
+        self.assertTrue(result)
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(fill.call_count, 2)
 
 
 if __name__ == "__main__":

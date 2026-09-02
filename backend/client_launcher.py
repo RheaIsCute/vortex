@@ -10,6 +10,7 @@ Handles:
 import os
 import sys
 import json
+import re
 import time
 import logging
 import logging.handlers
@@ -107,6 +108,13 @@ def _is_process_running_fast(targets: set) -> bool:
 _VALORANT_PROCS = {"valorant.exe", "valorant-win64-shipping.exe"}
 _RIOT_PROCS = {"riotclientservices.exe", "riotclientux.exe",
                "riotclientuxrender.exe", "riotclientcrashhandler.exe"}
+
+# Riot can briefly show an authenticated-looking error modal after a submit.
+# Keep this retry budget local to one login request so a flaky client cannot
+# create an unbounded sign-out/sign-in loop.
+_RIOT_POPUP_MAX_ATTEMPTS = 3
+_RIOT_POPUP_RETRY_DELAY = 3.0
+_RIOT_POPUP_RESULT_TIMEOUT = 45.0
 
 
 def is_valorant_running() -> bool:
@@ -462,6 +470,23 @@ TIER_NAMES = [
 ]
 
 TIER_BASE_URL = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04"
+
+
+def _normalise_ui_text(value: Any) -> str:
+    """Collapse UIA whitespace/case differences for text matching."""
+    return " ".join(re.sub(r"\s+", " ", str(value or "")).strip().lower().split())
+
+
+def _iter_uia_descendants(root):
+    """Yield a UIA control tree without assuming a specific Riot control type."""
+    pending = [root]
+    while pending:
+        control = pending.pop()
+        yield control
+        try:
+            pending.extend(reversed(control.GetChildren() or []))
+        except Exception:
+            continue
 
 
 class ClientLauncher:
@@ -1006,6 +1031,180 @@ class ClientLauncher:
             login_logger.warning("focus_window failed: %s", e)
             return False
 
+    @classmethod
+    def find_transient_login_popup(cls, hwnd: Optional[int] = None):
+        """Return the Riot ``Sign out`` button for the transient login modal.
+
+        The modal is identified by both its failure copy and its Sign out
+        action. That keeps a generic Riot button, or a normal signed-in client,
+        from triggering account recovery.
+        """
+        auto = _uia()
+        if auto is None:
+            return None
+
+        try:
+            hwnd = hwnd or cls.find_riot_window()
+            if not hwnd:
+                return None
+            auto.SetGlobalSearchTimeout(0.5)
+            window = auto.ControlFromHandle(hwnd)
+            if not window:
+                return None
+
+            names = []
+            sign_out = None
+            for control in _iter_uia_descendants(window):
+                name = _normalise_ui_text(getattr(control, "Name", ""))
+                if not name:
+                    continue
+                names.append(name)
+                if name == "sign out":
+                    control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
+                    if not control_type or "button" in control_type:
+                        sign_out = control
+
+            all_text = " ".join(names)
+            has_failure_copy = (
+                "unable to load" in all_text or
+                "trouble signing you in right now" in all_text
+            )
+            return sign_out if has_failure_copy and sign_out is not None else None
+        except Exception as exc:
+            login_logger.debug("transient login popup detection failed: %s", exc)
+            return None
+
+    @classmethod
+    def click_transient_login_sign_out(cls, hwnd: Optional[int] = None) -> bool:
+        """Click the detected modal action through UI Automation."""
+        button = cls.find_transient_login_popup(hwnd)
+        if button is None:
+            return False
+        try:
+            invoke = button.GetInvokePattern()
+            if invoke is not None:
+                invoke.Invoke()
+            else:
+                button.Click()
+            return True
+        except Exception as exc:
+            try:
+                button.Click()
+                return True
+            except Exception:
+                login_logger.warning("could not click Riot transient login Sign out: %s", exc)
+                return False
+
+    @classmethod
+    def wait_for_transient_login_popup_gone(cls, timeout: float = 8.0) -> bool:
+        """Wait until the detected modal is no longer present."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if cls.find_transient_login_popup() is None:
+                return True
+            time.sleep(0.25)
+        return cls.find_transient_login_popup() is None
+
+    @classmethod
+    def _monitor_login_result(cls, username: str, password: str,
+                              stay_signed_in: bool, client_path: Optional[str] = None,
+                              timeout: float = _RIOT_POPUP_RESULT_TIMEOUT) -> Optional[bool]:
+        """Watch the submitted login for success, auth errors, or Riot's modal.
+
+        This runs on the same worker that filled the form, which is important
+        for UI Automation's single-threaded COM apartment. On the transient
+        popup path it signs out, waits for a fresh form, and calls the existing
+        fill routine again for the same account.
+        """
+        deadline = time.monotonic() + timeout
+        popup_attempt = 1
+
+        while time.monotonic() < deadline:
+            session = cls.get_active_riot_session(username)
+            session_user = (session.get("username") or "").strip().lower() if session else ""
+            if session and session.get("found") and session_user == username.strip().lower():
+                _set_login_stage(
+                    "done",
+                    f"Signed in as {session.get('display_name') or username}.",
+                    username,
+                )
+                return True
+
+            if cls.find_transient_login_popup() is not None:
+                login_logger.warning("[%s] Riot transient login popup detected", username)
+                if popup_attempt >= _RIOT_POPUP_MAX_ATTEMPTS:
+                    message = f"Riot login temporarily unavailable after {_RIOT_POPUP_MAX_ATTEMPTS} attempts."
+                    login_logger.error("[%s] Riot transient login failure persisted after %d attempts", username, popup_attempt)
+                    _set_login_stage("error", message, username)
+                    return False
+
+                _set_login_stage("signout", "Riot login failed temporarily - signing out...", username)
+                login_logger.info("[%s] Clicking Sign out", username)
+                if not cls.click_transient_login_sign_out():
+                    _set_login_stage(
+                        "error", "Riot's transient login failure could not be cleared.", username
+                    )
+                    return False
+                if not cls.wait_for_transient_login_popup_gone():
+                    _set_login_stage(
+                        "error", "Riot's Sign out dialog did not close.", username
+                    )
+                    return False
+                if not cls.wait_for_signed_out(timeout=8.0):
+                    _set_login_stage(
+                        "error", "Riot did not clear the failed login session.", username
+                    )
+                    return False
+
+                popup_attempt += 1
+                login_logger.info(
+                    "[%s] Waiting for Riot login screen", username
+                )
+                _set_login_stage(
+                    "waiting_window", "Waiting for Riot login screen...", username
+                )
+                time.sleep(_RIOT_POPUP_RETRY_DELAY)
+                if cls.wait_for_login_form(timeout=20.0) is None:
+                    _set_login_stage(
+                        "error", "Riot did not return to the sign-in screen after Sign out.", username
+                    )
+                    return False
+
+                login_logger.info(
+                    "[%s] Retrying login: attempt %d/%d",
+                    username, popup_attempt, _RIOT_POPUP_MAX_ATTEMPTS,
+                )
+                _set_login_stage(
+                    "typing",
+                    f"Retrying login: attempt {popup_attempt}/{_RIOT_POPUP_MAX_ATTEMPTS}...",
+                    username,
+                )
+                result = cls._attempt_login_fill(
+                    username, password, stay_signed_in, tries=3, form_timeout=20.0
+                )
+                if result is not True:
+                    _set_login_stage(
+                        "error", "Riot's sign-in form was not ready for the retry.", username
+                    )
+                    return False
+                continue
+
+            auth_error = cls.check_login_error()
+            if auth_error in ("auth_failure", "invalid_credentials"):
+                _set_login_stage(
+                    "error", "Invalid username or password. Please check your credentials.", username
+                )
+                return False
+            if auth_error in ("rate_limited", "login_error"):
+                _set_login_stage(
+                    "error", "Riot rate limit or login error. Please wait a moment and try again.", username
+                )
+                return False
+
+            time.sleep(0.5)
+
+        return None
+
     # ------------------------------------------------------------------
     # Verified login steps
     #
@@ -1293,6 +1492,11 @@ class ClientLauncher:
         If the second stage fails too it stops and says so. There is no third
         attempt, because a login that has failed twice this way is failing for
         a reason another relaunch won't change.
+
+        After a form submission, the result monitor also handles Riot's
+        transient "Unable to load" modal with up to three total submissions.
+        That popup-specific retry does not change the form-reset/relaunch
+        policy above.
         """
         _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
         hwnd = None
@@ -1312,6 +1516,7 @@ class ClientLauncher:
         # ---- stage 1: the window that's already open ----------------------
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3)
         if result is True:
+            cls._monitor_login_result(username, password, stay_signed_in, client_path)
             return
 
         if result is None:
@@ -1328,6 +1533,7 @@ class ClientLauncher:
                 "[%s] no readable login form - falling back to the timing-based entry path", username
             )
             cls._fill_credentials_blind(hwnd, username, password, cold_start, stay_signed_in)
+            cls._monitor_login_result(username, password, stay_signed_in, client_path)
             return
 
         # ---- stage 2: one restart, then one more go -----------------------
@@ -1361,6 +1567,7 @@ class ClientLauncher:
 
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3, form_timeout=60.0)
         if result is True:
+            cls._monitor_login_result(username, password, stay_signed_in, client_path)
             return
 
         _set_login_stage(

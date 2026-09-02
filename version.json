@@ -1,5 +1,5 @@
 {
-  "version": "5.5.38",
+  "version": "5.5.39",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.38: every match-history view (Account Manager, Dashboard / Live Stats, player lookup) now renders one cohesive grid row - agent, map, date, result, K/D/A, KD, HS% - with the map art dimmed so the numbers stay readable. Closed-game dashboard is simplified: one theme-coloured 'Play VALORANT' button in Start a Match, no duplicate top PLAY button or 'VALORANT isn't running' card."
+  "changelog": "Vortex v5.5.39: Riot login now detects the transient 'Unable to load' popup, signs out, waits for a ready login screen, and retries the same account up to three total attempts without stalling multi-account checks."
 }
