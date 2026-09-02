@@ -416,3 +416,23 @@ Tests:
 - `python -m compileall -q backend` and `git diff --check` passed.
 
 No version bump, installer build, GitHub push, tag, or release was created.
+
+## 2026-09-02 - Codex - Recent-match role badge positioning
+
+Changed:
+
+- Fixed the shared recent-match row's CSS specificity conflict: the generic avatar-image rule was resizing the role image to the full 40px avatar size.
+- Scoped the portrait sizing to non-role images and positioned the role icon as a consistent 15px lower-right badge with an opaque background, subtle border, and shadow. The badge can extend beyond the avatar edge without clipping while the portrait remains circular.
+
+Files:
+
+- `frontend/styles.css`
+- `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+New APIs/contracts: none. Match-row markup/data, detail fields, and responsive grid columns are unchanged.
+
+Tests:
+
+- `python -m pytest tests/test_settings_and_ui.py -q` -> 7 passed (2 FastAPI deprecation warnings).
+- `python -m pytest -q` -> 79 passed (2 FastAPI deprecation warnings).
+- `git diff --check` passed.

@@ -15,13 +15,13 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 Status: DONE
 
-Scope: Fix shared failed-attempt lifecycle cleanup across Riot login/check flows and make confirmed legacy-ranked eligibility drive beta card styling consistently.
+Scope: Fix role-icon overlap in the shared recent-match row while preserving the established match-history layout.
 
-Files likely owned: `backend/client_launcher.py`, `backend/server.py`, `frontend/app.js`, `frontend/styles.css`, `tests/test_login_flow.py`, `tests/test_batch_account_check.py`, `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+Files likely owned: `frontend/styles.css`, `frontend/app.js`, `tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
 
 Dependencies:
 
-Notes: Completed 2026-09-01. Terminal login stages now always release the attempt; normal Login, single Check Account, and batch Check Accounts share the same bounded waiter/cleanup path. Confirmed backend eligibility now drives the legacy-ranked badge, filter, and white card treatment. No updater, WebView2, history, autolock, theme, version, build, or release changes.
+Notes: Completed 2026-09-02. The shared recent-match row now gives the agent portrait its own selector and keeps the role icon as a 15px lower-right badge with readable contrast. Match-row data and responsive column layout were preserved.
 
 ### Claude
 

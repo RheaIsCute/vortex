@@ -139,6 +139,18 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"Recent"', app_js)
         self.assertNotIn('m.game_date || "Recent"', app_js)
 
+        # The role badge must remain a small secondary element instead of
+        # inheriting the full agent portrait dimensions.
+        self.assertIn('class="mh-role"', app_js)
+        self.assertIn(".mh-avatar > img:not(.mh-role)", styles_css)
+        role_block = styles_css.split(".mh-role {", 1)[1].split("}", 1)[0]
+        self.assertIn("right: -4px", role_block)
+        self.assertIn("bottom: -4px", role_block)
+        self.assertIn("width: 15px", role_block)
+        self.assertIn("height: 15px", role_block)
+        self.assertIn("object-fit: contain", role_block)
+        self.assertIn("z-index: 2", role_block)
+
         # 5. Map art is a faint layer behind a near-opaque scrim; stat values
         #    are light so a bright map never washes them out.
         self.assertNotIn("background-image: var(--map-splash)", card_block)
