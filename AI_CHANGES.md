@@ -10,10 +10,23 @@ see "Claude — Account Manager workspace redesign" below) as v5.5.43.
 5.5.42 → 5.5.43. 99 tests pass (`pytest -q tests` — 8/8 in
 `test_settings_and_ui.py` including the new `test_roster_workspace_layout`);
 `python -m compileall -q backend tests app.py` and `node --check
-frontend/app.js` both clean. No installer build was run in this environment
-(Inno Setup not present) — GitHub Actions / a local build with Inno Setup
-installed still needs to produce and attach `VortexSetup.exe` to the release
-for the in-app updater to pick it up.
+frontend/app.js` both clean.
+
+Built and published the installer: `python -m PyInstaller build_exe.spec
+--clean -y` produced `dist/Vortex/` (Vortex.exe + `_internal/`, ~374MB). Inno
+Setup's compiler is a legacy 32-bit app that does not honor Windows'
+`LongPathsEnabled`, so compiling directly from this repo's path (which nests
+past the 260-char `MAX_PATH` under `_internal/numpy-2.5.2.dist-info/licenses/`)
+failed with "system cannot find the path specified" even with long paths
+enabled at the OS level. Fixed by staging `dist/Vortex/`,
+`frontend/assets/logo.ico` and `installer/vortex_setup.iss` under a short
+`C:\vxbuild\` path (mirroring the script's relative layout) and compiling
+`ISCC.exe installer\vortex_setup.iss /DAppVersion=5.5.43` from there, which
+produced `VortexSetup.exe` (288MB). Published to the `v5.5.43` GitHub release
+via `gh release create v5.5.43 dist_installer/VortexSetup.exe`; verified
+`releases/latest/download/VortexSetup.exe` (the URL `version.json` points at)
+resolves with HTTP 200 and the correct byte size. `v5.5.42` was never tagged
+as a release, so `v5.5.43` now cleanly supersedes `v5.5.41` as `latest`.
 
 ## 2026-09-03 — Codex — Repository structure documentation
 
