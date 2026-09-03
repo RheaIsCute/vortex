@@ -37,11 +37,15 @@ Accounts are created/imported through FastAPI, stored by `Database`, checked wit
 
 ### UI and settings
 
-The browser UI communicates only through the FastAPI API. Persistent settings are string values in SQLite and are accessed through `Database`. `game_config.py` applies settings to local VALORANT configuration files.
+The browser UI communicates only through the FastAPI API. Persistent settings are string values in SQLite and are accessed through `Database`. Vortex does **not** read or write VALORANT/Riot configuration files; `game_config.py` only cleans up Vortex-owned data left by a removed preset feature. All Vortex file writes/deletes on computed paths route through `backend/path_safety.py`, which rejects any Riot/VALORANT/Vanguard location.
 
 ### Live match
 
-Live tracking is opt-in. `LiveCombatTracker` combines tracker logs and telemetry. `overwolf.py` manages the optional Overwolf companion; the web overlay is `frontend/live_overlay.*`.
+Live tracking is opt-in. `LiveCombatTracker` combines tracker logs and telemetry. `overwolf.py` manages the optional Overwolf companion; the web overlay is `frontend/live_overlay.*`. The Aim HUD is a **separate Vortex-owned pywebview window** (click-through `WS_EX_TRANSPARENT`, topmost), positioned over VALORANT by window handle — not injected, no graphics hook, no memory read.
+
+### External-only guarantee
+
+Vortex interacts with Riot Client / VALORANT **externally only**: read-only local/PVP APIs, the authenticated game endpoints the client itself calls, OS window/input automation (UIA + pyautogui), and process start/stop via `taskkill`/`Popen`. It never opens a process handle with more than `PROCESS_QUERY_LIMITED_INFORMATION`, never reads/writes another process's memory, never injects code or hooks, and never loads a driver. Set `VORTEX_AUDIT_RUNTIME=1` for a forensic log of every such operation (`backend/runtime_audit.py`).
 
 ### Build, install, update
 

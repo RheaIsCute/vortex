@@ -68,12 +68,59 @@
     --text-dim: #545d72;
 
     /* --- Radii --- */
+    --radius-2xs: 4px;
     --radius-xs: 6px;
     --radius-sm: 9px;
     --radius-md: 13px;
     --radius-lg: 18px;
     --radius-xl: 24px;
     --radius-full: 9999px;
+
+    /* --- Spacing scale (replaces ad-hoc px; tuned to the values already dominant) --- */
+    --sp-0: 2px;
+    --sp-1: 4px;
+    --sp-2: 6px;
+    --sp-3: 8px;
+    --sp-4: 10px;
+    --sp-5: 12px;
+    --sp-6: 14px;
+    --sp-7: 16px;
+    --sp-8: 20px;
+    --sp-9: 24px;
+    --sp-10: 30px;
+    --sp-11: 40px;
+    --sp-12: 60px;
+
+    /* --- Type scale (px; half-pixel steps collapse to the nearest) --- */
+    --fs-2xs: 10px;
+    --fs-xs: 11px;
+    --fs-sm: 12px;
+    --fs-base: 13px;
+    --fs-md: 14px;
+    --fs-lg: 16px;
+    --fs-xl: 19px;
+    --fs-2xl: 24px;
+    --lh-tight: 1.2;
+    --lh-normal: 1.5;
+
+    /* --- Neutral alpha steps for the genuine one-offs (most map to surface/stroke) --- */
+    --wa-1: rgba(255, 255, 255, 0.04);
+    --wa-2: rgba(255, 255, 255, 0.08);
+    --wa-3: rgba(255, 255, 255, 0.14);
+    --wa-4: rgba(255, 255, 255, 0.22);
+    --ba-1: rgba(0, 0, 0, 0.25);
+    --ba-2: rgba(0, 0, 0, 0.4);
+    --ba-3: rgba(0, 0, 0, 0.55);
+    --ba-4: rgba(0, 0, 0, 0.7);
+
+    /* --- Modal width scale --- */
+    --modal-w-sm: 420px;
+    --modal-w-md: 580px;
+    --modal-w-lg: 780px;
+    --modal-w-xl: 1120px;
+
+    /* --- Brand mark gradient: fixed, accent-independent (logo / boot / wordmark / selection) --- */
+    --brand-grad: linear-gradient(135deg, #6f5bff 0%, #8a3bfb 55%, #a020fe 100%);
 
     /* --- Elevation --- */
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -90,7 +137,13 @@
     --dur-2: 0.2s;
     --dur-3: 0.32s;
     --dur-4: 0.5s;
-    --transition: all var(--dur-2) var(--ease-out);
+    /* Keep the shared hover transition off layout properties. */
+    --transition: color var(--dur-2) var(--ease-out),
+                  background var(--dur-2) var(--ease-out),
+                  border-color var(--dur-2) var(--ease-out),
+                  box-shadow var(--dur-2) var(--ease-out),
+                  opacity var(--dur-2) var(--ease-out),
+                  transform var(--dur-2) var(--ease-out);
 
     --glass-blur: blur(22px) saturate(140%);
 }
@@ -207,6 +260,15 @@ body {
     --glow-purple: var(--glow-sm);
     --bg-input: rgba(0, 0, 0, 0.28);
     --bg-surface: rgba(10, 13, 22, 0.72);
+
+    /* Canonical names for the match-detail / scoreboard subtree, which was
+       authored against these short aliases before they existed. Defining them
+       here makes that whole path resolve like the rest of the app. */
+    --stroke: var(--stroke-2);
+    --border: var(--stroke-2);
+    --accent: var(--a);
+    --text: var(--text-main);
+    --font-sans: var(--font-main);
 }
 
 /* ==========================================================================
@@ -431,11 +493,12 @@ body.effects-paused .scroll-top-btn {
 }
 
 .brand-wordmark {
-    font-size: 22px;
+    font-size: var(--fs-2xl);
     font-weight: 800;
     letter-spacing: -0.5px;
     line-height: 1;
-    background: linear-gradient(100deg, #fff 10%, var(--a-soft) 45%, #fff 90%);
+    /* Brand-fixed: the wordmark stays purple-forward whatever accent is picked. */
+    background: linear-gradient(100deg, #fff 8%, #c9a2ff 42%, #fff 92%);
     background-size: 220% 100%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -456,19 +519,19 @@ body.effects-paused .scroll-top-btn {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--sp-3);
 }
 
 .stat-pill {
     display: flex;
     align-items: center;
     flex-shrink: 0;
-    gap: 8px;
-    padding: 7px 14px;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-6);
     background: var(--surface-1);
     border: 1px solid var(--stroke-1);
     border-radius: var(--radius-full);
-    font-size: 13px;
+    font-size: var(--fs-base);
     position: relative;
     overflow: hidden;
     cursor: default;
@@ -1111,6 +1174,115 @@ body.effects-paused .scroll-top-btn {
 }
 
 /* ==========================================================================
+   5.9 SHARED PRIMITIVES
+   One surface, one chip, one CTA, one loading/empty block, one focus ring —
+   the rest of the file opts into these instead of re-declaring the box.
+   ========================================================================== */
+
+/* --- Surface: the shared card / panel box --- */
+.surface {
+    background: var(--surface-2);
+    border: 1px solid var(--stroke-2);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm), var(--bevel);
+}
+.surface--raised {
+    background: var(--panel-raised);
+    box-shadow: var(--shadow-md), var(--bevel);
+}
+.surface--flush {
+    background: var(--surface-1);
+    box-shadow: none;
+}
+
+/* --- Chip: the shared pill / badge --- */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--stroke-2);
+    background: var(--surface-2);
+    color: var(--text-sub);
+    font-family: var(--font-main);
+    font-size: var(--fs-2xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    white-space: nowrap;
+}
+.chip i { font-size: 0.85em; }
+.chip--accent  { background: var(--tint-2); border-color: var(--edge); color: #fff; }
+.chip--ok      { background: rgba(var(--ok-rgb), 0.14);     border-color: rgba(var(--ok-rgb), 0.4);     color: var(--ok); }
+.chip--warn    { background: rgba(var(--warn-rgb), 0.14);   border-color: rgba(var(--warn-rgb), 0.4);   color: var(--warn); }
+.chip--danger  { background: rgba(var(--danger-rgb), 0.14); border-color: rgba(var(--danger-rgb), 0.4); color: var(--danger); }
+.chip--info    { background: rgba(var(--info-rgb), 0.14);   border-color: rgba(var(--info-rgb), 0.4);   color: var(--info); }
+.chip--neutral { background: var(--surface-3); border-color: var(--stroke-2); color: var(--text-sub); }
+.chip--frost   { background: var(--wa-2); border-color: var(--wa-4); color: #f4f6fb; }
+
+/* --- CTA: the shared primary call-to-action button (PLAY etc.) --- */
+.btn-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-4);
+    padding: var(--sp-6) var(--sp-7);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--grad-primary);
+    color: #fff;
+    font-family: var(--font-main);
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: var(--glow-sm), var(--shadow-sm);
+    transition: filter var(--dur-2) var(--ease-out),
+                box-shadow var(--dur-2) var(--ease-out);
+}
+.btn-cta:hover:not(:disabled) { filter: brightness(1.08); box-shadow: var(--glow-md), var(--shadow-md); }
+.btn-cta:active:not(:disabled) { filter: brightness(0.97); }
+.btn-cta:disabled { opacity: 0.5; box-shadow: none; cursor: not-allowed; }
+
+/* --- State block: shared loading / empty / error presentation --- */
+.state-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-4);
+    padding: var(--sp-11) var(--sp-8);
+    text-align: center;
+    color: var(--text-muted);
+}
+.state-block__icon { font-size: var(--fs-2xl); color: var(--a); opacity: 0.85; }
+.state-block__title { font-size: var(--fs-md); font-weight: 700; color: var(--text-sub); }
+.state-block__hint { font-size: var(--fs-sm); color: var(--text-dim); }
+.state-block--error .state-block__icon { color: var(--danger); }
+
+.spinner {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 50%;
+    border: 2px solid var(--stroke-3);
+    border-top-color: var(--a);
+    animation: spin var(--dur-4) linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- One focus ring for every interactive element (element keeps its own radius) --- */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+}
+
+/* --- Scroll lock while a modal is open --- */
+/* Scroll-lock behind an open modal. `scrollbar-gutter` keeps the page from
+   shifting as the scrollbar is removed — only applied while locked, so the
+   resting layout is unchanged. */
+body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
+
+/* ==========================================================================
    6. CONTENT — ACCOUNT CARDS
    ========================================================================== */
 
@@ -1121,7 +1293,7 @@ body.effects-paused .scroll-top-btn {
 .accounts-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(344px, 1fr));
-    gap: 18px;
+    gap: var(--sp-8);
     position: relative;
 }
 
@@ -1131,12 +1303,12 @@ body.effects-paused .scroll-top-btn {
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 13px;
-    padding: 18px;
+    gap: var(--sp-5);
+    padding: var(--sp-8);
     border-radius: var(--radius-lg);
     border: 1px solid var(--stroke-1);
     background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+        linear-gradient(180deg, var(--wa-1), rgba(255, 255, 255, 0.012)),
         rgba(9, 12, 20, 0.86);
     box-shadow: var(--shadow-md), var(--bevel);
     overflow: hidden;
@@ -1222,31 +1394,34 @@ body.effects-paused .scroll-top-btn {
 .card-badges {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--sp-2);
     flex-wrap: wrap;
 }
 
-.badge-region {
-    padding: 3px 8px;
-    background: var(--tint-2);
-    border: 1px solid var(--edge);
-    border-radius: 5px;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
+/* Card badges share the .chip primitive; each keeps only its own colour. */
+.badge-region,
+.badge-tag,
+.badge-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--stroke-2);
+    background: var(--surface-2);
+    font-size: var(--fs-2xs);
     font-weight: 700;
-    letter-spacing: 0.4px;
-    color: var(--a-soft);
+    letter-spacing: 0.02em;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--text-sub);
 }
 
-.badge-tag {
-    padding: 3px 8px;
-    background: var(--surface-2);
-    border: 1px solid var(--stroke-1);
-    border-radius: 5px;
-    font-size: 10.5px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    color: var(--text-sub);
+.badge-region {
+    background: var(--tint-2);
+    border-color: var(--edge);
+    font-family: var(--font-mono);
+    color: var(--a-soft);
 }
 
 .badge-tag.tag-main    { background: rgba(245, 158, 11, 0.14); color: #fbbf24; border-color: rgba(245, 158, 11, 0.32); }
@@ -1256,14 +1431,7 @@ body.effects-paused .scroll-top-btn {
 
 /* --- Status badges --- */
 .badge-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
     font-weight: 800;
-    letter-spacing: 0.5px;
-    padding: 3px 8px;
-    border-radius: 5px;
     text-transform: uppercase;
 }
 
@@ -2000,14 +2168,13 @@ body.effects-paused .scroll-top-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
-    background: rgba(3, 5, 10, 0.7);
+    padding: var(--sp-9);
+    background: var(--ba-4);
     backdrop-filter: blur(0px);
     -webkit-backdrop-filter: blur(0px);
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--dur-3) var(--ease-out),
-                backdrop-filter var(--dur-4) var(--ease-out);
+    transition: opacity var(--dur-3) var(--ease-out);
 }
 
 .modal-overlay.active {
@@ -2020,7 +2187,7 @@ body.effects-paused .scroll-top-btn {
 .modal-card {
     position: relative;
     width: 100%;
-    max-width: 580px;
+    max-width: var(--modal-w-md);
     max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
@@ -2029,7 +2196,7 @@ body.effects-paused .scroll-top-btn {
     background:
         radial-gradient(120% 80% at 50% -10%, var(--tint-2), transparent 60%),
         var(--panel);
-    box-shadow: var(--shadow-xl), 0 0 0 1px rgba(0, 0, 0, 0.6), var(--bevel);
+    box-shadow: var(--shadow-xl), 0 0 0 1px var(--ba-4), var(--bevel);
     overflow: hidden;
     transform: translateY(24px) scale(0.94);
     opacity: 0;
@@ -2052,32 +2219,32 @@ body.effects-paused .scroll-top-btn {
 }
 
 .modal-small {
-    max-width: 420px;
-    padding: 30px 26px 24px;
+    max-width: var(--modal-w-sm);
+    padding: var(--sp-10) var(--sp-9) var(--sp-9);
     text-align: center;
 }
 
 .modal-large {
-    max-width: 780px;
+    max-width: var(--modal-w-lg);
     max-height: 84vh;
 }
 
 .modal-matches-card {
-    max-width: 860px;
+    max-width: var(--modal-w-lg);
     max-height: 86vh;
 }
 
 .modal-import-card {
-    max-width: 640px;
+    max-width: var(--modal-w-md);
 }
 
 .modal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 14px;
-    padding: 18px 22px;
-    background: rgba(255, 255, 255, 0.022);
+    gap: var(--sp-6);
+    padding: var(--sp-7) var(--sp-8);
+    background: var(--wa-1);
     border-bottom: 1px solid var(--stroke-1);
     flex-shrink: 0;
 }
@@ -2085,7 +2252,7 @@ body.effects-paused .scroll-top-btn {
 .modal-title-wrap {
     display: flex;
     align-items: center;
-    gap: 13px;
+    gap: var(--sp-5);
     min-width: 0;
 }
 
@@ -2100,8 +2267,8 @@ body.effects-paused .scroll-top-btn {
     align-items: center;
     justify-content: center;
     color: var(--a-soft);
-    font-size: 16px;
-    box-shadow: 0 0 24px -8px rgba(var(--a-rgb), 0.9), var(--bevel);
+    font-size: var(--fs-lg);
+    box-shadow: var(--glow-sm), var(--bevel);
 }
 
 .modal-icon-badge-danger {
@@ -2112,15 +2279,15 @@ body.effects-paused .scroll-top-btn {
 }
 
 .modal-title-wrap h2 {
-    font-size: 17.5px;
+    font-size: var(--fs-xl);
     font-weight: 700;
     letter-spacing: -0.2px;
     color: #fff;
-    line-height: 1.25;
+    line-height: var(--lh-tight);
 }
 
 .modal-sub {
-    font-size: 12px;
+    font-size: var(--fs-sm);
     color: var(--text-muted);
     margin-top: 2px;
 }
@@ -2135,7 +2302,7 @@ body.effects-paused .scroll-top-btn {
     border: 1px solid var(--stroke-1);
     border-radius: var(--radius-sm);
     color: var(--text-muted);
-    font-size: 14px;
+    font-size: var(--fs-md);
     cursor: pointer;
     outline: none;
     transition: var(--transition);
@@ -2149,10 +2316,10 @@ body.effects-paused .scroll-top-btn {
 }
 
 .modal-form {
-    padding: 22px;
+    padding: var(--sp-8);
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--sp-7);
     overflow-y: auto;
 }
 
@@ -2460,9 +2627,9 @@ select.form-control option {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 10px;
-    margin-top: 6px;
-    padding-top: 16px;
+    gap: var(--sp-4);
+    margin-top: var(--sp-2);
+    padding-top: var(--sp-7);
     border-top: 1px solid var(--stroke-1);
 }
 
@@ -2550,6 +2717,32 @@ select.form-control option {
 .theme-swatch:hover .theme-swatch-label {
     color: #fff;
 }
+
+/* --- Settings sections --------------------------------------------------- */
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+    padding: var(--sp-7) 0;
+    border-top: 1px solid var(--stroke-1);
+}
+.settings-section:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+}
+.settings-section-title {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin: 0;
+    font-size: var(--fs-2xs);
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.settings-section-title i { font-size: 1em; color: var(--a-soft); }
+.settings-section .form-group { margin: 0; }
 
 /* --- Advanced / Developer Settings Accordion --- */
 .settings-advanced {
@@ -3014,13 +3207,6 @@ select.form-control option {
     .matches-list-compact .mh-date-short { display: inline; }
 }
 
-
-.no-matches-msg {
-    text-align: center;
-    padding: 48px 20px;
-    color: var(--text-muted);
-    font-size: 14px;
-}
 
 /* ==========================================================================
    BANNED ACCOUNTS
@@ -3583,19 +3769,17 @@ select.form-control option {
 
 .accounts-grid.animate-in .account-card {
     animation: card-in var(--dur-4) var(--ease-out) backwards;
-    animation-delay: calc(var(--i, 0) * 45ms);
+    animation-delay: calc(var(--i, 0) * 24ms);
 }
 
 @keyframes card-in {
     from {
         opacity: 0;
         transform: translateY(18px) scale(0.965);
-        filter: blur(5px);
     }
     to {
         opacity: 1;
         transform: none;
-        filter: blur(0);
     }
 }
 
@@ -3829,74 +4013,12 @@ select.form-control option {
    full-bleed dashboard that opens for whichever account is signed in.
    ========================================================================== */
 
-/* --- 10.1 Active session bar ------------------------------------------- */
-
-.session-bar {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin: 0 0 16px;
-    padding: 12px 18px;
-    border-radius: var(--radius-lg);
-    border: 1px solid rgba(var(--ok-rgb), 0.28);
-    background:
-        linear-gradient(90deg, rgba(var(--ok-rgb), 0.12), transparent 55%),
-        var(--surface-2);
-    box-shadow: var(--shadow-sm), var(--bevel);
-    animation: session-bar-in var(--dur-4) var(--ease-spring) both;
-}
-
-@keyframes session-bar-in {
-    from { opacity: 0; transform: translateY(-8px); }
-    to   { opacity: 1; transform: none; }
-}
-
-.session-live-dot {
-    width: 9px;
-    height: 9px;
-    flex: none;
-    border-radius: var(--radius-full);
-    background: var(--ok);
-    box-shadow: 0 0 0 0 rgba(var(--ok-rgb), 0.7);
-    animation: live-pulse 2s ease-out infinite;
-}
+/* --- 10.1 Signed-in state chip (shared by the hero card and the dashboard) - */
 
 @keyframes live-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(var(--ok-rgb), 0.6); }
     70%  { box-shadow: 0 0 0 9px rgba(var(--ok-rgb), 0); }
     100% { box-shadow: 0 0 0 0 rgba(var(--ok-rgb), 0); }
-}
-
-.session-rank-img {
-    width: 36px;
-    height: 36px;
-    flex: none;
-    object-fit: contain;
-    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
-}
-
-.session-identity {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    flex: 1;
-}
-
-.session-name {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text-main);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.session-meta {
-    font-size: 12px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .session-state-chip {
@@ -3923,12 +4045,6 @@ select.form-control option {
 
 .session-state-chip.state-offline,
 .dash-state-chip.state-offline { color: var(--text-muted); }
-
-.session-bar-actions {
-    display: flex;
-    gap: 8px;
-    flex: none;
-}
 
 /* --- 10.2 Play button -------------------------------------------------- */
 
@@ -3968,15 +4084,16 @@ select.form-control option {
 .badge-live {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-3);
     border-radius: var(--radius-full);
-    font-size: 9.5px;
+    font-size: var(--fs-2xs);
     font-weight: 800;
-    letter-spacing: 0.7px;
+    letter-spacing: 0.04em;
     color: var(--ok);
     border: 1px solid rgba(var(--ok-rgb), 0.4);
-    background: rgba(var(--ok-rgb), 0.13);
+    background: rgba(var(--ok-rgb), 0.14);
+    line-height: 1;
 }
 
 .badge-live .live-dot {
@@ -4861,25 +4978,6 @@ body.dashboard-mode .header-actions .btn:not(.btn-icon) {
 
 body.dashboard-mode .header-actions .header-divider {
     margin: 0;
-}
-
-.session-bar {
-    transition: max-height var(--dur-4) var(--ease-out),
-                opacity var(--dur-2) var(--ease-out),
-                margin var(--dur-4) var(--ease-out),
-                padding var(--dur-3) var(--ease-out);
-    max-height: 140px;
-}
-
-body.dashboard-mode .session-bar {
-    max-height: 0;
-    margin-bottom: -16px;
-    padding-top: 0;
-    padding-bottom: 0;
-    opacity: 0;
-    overflow: hidden;
-    pointer-events: none;
-    border-width: 0;
 }
 
 .dash-header {
@@ -7273,18 +7371,6 @@ body.dashboard-mode .session-bar {
 }
 
 @media (max-width: 760px) {
-    .session-bar {
-        flex-wrap: wrap;
-    }
-
-    .session-bar-actions {
-        width: 100%;
-    }
-
-    .session-bar-actions .btn {
-        flex: 1;
-    }
-
     .dash-teams,
     .dash-mode-grid {
         grid-template-columns: minmax(0, 1fr);
@@ -7315,7 +7401,6 @@ body.dashboard-mode .session-bar {
     .dash-queue-pulse::after,
     .stat-spark-line,
     .form-pip,
-    .session-live-dot,
     .badge-live .live-dot,
     .dash-state-dot,
     .account-card.is-highlighted,
@@ -7389,15 +7474,15 @@ button.match-card, button.dash-player {
     font: inherit;
 }
 
-.modal-detail-card { 
-    width: min(1120px, calc(100vw - 28px)); 
-    max-width: min(1120px, calc(100vw - 28px)); 
+.modal-detail-card {
+    width: min(var(--modal-w-xl), calc(100vw - 28px));
+    max-width: min(var(--modal-w-xl), calc(100vw - 28px));
 }
 
-.match-detail-content { 
-    padding: 20px 24px 28px; 
-    max-height: min(78vh, 820px); 
-    overflow-y: auto; 
+.match-detail-content {
+    padding: var(--sp-8) var(--sp-9) var(--sp-10);
+    max-height: min(78vh, 820px);
+    overflow-y: auto;
     overflow-x: hidden;
 }
 
@@ -8214,11 +8299,11 @@ button.match-card, button.dash-player {
 }
 
 /* ==========================================================================
-   11. UI/UX POLISH PASS
+   11. COMPONENT DETAILS
    --------------------------------------------------------------------------
-   Additive layer: smooth accent-theme transitions, the consolidated Filters
-   popover, the Legacy Ranked card treatment, and the raw-import result panel.
-   Everything here is single-class and self-contained.
+   Accent-theme transition, the Filters popover, the Legacy Ranked card
+   treatment, the raw-import result panel, and toolbar responsiveness. These
+   consume the same tokens and primitives as sections 4-7.
    ========================================================================== */
 
 /* --- 11.1 Smooth accent-theme transition ------------------------------------
@@ -8445,44 +8530,38 @@ body.accent-anim *::after {
 .btn-reset-filters:disabled:hover { background: none; color: var(--text-muted); }
 
 /* --- 11.3 Legacy Ranked account treatment -------------------------------- */
+/* A quiet frost ring — reads as "special" without the old white bloom, and
+   layers cleanly under the accent glow of an active / favourited card. */
 .account-card.is-legacy-ranked {
-    border-color: rgba(255, 255, 255, 0.42);
-    box-shadow: var(--shadow-md),
-                0 0 0 1px rgba(255, 255, 255, 0.18),
-                0 0 30px -8px rgba(255, 255, 255, 0.42),
-                var(--bevel);
+    border-color: var(--wa-4);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-2), var(--bevel);
 }
 
 /* This rule intentionally comes after normal accent/favorite card treatment. */
 .account-card.is-legacy-ranked.is-favorite,
 .account-card.is-legacy-ranked.is-active-session {
-    border-color: rgba(255, 255, 255, 0.52);
-    box-shadow: var(--shadow-md),
-                0 0 0 1px rgba(255, 255, 255, 0.22),
-                0 0 34px -8px rgba(255, 255, 255, 0.50),
-                var(--bevel);
+    border-color: var(--wa-4);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-3), var(--glow-sm), var(--bevel);
 }
 
 .account-card.is-legacy-ranked:hover {
-    border-color: rgba(255, 255, 255, 0.42);
-    box-shadow: var(--shadow-lg),
-                0 0 34px -8px rgba(255, 255, 255, 0.42),
-                0 0 44px -18px rgba(var(--a-rgb), 0.8),
-                var(--bevel);
+    border-color: var(--edge-strong);
+    box-shadow: var(--shadow-lg), var(--glow-sm), var(--bevel);
 }
 
 .badge-legacy {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-3);
     border-radius: var(--radius-full);
-    background: rgba(255, 255, 255, 0.10);
-    border: 1px solid rgba(255, 255, 255, 0.30);
+    background: var(--wa-2);
+    border: 1px solid var(--wa-4);
     color: #f4f6fb;
-    font-size: 10.5px;
+    font-size: var(--fs-2xs);
     font-weight: 700;
     letter-spacing: 0.02em;
+    line-height: 1;
     white-space: nowrap;
     cursor: help;
 }
@@ -8490,10 +8569,10 @@ body.accent-anim *::after {
 .badge-legacy i { font-size: 9px; color: #fff; }
 
 .accounts-table tr.is-legacy-ranked td {
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--wa-1);
 }
 .accounts-table tr.is-legacy-ranked td:first-child {
-    box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.55);
+    box-shadow: inset 3px 0 0 var(--wa-4);
 }
 
 /* --- 11.4 Raw import: slim dropzone, format hint, result panel ----------- */

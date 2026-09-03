@@ -27,6 +27,9 @@ coverage.xml
 htmlcov/
 *.log
 !overwolf/**/*.log
+# uiautomation writes this to CWD when imported without COM initialised
+@AutomationLog.txt
+runtime_audit.log*
 
 # Windows crash and installer by-products
 *.dmp
@@ -37,6 +40,9 @@ htmlcov/
 # Leftover/unrelated
 lol-account-manager-main/
 .ui_backup/
+
+# Generated knowledge-graph analysis output (regenerate with /graphify)
+graphify-out/
 
 # Editor/OS
 .vscode/

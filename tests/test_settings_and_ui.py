@@ -14,8 +14,6 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
             "riot_client_path": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
             "riot_api_key": "HDEV-test-custom-key-12345",
             "live_hud_enabled": "1",
-            "overwolf_enabled": "1",
-            "valorant_tracker_enabled": "1",
             "stay_signed_in": "1",
             "auto_launch_after_login": "0",
             "post_valorant_launch_enabled": "1",
@@ -24,6 +22,7 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         res = await server.update_settings(req)
         self.assertTrue(res["success"])
         self.assertEqual(res["settings"]["riot_api_key"], "HDEV-test-custom-key-12345")
+        self.assertEqual(res["settings"]["live_hud_enabled"], "1")
         self.assertEqual(res["settings"]["post_valorant_launch_enabled"], "1")
         self.assertEqual(res["settings"]["post_valorant_launch_path"], "C:\\test\\app.exe")
 
@@ -62,6 +61,10 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
 
         # 5. Normal settings does not contain the old settings-log-path input box
         self.assertNotIn('id="settings-log-path"', index_html)
+
+        # 6. The single Live Match switch also explains the external cleanup.
+        self.assertIn("closes the VAL Tracker / Overwolf integration", index_html)
+        self.assertIn("disables related startup entries", index_html)
 
     def test_legacy_ranked_rendering_uses_backend_eligibility_and_repaints(self):
         root = Path(__file__).parent.parent

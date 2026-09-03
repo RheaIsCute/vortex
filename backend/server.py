@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import asyncio
+import json
 import threading
 import subprocess
 import mimetypes
@@ -46,6 +47,7 @@ from backend import overwolf
 from backend.live_combat import LiveCombatTracker
 from backend.version import APP_VERSION
 from backend import updater
+from backend import runtime_audit
 
 app = FastAPI(title="Vortex Valorant Account Manager API", version=APP_VERSION)
 app.add_middleware(
@@ -188,6 +190,42 @@ def _stay_signed_in_pref() -> bool:
 def _auto_launch_pref() -> bool:
     """Whether a plain Login should start VALORANT once it lands."""
     return db.get_settings().get("auto_launch_after_login", "0") == "1"
+
+
+_LIVE_MATCH_SETTING = "live_hud_enabled"
+_LIVE_MATCH_LEGACY_KEYS = ("overwolf_enabled", "valorant_tracker_enabled")
+
+
+def _live_match_features_enabled(settings: Optional[Dict[str, Any]] = None) -> bool:
+    """Return the single persisted Live Match Features state.
+
+    ``live_hud_enabled`` is the established database key behind the merged
+    UI switch. Its historic name is retained for local-data compatibility;
+    the provider keys are only a fallback for databases not yet migrated.
+    """
+    if settings is None:
+        settings = db.get_settings()
+    if _LIVE_MATCH_SETTING in settings:
+        return settings.get(_LIVE_MATCH_SETTING, "0") == "1"
+    return any(settings.get(key, "0") == "1" for key in _LIVE_MATCH_LEGACY_KEYS)
+
+
+def _normalize_live_match_settings(values: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep legacy provider keys as mirrors, never lifecycle authorities."""
+    normalized = dict(values)
+    if _LIVE_MATCH_SETTING in normalized:
+        enabled = "1" if str(normalized[_LIVE_MATCH_SETTING]) == "1" else "0"
+        normalized[_LIVE_MATCH_SETTING] = enabled
+        for key in _LIVE_MATCH_LEGACY_KEYS:
+            normalized[key] = enabled
+    elif all(key in normalized for key in _LIVE_MATCH_LEGACY_KEYS):
+        enabled = "1" if any(
+            str(normalized[key]) == "1" for key in _LIVE_MATCH_LEGACY_KEYS
+        ) else "0"
+        normalized[_LIVE_MATCH_SETTING] = enabled
+        for key in _LIVE_MATCH_LEGACY_KEYS:
+            normalized[key] = enabled
+    return normalized
 
 
 def apply_account_update(account_id: int, update_payload: dict) -> bool:
@@ -940,6 +978,8 @@ def _spawn_detached(path: str) -> None:
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
         flags = 0x00000008 | 0x00000200 | 0x01000000
 
+    runtime_audit.process_launch(path, "user-configured post-VALORANT-close launcher")
+    runtime_audit.child_command([path])
     try:
         subprocess.Popen(
             [path], shell=False, cwd=target_dir, env=env, close_fds=True,
@@ -1000,6 +1040,16 @@ def _post_valorant_watch_loop() -> None:
 async def _start_background_workers():
     global _auto_refresh_task
     game_config.remove_legacy_profile_data()
+    # The merged toggle is authoritative across Vortex restarts. A disabled
+    # launch gets one cleanup pass here so manually-started providers cannot
+    # linger into a session that opted out of Live Match Features.
+    try:
+        if _live_match_features_enabled():
+            overwolf.enable_live_match_integration()
+        else:
+            _disable_live_match_features()
+    except Exception:
+        client_launcher.login_logger.exception("Live Match startup enforcement failed")
     # Repair ghost accounts immediately on boot, even before the first sweep.
     try:
         db.repair_ghost_accounts()
@@ -1379,8 +1429,28 @@ async def get_settings():
 
 @app.post("/api/settings")
 async def update_settings(req: SettingsUpdate):
-    db.update_settings(req.settings)
-    return {"success": True, "settings": db.get_settings()}
+    previous = db.get_settings()
+    db.update_settings(_normalize_live_match_settings(req.settings))
+    current = db.get_settings()
+    was_enabled = _live_match_features_enabled(previous)
+    is_enabled = _live_match_features_enabled(current)
+    cleanup = None
+    if was_enabled and not is_enabled:
+        # Persist first, then stop the Vortex-owned worker/provider state and
+        # clean external processes/startup registrations immediately.
+        cleanup = await asyncio.to_thread(_disable_live_match_features)
+        _remember_startup_cleanup(cleanup)
+    restoration = None
+    if not was_enabled and is_enabled:
+        overwolf.enable_live_match_integration()
+        restoration = await asyncio.to_thread(_restore_live_match_startup)
+
+    response = {"success": True, "settings": db.get_settings()}
+    if cleanup is not None:
+        response["live_match_cleanup"] = cleanup
+    if restoration is not None:
+        response["live_match_startup_restore"] = restoration
+    return response
 
 
 @app.get("/api/detect-client")
@@ -1587,7 +1657,7 @@ _OVERWOLF_WAKE: Dict[str, float] = {"checked_at": 0.0}
 def _live_combat_snapshot(match_id: str) -> Dict[str, Any]:
     """Return telemetry only when the corresponding integrations are enabled."""
     settings = db.get_settings()
-    if settings.get("overwolf_enabled", "0") != "1":
+    if not _live_match_features_enabled(settings):
         return {
             "available": False,
             "provider": "disabled",
@@ -1596,7 +1666,7 @@ def _live_combat_snapshot(match_id: str) -> Dict[str, Any]:
         }
     return _LIVE_COMBAT.snapshot(
         match_id,
-        allow_tracker=settings.get("valorant_tracker_enabled", "0") == "1",
+        allow_tracker=True,
     )
 
 # Set by build_live_snapshot(): True only in agent select or a live match.
@@ -1622,6 +1692,98 @@ _LIVE_COMBAT = LiveCombatTracker()
 _NAME_CACHE: Dict[str, Dict[str, Any]] = {}
 _NAME_MAX_TRIES = 15
 _NAME_RETRY_GAP = 2.0
+
+
+def _reset_live_match_runtime() -> None:
+    """Clear Vortex-owned live-match state without affecting account/autolock flows."""
+    global _LIVE_COMBAT, _LIVE_OWNER_PUUID, _IN_MATCH_NOW
+
+    _LIVE_COMBAT = LiveCombatTracker()
+    _LIVE_OWNER_PUUID = ""
+    _IN_MATCH_NOW = False
+    _PENDING_AUTO_ADD.clear()
+    _NAME_CACHE.clear()
+    _MATCH_PROGRESS.update({
+        "match_id": "", "ally": 0, "enemy": 0,
+        "rounds": [], "started_at": 0.0,
+    })
+    _LIVE_PROBE.update({
+        "match_id": "", "next_at": 0.0, "data": None, "at_rounds": -1,
+    })
+    _LAST_MATCH.update({
+        "watch_id": "", "match_id": "", "data": None,
+        "next_at": 0.0, "tries": 0,
+    })
+    _OVERWOLF_WAKE["checked_at"] = 0.0
+    _SESSION.update({"puuid": "", "ids": [], "matches": [], "started_at": 0.0})
+    _MY_PARTY.update({"at": 0.0, "puuid": "", "members": []})
+    try:
+        valorant_client.invalidate_player_stats()
+    except Exception:
+        client_launcher.login_logger.exception("Could not clear live player stats state")
+    invalidate_live_snapshot()
+
+
+def _disable_live_match_features() -> Dict[str, Any]:
+    """Apply the off transition in the requested order and never raise."""
+    _reset_live_match_runtime()
+    try:
+        return overwolf.disable_live_match_integration()
+    except Exception:
+        client_launcher.login_logger.exception("Live Match integration cleanup failed")
+        return {
+            "success": False,
+            "processes": {"failed": ["cleanup exception"]},
+            "startup": {"removed": [], "disabled": [], "failed": ["cleanup exception"]},
+        }
+
+
+def _remember_startup_cleanup(cleanup: Dict[str, Any]) -> None:
+    """Persist Vortex-owned facts about entries removed/disabled by cleanup."""
+    startup = cleanup.get("startup") if isinstance(cleanup, dict) else None
+    if not isinstance(startup, dict):
+        return
+    changed = list(startup.get("removed") or []) + list(startup.get("disabled") or [])
+    if not changed:
+        return
+    try:
+        db.update_settings({
+            "live_match_startup_cleanup": json.dumps({
+                "version": 1,
+                "items": changed,
+            }, separators=(",", ":")),
+        })
+    except Exception:
+        client_launcher.login_logger.exception("Could not record Live Match startup cleanup")
+
+
+def _restore_live_match_startup() -> Dict[str, Any]:
+    """Restore only startup registrations that Vortex recorded removing."""
+    raw = db.get_settings().get("live_match_startup_cleanup", "")
+    try:
+        stored = json.loads(raw) if raw else {}
+        items = stored.get("items") if isinstance(stored, dict) else None
+        if not isinstance(items, list):
+            items = []
+    except (TypeError, ValueError):
+        client_launcher.login_logger.warning("Ignoring malformed Live Match startup cleanup metadata")
+        return {"restored": [], "skipped": [], "failed": ["malformed metadata"]}
+
+    if not items:
+        return {"restored": [], "skipped": [], "failed": []}
+
+    result = overwolf.restore_startup_entries(items)
+    remaining = result.pop("remaining", [])
+    try:
+        db.update_settings({
+            "live_match_startup_cleanup": json.dumps({
+                "version": 1,
+                "items": remaining,
+            }, separators=(",", ":")),
+        })
+    except Exception:
+        client_launcher.login_logger.exception("Could not update Live Match startup cleanup metadata")
+    return result
 
 
 class ModeRequest(BaseModel):
@@ -2905,13 +3067,12 @@ def build_live_snapshot() -> Dict[str, Any]:
     # Optional telemetry providers are only started when their Settings
     # switches are enabled.
     now = time.monotonic()
-    if (db.get_settings().get("overwolf_enabled", "0") == "1" and
+    if (_live_match_features_enabled(db.get_settings()) and
             now - _OVERWOLF_WAKE["checked_at"] >= 60.0):
         _OVERWOLF_WAKE["checked_at"] = now
         try:
             overwolf.ensure_available()
-            if db.get_settings().get("valorant_tracker_enabled", "0") == "1":
-                overwolf.ensure_tracker()
+            overwolf.ensure_tracker()
         except Exception:
             pass
 
@@ -3081,8 +3242,8 @@ async def overwolf_status():
 @app.post("/api/overwolf/install")
 async def overwolf_install():
     """Installs Overwolf now, rather than waiting for VALORANT to start."""
-    if db.get_settings().get("overwolf_enabled", "0") != "1":
-        return {"success": False, "message": "Enable Overwolf telemetry in Settings first."}
+    if not _live_match_features_enabled():
+        return {"success": False, "message": "Enable Live Match Features in Settings first."}
     return await asyncio.to_thread(overwolf.start_install)
 
 
@@ -3094,7 +3255,7 @@ async def telemetry_gep_event(req: TelemetryEventRequest):
     another computer. Normalize the event to the format used by the fallback
     reader before passing it to the combat tracker.
     """
-    if db.get_settings().get("overwolf_enabled", "0") != "1":
+    if not _live_match_features_enabled():
         return {"accepted": False, "disabled": True}
     raw = req.event if isinstance(req.event, dict) else {}
     feature = str(raw.get("featureName") or raw.get("feature") or "")

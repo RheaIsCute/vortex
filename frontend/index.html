@@ -17,7 +17,7 @@
     <link rel="stylesheet" href="/static/boot.css?v=1">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body class="theme-blue">
+<body class="theme-purple">
     <!-- Boot screen: logo build-up + first-load animation. Removed from the DOM
          by boot.js once app.js reports the initial data is in. -->
     <div id="vortex-boot" aria-hidden="true">
@@ -725,16 +725,18 @@
             </div>
 
             <div class="modal-form">
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-palette"></i> Appearance</h3>
                 <div class="form-group">
                     <label><i class="fa-solid fa-palette"></i> Accent Theme</label>
                     <div class="theme-picker" id="theme-picker">
-                        <button type="button" class="theme-swatch" data-theme="blue" title="Blue">
-                            <span class="theme-swatch-preview theme-preview-blue"></span>
-                            <span class="theme-swatch-label">Blue</span>
-                        </button>
                         <button type="button" class="theme-swatch" data-theme="purple" title="Violet">
                             <span class="theme-swatch-preview theme-preview-purple"></span>
                             <span class="theme-swatch-label">Violet</span>
+                        </button>
+                        <button type="button" class="theme-swatch" data-theme="blue" title="Blue">
+                            <span class="theme-swatch-preview theme-preview-blue"></span>
+                            <span class="theme-swatch-label">Blue</span>
                         </button>
                         <button type="button" class="theme-swatch" data-theme="emerald" title="Emerald">
                             <span class="theme-swatch-preview theme-preview-emerald"></span>
@@ -755,7 +757,10 @@
                     </div>
                     <p class="field-help">Changes apply instantly and are saved automatically.</p>
                 </div>
+                </section>
 
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-desktop"></i> General</h3>
                 <div class="form-group">
                     <label for="settings-client-path"><i class="fa-solid fa-desktop"></i> Riot Client Path</label>
                     <div class="input-with-action">
@@ -766,7 +771,10 @@
                     </div>
                     <p class="field-help">Path to <code>RiotClientServices.exe</code> for one-click auto-login.</p>
                 </div>
+                </section>
 
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-arrows-rotate"></i> Updates</h3>
                 <div class="form-group">
                     <label><i class="fa-solid fa-arrows-rotate"></i> App Version & Updates</label>
                     <div class="input-with-action">
@@ -777,12 +785,16 @@
                     </div>
                     <p class="field-help" id="update-status-text">Updates are delivered through GitHub releases.</p>
                 </div>
+                </section>
 
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-satellite-dish"></i> Live Match</h3>
                 <div class="form-group">
                     <label><i class="fa-solid fa-satellite-dish"></i> Live Match Features</label>
                     <p class="field-help">
-                        Enables live match tracking and the in-game aim HUD. Vortex will
-                        automatically use the required telemetry providers.
+                        Enables live match tracking and the in-game aim HUD. Turning it
+                        off also closes the VAL Tracker / Overwolf integration and
+                        disables related startup entries.
                     </p>
                     <div class="switch-row">
                         <label class="switch">
@@ -795,7 +807,10 @@
                         </div>
                     </div>
                 </div>
+                </section>
 
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-window-restore"></i> Post-Game</h3>
                 <div class="form-group">
                     <label><i class="fa-solid fa-window-restore"></i> Post-Game Actions</label>
                     <p class="field-help">
@@ -814,7 +829,10 @@
                     <input type="text" id="settings-post-valorant-path" class="form-control"
                            placeholder="Defaults to Desktop\Private\ldr.novgk.exe">
                 </div>
+                </section>
 
+                <section class="settings-section">
+                    <h3 class="settings-section-title"><i class="fa-solid fa-right-to-bracket"></i> Launch &amp; Login</h3>
                 <div class="form-group">
                     <label><i class="fa-solid fa-right-to-bracket"></i> Launch & Login</label>
 
@@ -840,6 +858,7 @@
                         </div>
                     </div>
                 </div>
+                </section>
 
                 <!-- Advanced / Developer Settings -->
                 <details class="settings-advanced">

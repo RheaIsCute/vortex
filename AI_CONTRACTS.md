@@ -68,14 +68,84 @@ Output: Live-combat state dictionaries with availability/source indicators.
 
 Stability: Optional feature; account management must function when it is disabled or unavailable.
 
-## Settings-to-game configuration bridge
+Live Match lifecycle:
+
+- The existing persisted `live_hud_enabled` key is the sole authoritative
+  value for the user-facing **Live Match Features** switch. Its legacy name is
+  retained for existing databases; `overwolf_enabled` and
+  `valorant_tracker_enabled` are compatibility mirrors and must not be read as
+  independent lifecycle controls.
+- `GET /api/settings` returns `live_hud_enabled`. `POST /api/settings` accepts
+  it as string `"1"`/`"0"`, persists it before lifecycle work, and returns
+  `{success: true, settings, live_match_cleanup?, live_match_startup_restore?}`.
+  The transition work is asynchronous from the request handler's perspective;
+  recoverable process/startup failures are reported in those optional result
+  objects rather than failing the settings write.
+- `backend/overwolf.py` owns the process/startup cleanup contract exposed by
+  `disable_live_match_integration()`, the provider-launch gate exposed by
+  `enable_live_match_integration()`, and restoration via
+  `restore_startup_entries()`.
+- Disable cleanup identifies VAL Tracker's `OverwolfBrowser.exe` by the exact
+  Tracker app UID, closes Vortex Telemetry's matching Overwolf child, and only
+  closes the shared Overwolf root when no unknown user Overwolf app is attached.
+- The settings transition clears Vortex live-combat/session state and provider
+  launch state; account/login and the separate autolock flow remain untouched.
+- The observed Windows startup mechanism is an exact Overwolf/Tracker
+  Run/RunOnce value (plus its matching HKCU StartupApproved value). Vortex
+  deliberately does not alter speculative startup shortcuts or scheduled
+  tasks. Removed Run entries carry Vortex-owned restore metadata in
+  `live_match_startup_cleanup`; on re-enable, Vortex restores only those exact
+  values and leaves an entry created later by the user or installer untouched.
+- This is best-effort and least-privilege: inability to inspect, terminate, or
+  edit an entry is logged and does not break account management.
+
+## Legacy preset cleanup
 
 Owner: `backend/game_config.py`
 
-Purpose: Apply supported stored settings to local VALORANT configuration files.
+Purpose: One-time startup cleanup of Vortex-owned files left by a removed
+settings-profile/preset feature. Vortex is external-only: it does **not** read
+or write any VALORANT/Riot configuration file.
 
-Input: Settings values and the configured local game path.
+Input: None (paths are Vortex-owned, under `settings_preset/`).
 
-Output: Apply/status results.
+Output: None.
 
-Stability: Path- and game-version-sensitive. UNDEFINED / NEEDS DESIGN for any new settings schema shared outside the existing API.
+Stability: Frozen. Do not add game-config writes here or anywhere else.
+
+## Runtime forensic audit log
+
+Owner: `backend/runtime_audit.py` (`record` + typed helpers)
+
+Purpose: Opt-in observability for Vortex's sensitive OS operations. Enabled by
+`VORTEX_AUDIT_RUNTIME=1`; writes `%LOCALAPPDATA%\Vortex\runtime_audit.log`.
+Records process opens (with decoded access mask), process launches/terminations,
+Riot API calls (method + path), window/input automation, child commands, and
+provider actions. Never records secrets or payloads.
+
+Input: Category + short non-secret description via the typed helpers
+(`process_open`, `process_launch`, `process_terminate`, `riot_api`,
+`window_automation`, `child_command`, `live_provider`).
+
+Output: Log lines only. No return value, no control-flow effect.
+
+Stability: Additive/observability contract. New code that opens a process
+handle, launches or kills a process, calls a Riot API, or automates a foreign
+window should call the matching helper. Disabled by default; must stay a no-op
+when the env var is unset.
+
+## Filesystem write/delete safety
+
+Owner: `backend/path_safety.py` (`guard_path`, `safe_remove`)
+
+Purpose: Single choke point for every Vortex write/delete on a computed path.
+Normalizes/resolves the target and raises `ProtectedPathError` if it lands in a
+Riot Games / VALORANT / Riot Vanguard location. With `VORTEX_AUDIT_FS=1` it
+logs every guarded write/delete (path + operation, never contents).
+
+Input: A filesystem path and an operation label.
+
+Output: The normalized absolute path, or `ProtectedPathError`.
+
+Stability: Core safety contract. New code that writes or deletes on a computed
+path must call `guard_path` (or `safe_remove`) first.

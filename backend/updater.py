@@ -20,6 +20,8 @@ import requests
 from packaging.version import parse as parse_version, InvalidVersion
 
 from backend.version import APP_VERSION
+from backend.path_safety import guard_path, ProtectedPathError
+from backend import runtime_audit
 
 import json
 import time
@@ -207,6 +209,7 @@ def download_installer(download_url: str, version: str = "", progress_cb=None) -
             total = int(res.headers.get("Content-Length", 0))
             downloaded = 0
 
+            guard_path(installer_path, "write")
             with open(installer_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=1024 * 256):
                     if not chunk:
@@ -543,10 +546,13 @@ Write-Log "Update cycle complete (relaunched: $running)."
             clean_env.pop(var, None)
             os.environ.pop(var, None)
 
+        runtime_audit.process_launch("wscript.exe", "background updater (runs generated .vbs -> .ps1 -> Inno installer)")
+        runtime_audit.child_command(["wscript.exe", updater_vbs])
         try:
             subprocess.Popen(["wscript.exe", updater_vbs], env=clean_env)
         except Exception:
             # Fallback to a direct powershell spawn if wscript is unavailable.
+            runtime_audit.process_launch("powershell.exe", "background updater fallback")
             subprocess.Popen(
                 [
                     "powershell.exe",

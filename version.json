@@ -1,5 +1,5 @@
 {
-  "version": "5.5.41",
+  "version": "5.5.42",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.41: the recent match list now keeps role badges small, readable, and cleanly anchored to the agent portrait."
+  "changelog": "Vortex v5.5.42: UI refresh - unified design system (spacing, type, chips, cards, modals), grouped Settings, purple accent by default, cleaner Legacy Ranked highlight, accessible modals, and dead-code cleanup."
 }

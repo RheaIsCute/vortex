@@ -8,9 +8,18 @@ once on server start.
 import os
 import sys
 
+from backend.path_safety import ProtectedPathError, safe_remove
+
 
 def remove_legacy_profile_data() -> None:
-    """Delete files left by the removed settings-profile/preset feature."""
+    """Delete files left by the removed settings-profile/preset feature.
+
+    These paths are all under Vortex's own ``settings_preset`` directory - the
+    ``RiotUserSettings.ini`` / ``GameUserSettings.ini`` names are copies the
+    removed feature kept beside its own data, NOT the live game files. Every
+    delete is still routed through :func:`safe_remove` so it can never reach a
+    real Riot/VALORANT location.
+    """
     if getattr(sys, "frozen", False):
         base = os.path.join(os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "Vortex")
     else:
@@ -24,10 +33,8 @@ def remove_legacy_profile_data() -> None:
     )
     for path in known_files:
         try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        except OSError:
+            safe_remove(path)
+        except ProtectedPathError:
             pass
     for directory in (
         os.path.join(root, "Windows"),

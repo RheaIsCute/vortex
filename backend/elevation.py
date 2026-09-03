@@ -20,6 +20,8 @@ import sys
 from ctypes import wintypes
 from typing import Optional
 
+from backend import runtime_audit
+
 _RIOT_EXES = {
     "riotclientservices.exe",
     "riot client.exe",
@@ -69,6 +71,9 @@ def _process_elevation(pid: int) -> Optional[bool]:
     """
     k32 = ctypes.windll.kernel32
     a32 = ctypes.windll.advapi32
+    runtime_audit.process_open(
+        _PROCESS_QUERY_LIMITED_INFORMATION, f"pid={pid}", "read elevation token (Riot-elevation check)"
+    )
     h_proc = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h_proc:
         return None
@@ -163,6 +168,7 @@ def relaunch_elevated() -> bool:
     try:
         workdir = os.path.dirname(exe) or None
         # ShellExecuteW returns >32 on success.
+        runtime_audit.process_launch(exe, "relaunch Vortex elevated (UAC runas)")
         rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, workdir, 1)
         return int(rc) > 32
     except Exception:

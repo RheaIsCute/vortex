@@ -29,6 +29,8 @@ from typing import Optional, Dict, Any, List, Tuple
 import requests
 import urllib3
 
+from backend import runtime_audit
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CLIENT_PLATFORM = (
@@ -509,6 +511,10 @@ class ValorantLiveClient:
         }
 
     def _remote(self, method: str, url: str, payload: Any = None, timeout: float = 5.0):
+        if method.upper() not in ("GET", "HEAD"):
+            runtime_audit.riot_api(
+                method, url, "authenticated PVP endpoint - state change (same as the game client)"
+            )
         try:
             return requests.request(
                 method, url, headers=self._headers(),
@@ -1666,6 +1672,8 @@ def is_game_running() -> bool:
 
 def _spawn(args: List[str], cwd: Optional[str] = None) -> bool:
     try:
+        runtime_audit.process_launch(args[0] if args else "", "launch VALORANT / Riot Client")
+        runtime_audit.child_command(args)
         subprocess.Popen(
             args, cwd=cwd, shell=False,
             creationflags=_DETACHED_FLAGS,
@@ -1693,6 +1701,7 @@ def _launch_via_client_api() -> bool:
         "/patch-proxy/v1/products/valorant/patchlines/live/launch",
     ):
         try:
+            runtime_audit.riot_api("POST", f"https://127.0.0.1:{port}{path}", "local Riot Client API - launch VALORANT (same as PLAY button)")
             res = requests.post(
                 f"https://127.0.0.1:{port}{path}",
                 auth=("riot", password), verify=False, timeout=6.0

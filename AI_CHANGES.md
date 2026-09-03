@@ -2,6 +2,478 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-03 — Release v5.5.42
+
+Published the accumulated completed work as v5.5.42: the external-only
+filesystem + runtime audits (opt-in `VORTEX_AUDIT_FS` / `VORTEX_AUDIT_RUNTIME`
+logging, `backend/path_safety.py`, `backend/runtime_audit.py`), the Enable Live
+Match Features authority contract (`live_hud_enabled` authoritative, scoped
+startup cleanup/restore), the frontend performance/smoothness pass, and the
+frontend UI/UX redesign below. `backend/version.py`, `version.json`,
+`installer/vortex_setup.iss` bumped 5.5.41 → 5.5.42. 98 tests pass;
+`python -m PyInstaller build_exe.spec` produces a complete `dist/Vortex` bundle
+(installer step needs Inno Setup, which was not present in this environment).
+
+## 2026-09-02 — Claude — Frontend UI/UX redesign (design-system consolidation)
+
+Visual/UI layer only. No backend behaviour, no `app.js` data/polling/state logic,
+no `live_overlay.*`, no Live Match lifecycle. Branch `ui/redesign-design-system`.
+
+### Audit (Graphify + 3 Explore agents + headless-Chrome/CDP screenshots)
+
+Graphify built this session (`graphify-out/`, scoped to 52 code/doc files, assets
+excluded). Frontend is one `app.js` (5.9k L) + `styles.css` (8.6k L) + `index.html`
+(1k L) served raw (no bundler). Findings that drove the work:
+
+- `styles.css` had a good token base (surfaces, strokes, radii, shadows, motion,
+  a 6-theme accent ramp) undermined by: **no spacing scale** (427 hardcoded px),
+  **no type scale** (29 font sizes with half-px steps), **6 undefined CSS tokens**
+  (`--stroke`, `--accent`, `--text`, `--font-sans`, `--border`, `--tier-color`)
+  referenced across 22 sites in the match-detail modal subtree (rendered with
+  browser-default borders/text as a result), ~13 one-off accent glows, ~18
+  white-alpha + ~14 black-alpha ad-hoc values, `.modal-card`/`.dash-panel`
+  byte-identical, ~20 pill/chip classes, 5 parallel stat-card impls, ~5
+  PLAY-button styles, a bolt-on "Section 11 — UI/UX POLISH PASS", 10 responsive
+  breakpoints in 3 disconnected passes.
+- Dead code: the entire "Active Session Bar" feature (`renderSessionBar` +
+  `#session-bar` never in the DOM + 8 null `DOM.session*` bindings + orphan
+  `.session-bar*` CSS), plus `matchTeamScore()` and `openTrackerUrl()`
+  (definition-only, no callers).
+- `matchCardHtml(m,i,source)` confirmed the single shared match row — untouched.
+- `tests/test_settings_and_ui.py` asserts on markup as text (substring +
+  `str.split()` on CSS rule headers); every asserted id / class / string / rule
+  header was preserved.
+
+### Changes
+
+**Design tokens (`styles.css` §1, additive):**
+- Spacing scale `--sp-0..12` (2–60px), type scale `--fs-2xs..2xl` +
+  `--lh-tight/normal`, `--radius-2xs: 4px`, neutral alpha steps `--wa-1..4` /
+  `--ba-1..4`, modal-width scale `--modal-w-sm/md/lg/xl`, and a fixed
+  accent-independent `--brand-grad`.
+
+**The 6 undefined tokens (`styles.css` `body` accent block):** defined as aliases
+(`--stroke`→`--stroke-2`, `--accent`→`--a`, `--text`→`--text-main`,
+`--font-sans`→`--font-main`, `--border`→`--stroke-2`). The whole match-detail /
+scoreboard / profile-grid subtree now resolves like the rest of the app.
+`--tier-color` left as-is (already set inline by `profileStatsHtml`, every use
+site already has a `var(--tier-color, var(--accent))` fallback).
+
+**Shared primitives (`styles.css` new "5.9 SHARED PRIMITIVES" subsection):**
+- `.surface` / `--raised` / `--flush` (card/panel box).
+- `.chip` + `.chip--accent/ok/warn/danger/info/neutral/frost` (the shared pill).
+- `.btn-cta` (the shared PLAY-style button; hover = `filter: brightness()` +
+  shadow step, no `translateY`).
+- `.state-block` + `.state-block__icon/__title/__hint` + `.state-block--error` and
+  `.spinner` (+ `spin` keyframe) — the shared loading/empty/error block.
+- One global `:where(...):focus-visible { box-shadow: var(--ring) }` (0-specificity;
+  existing per-element focus rules still win where they exist).
+- `body.modal-open { overflow: hidden; scrollbar-gutter: stable; }` (scroll-lock
+  that does not shift the page).
+
+**`stateBlock()` helper (`app.js`, near `escapeHtml`):** replaced all 7 hand-rolled
+`.no-matches-msg` divs (match-history modal load/error/empty, player-lookup
+load/error/empty, match-detail scoreboard fallback). `.no-matches-msg` CSS
+deleted. Also removed a stray inline `var(--accent-purple)`.
+
+**`credRows(acc)` helper (`app.js`):** the identical user/pass `.cred-row` pair
+from the grid card and the hero card is now one helper (~44 lines de-duplicated);
+`.credentials-box` / `.hero-creds-box` wrappers unchanged.
+
+**Modal accessibility (`app.js` `openModal`/`closeModal`):** save + restore focus
+on close, Tab focus-trap inside the sheet while open (WeakMap of handlers),
+body scroll-lock. `closeAllModals` already routed through `closeModal`. Focus
+lands on the sheet container (`tabindex=-1`), not the close button. Global ESC
+handler and `initOverlayDismiss` backdrop-close unchanged.
+
+**Modal sizing/spacing (`styles.css` §7):** `.modal-card` / `.modal-small` /
+`.modal-large` / `.modal-matches-card` / `.modal-import-card` / `.modal-detail-card`
+widths → the `--modal-w-*` scale (matches modal 860→780; import 640→580).
+`.modal-header` / `.modal-close` / `.modal-form` / `.modal-footer` / overlay
+backdrop → `--sp-*` / `--ba-4` / `--fs-*`. Selectors and the `::before` accent
+seam kept verbatim.
+
+**Settings grouping (`index.html` + `styles.css`):** the 7 flat `.form-group`s are
+now 6 labelled `<section class="settings-section">` blocks (Appearance / General /
+Updates / Live Match / Post-Game / Launch & Login) + the existing `<details>`
+Advanced. Only `<section>`/`<h3 class="settings-section-title">` wrappers added —
+every `#settings-*` id, `data-theme` swatch, `.form-group`/`.switch-row`/
+`.field-help`, and the asserted labels ("Post-Game Actions", "Launch &amp; Login",
+"Advanced / Developer Settings") kept verbatim. `openSettingsModal()` unchanged.
+
+**Purple default (`index.html`, `app.js`, `backend/database.py`):**
+`body class="theme-blue"` → `"theme-purple"`; `applyTheme` fallback + `VALID_THEMES`
+order → purple first; theme-picker swatch order → Violet first; DB `theme`
+default `"blue"` → `"purple"` (one string; `theme` is a free string in the
+settings contract — **no AI_CONTRACTS change**). Existing users' saved choice is
+respected. `.brand-wordmark` gradient pinned to a purple ramp (`#fff → #c9a2ff →
+#fff`) so the wordmark stays purple-forward under any accent. `--brand-grad`
+token added for logo/boot alignment.
+
+**Legacy-ranked treatment (`styles.css` §11.3):** the loud triple white
+`box-shadow` bloom (`0 0 30px …`) → a quiet frost ring (`inset 0 0 0 1px
+var(--wa-2)` + `var(--wa-4)` border); when the card is also active/favourited the
+accent `--glow-sm` layers on top instead of two blooms fighting. `.badge-legacy`
+→ `--wa-*` tokens. **`.account-card.is-legacy-ranked.is-favorite` selector kept
+verbatim** (asserted). The authoritative `isLegacyRankedEligible(acc)` flag and
+its consumers are untouched.
+
+**Card-badge / stat-pill consolidation (`styles.css` §4/§6):** `.badge-region`,
+`.badge-tag`, `.badge-status`, `.badge-live` and `.stat-pill` now share the
+`.chip` box shape (`--radius-full`, `--sp-*` padding, `--fs-2xs`, `--stroke-2`),
+keeping only their own colours. Section 11 header renamed from "UI/UX POLISH PASS"
+to "COMPONENT DETAILS".
+
+**Dead code removed:**
+- `renderSessionBar()` (fn + its sole call site) + 8 null `DOM.session*` bindings
+  + the `#btn-session-play`/`#btn-open-dashboard` guarded listeners + orphan
+  `.session-bar*` / `session-bar-in` / `.session-live-dot` CSS + its
+  reduced-motion entry. `.session-state-chip` **kept** (used by the hero card and
+  the dashboard).
+- `matchTeamScore()`, `openTrackerUrl()` — definition-only, deleted.
+
+**Card CSS tokenised** where touched (grid/gap/padding on `.account-card` and
+`.accounts-grid`).
+
+### Verification
+
+- `python -m pytest -q` → **98 passed** (unchanged from the pre-change working
+  tree; `tests/test_settings_and_ui.py` 7/7 green at every step).
+- `python -m compileall -q backend app.py` clean; `node --check` on `app.js` /
+  `boot.js` clean; `git diff --check` clean.
+- Ran the source app (`uvicorn backend.server:app`) and drove headless Chrome via
+  CDP (`Page.captureScreenshot`) — 42 screenshots per pass at 1280/1600/1920 px
+  and 150 % DPI, covering the roster (grid/table/empty/skeleton/hero),
+  filter popover, all 8 modals, settings (+ Advanced open), dashboard (idle),
+  toasts, and all six accent themes. **Zero JS console errors** on every pass.
+  Note: this app's live SQLite backend mutates between runs (active-session
+  detection, background sync), so full-page pixel diffs are unreliable — each
+  screenshot was reviewed directly. The match-detail modal, previously rendering
+  with browser-default borders/text, now renders correctly.
+- Re-ran Graphify (same 52-file scope). Diff vs the pre-change graph:
+  `renderSessionBar`, `matchTeamScore`, `openTrackerUrl` **gone** from the node
+  list; `stateBlock`, `credRows` present as leaf helpers (not hubs); god nodes
+  unchanged (`showToast`, `initEventListeners`, `escapeHtml`, `fetchAccounts`);
+  graph health 0 missing/self-loop edges; `app.js` still relates to
+  `backend/server.py` only via the API boundary — **no new frontend→backend
+  edges, no orphaned old modules, no duplicate replacement components** (one
+  `matchCardHtml`, one `stateBlock`, one `.chip`, one `.surface`).
+
+### Not done (deferred — lower visibility, higher regression risk / context cost)
+
+- Full tokenisation sweep of the 4,400-line dashboard CSS (§10). The dashboard
+  adopts the new tokens where its rules were touched; a complete pass is a
+  follow-up.
+- Physical fold of the (now-renamed) Section 11 sub-blocks into sections 4-7 —
+  they already consume the shared tokens/primitives in place.
+- Responsive-breakpoint consolidation (10 → 4). The duplicated `1280` / `1080`
+  media blocks remain.
+- Full 20-class `.chip` migration — the account-card badges + `.stat-pill` +
+  `.badge-live` are done; the dashboard-internal chips are part of the deferred
+  dashboard pass.
+
+### Files
+
+`frontend/styles.css`, `frontend/index.html`, `frontend/app.js`,
+`backend/database.py` (one default string), `AI_CHANGES.md`, `AI_TASKS.md`.
+Plan: `~/.claude/plans/before-making-any-changes-mossy-ember.md`.
+Graphify outputs regenerated in `graphify-out/`.
+
+## 2026-09-02 — Codex — Frontend performance / smoothness pass
+
+- Audited the frontend hot paths with Graphify before and after the pass. The
+  pre-edit graph had 1,175 nodes / 2,507 edges; the refreshed code-only graph
+  has 1,186 nodes / 2,522 edges and still reports no import cycles. The updated
+  query traces `openDashboard` → `runViewSlide` → `renderDashboard`, the live
+  polling loop, account/filter rendering, modal history/profile flows, and the
+  listener/timer owners.
+- Fixed the forward-navigation asymmetry: the dashboard now gets its first
+  animation frame before the expensive initial dashboard render, while close
+  remains the reverse path. Added a stored animation fallback timer and
+  height correction after the deferred render.
+- Removed repeated DOM/listener churn by delegating banned-account, mode, and
+  agent-grid clicks to stable containers. Added stale-response guards for
+  account/filter, banned-account, match-history, and player-profile requests;
+  modal close now aborts in-flight history/profile work.
+- Made check-account, launch-progress, stats-summary, and player-stats work
+  single-flight; refreshes now skip unchanged roster/banned/stats markup, and
+  the account-check path no longer repaints the roster on every 1.5-second
+  status tick. Launch follow-up timers now have explicit ownership and are
+  cancelled on teardown.
+- Reduced avoidable visual work without redesigning the UI: replaced the
+  shared `transition: all`, stopped animating modal backdrop blur, removed blur
+  from account-card entrance animation, shortened its stagger, and marked
+  below-the-fold dynamic images `loading="lazy" decoding="async"`. Existing
+  reduced-motion/effects-paused behavior and Overwolf/VAL Tracker lifecycle
+  behavior were preserved.
+
+Validation:
+
+- `python -m pytest -q` — 98 passed (2 existing FastAPI deprecation warnings).
+- `node --check frontend/app.js`, `python -m compileall -q app.py backend tests`,
+  and `git diff --check` passed.
+- `build.bat` passed: `dist\Vortex\Vortex.exe` with 3,909 internal files and
+  `dist_installer\VortexSetup.exe` were produced.
+- Local smoke checks returned HTTP 200 for the app shell, frontend assets,
+  settings, stats, accounts, and banned-account endpoints. The in-app browser
+  runtime was unavailable (`No browser is available`), so no visual click/
+  screenshot verification was possible in this environment.
+
+
+## 2026-09-02 — Codex — Live Match authority completion
+
+- Kept the existing `live_hud_enabled` database key as the one authoritative
+  persisted **Live Match Features** state. The historic provider keys are now
+  migration/compatibility mirrors; provider startup, telemetry, app startup,
+  and the frontend no longer read them independently.
+- Re-enable now restores only exact Run/RunOnce registrations that Vortex
+  recorded removing. Metadata includes the matched command, registry type/view,
+  and StartupApproved state where present. An entry that appeared after the
+  off transition is treated as a user or installer change and is never
+  overwritten; unsupported or failed restoration stays recorded for a later
+  explicit re-enable attempt.
+- The only discovered integration startup mechanism was the exact
+  `HKCU\Run\Overwolf` value. Cleanup is intentionally limited to evidenced
+  Run/RunOnce registrations (and the matching StartupApproved value), rather
+  than removing speculative shortcuts or scheduled tasks.
+- Regenerated the scoped backend lifecycle graph: 742 nodes, 1,654 extracted
+  edges, 1,494 built directed edges. Source and graph inspection confirm the
+  sole provider wake path is the enabled live snapshot; all Overwolf/Tracker
+  launch and installer paths retain the process-local gate.
+
+Validation:
+
+- `python -m pytest -q` — 98 passed (2 existing FastAPI deprecation warnings).
+- `python -m py_compile backend/database.py backend/server.py backend/overwolf.py app.py`
+  and `node --check frontend/app.js` passed.
+- `git diff --check` passed. Graph health reported no missing endpoints; its
+  130 dangling static references are external/shared symbols outside the
+  scoped `backend/` corpus, not lifecycle bypasses.
+
+## 2026-09-02 — Claude — Deep runtime audit for VALORANT/Riot process interference
+
+Audit method: traced actual execution, not string matches — every `ctypes`/`windll`
+call, pywin32 use, COM/UIA path, `subprocess`/`Popen`, bundled binary, native
+helper, third-party dependency, the Overwolf extension, and the frontend overlay.
+
+Findings (evidence-backed — see the FINAL REPORT in the task thread for line refs):
+
+- **No Vortex-owned code runs inside the VALORANT process.** No injection of any
+  kind: no `CreateRemoteThread`/`NtCreateThreadEx`, no `SetWindowsHookEx`, no
+  `AppInit_DLLs`, no proxy/IAT/inline hooks, no MinHook/EasyHook/Detours/Frida,
+  no graphics/DirectX/overlay hook. `build_exe.spec` ships `binaries=[]` — zero
+  custom native modules. `backend/native_autofill.cs` is **dead code**: never
+  compiled, bundled, or referenced.
+- **No process memory access.** No `ReadProcessMemory`/`WriteProcessMemory`,
+  `Nt*VirtualMemory`, `VirtualAllocEx`, `MapViewOfFile`, section mapping, handle
+  duplication, or shared-memory IPC anywhere. No `pymem`-style dependency.
+- **Process handles: the only `OpenProcess` calls request `PROCESS_QUERY_LIMITED_INFORMATION`
+  (0x1000)** — `backend/elevation.py:_process_elevation` (read Riot Client's
+  elevation token) and `backend/client_launcher.py:is_valorant_foreground` (read
+  the foreground window's image name). Process *existence* checks use
+  `CreateToolhelp32Snapshot` (name enumeration, no handle). No QUESTIONABLE or
+  INVASIVE access mask (`VM_READ/WRITE/OPERATION`, `CREATE_THREAD`,
+  `DUP_HANDLE`, `SUSPEND_RESUME`, `ALL_ACCESS`) is requested anywhere.
+- **No driver or service interaction.** No `DeviceIoControl`, no `\\.\` device
+  opens, no `OpenSCManager`/`CreateService`/`StartService`, no `sc.exe`, no
+  `.sys` handling, no vulnerable-driver library. Vanguard (`vgc.exe`,
+  `vgtray.exe`, `vgk.sys`, `vgc.sys`) is **never referenced** except as a
+  protected path `backend/path_safety.py` refuses to write to.
+- **Process termination** is OS-level `taskkill /F /IM` on VALORANT + Riot
+  Client only (`client_launcher.kill_valorant`, `force_kill_riot_client`),
+  during account-switch teardown — plus Riot's own local
+  `DELETE /rso-auth/v1/session` for sign-out. Overwolf/VAL Tracker cleanup uses
+  `taskkill /PID` on Overwolf PIDs only. Vanguard is never touched.
+- **Live Match / Aim HUD is a separate Vortex-owned pywebview desktop window**
+  (`app.py` `_make_live_hud_controller`): `WS_EX_TRANSPARENT` click-through,
+  `WS_EX_TOOLWINDOW`, `HWND_TOPMOST`, positioned over VALORANT via
+  `SetWindowPos`, shown/hidden from `is_valorant_foreground()`. The code
+  explicitly rejects `WS_EX_LAYERED`. No injection, no graphics hook, no memory
+  read — the textbook external-overlay architecture.
+- **Overwolf / VAL Tracker**: Vortex `Popen`s `OverwolfLauncher.exe -overwolfsilent`
+  and the vendors' own silent installers (downloaded to `%TEMP%`). It installs
+  no Vortex plugin into VALORANT and modifies no Overwolf config. The bundled
+  `overwolf/vortex-telemetry/` extension declares `permissions: ["GameInfo","Web"]`
+  only (not `Extensions`), has no overlay/in-game window
+  (`start_window: background`), and only *reads* Overwolf's Game Events Provider
+  stream, POSTing normalized events to `127.0.0.1:8765+`. Whether Overwolf's GEP
+  attaches to VALORANT is **Overwolf's** behaviour, not Vortex's. Disabling Live
+  Match Features stops every provider launch and cleans up
+  (`overwolf.disable_live_match_integration`).
+- **Riot local/remote APIs** are the lockfile-authenticated Riot Client REST API
+  (`127.0.0.1:<port>`, self-signed cert) and the authenticated PVP endpoints
+  (`glz-*.a.pvp.net`, `pd.*.a.pvp.net`) — the same endpoints the game client
+  calls. Most are GET. State-changing calls: `PUT name-service/v2/players`
+  (name lookup), `POST parties/.../queue|matchmaking/join|leave`,
+  `POST pregame/.../select|lock/<agent>`, `POST product-launcher .../launch`,
+  `DELETE rso-auth/v1/session`. All are official matchmaking/session actions,
+  not file/memory/process operations.
+- **Registry**: reads only (`winreg.OpenKey` + `QueryValueEx`/`EnumValue`) to
+  locate the Riot Client and (Overwolf cleanup) to enumerate `Run`/`RunOnce`.
+  The only registry *writes* are `DeleteValue` on HKCU/HKLM `Run` entries that
+  match Overwolf/VAL Tracker exactly (`overwolf._cleanup_registry_startup`) —
+  never any Riot/Vanguard key.
+
+Answers to the task's direct questions (all evidence-backed, none from assumption):
+
+- Does any Vortex-owned code execute inside VALORANT? **No.**
+- Does Vortex write to VALORANT memory? **No** (no memory API is called at all).
+- Does Vortex obtain write/operation/thread rights to VALORANT? **No** — only
+  `PROCESS_QUERY_LIMITED_INFORMATION`.
+- Does Vortex modify Riot/VALORANT/Vanguard files? **No** (confirmed static +
+  runtime: every such path is opened `"r"`).
+- Does Vortex load drivers? **No.**
+- Does Vortex indirectly cause a Vortex-owned component to inject? **No** — the
+  only bundled companion (Vortex Telemetry) is a background Overwolf GEP reader.
+- Does Live Match / Overwolf introduce a separate injected component? Not from
+  Vortex. Overwolf's own GEP runtime is third-party; Vortex neither ships nor
+  configures an injected piece.
+
+Changed (this task adds observability only — no behaviour change, nothing removed):
+
+- Added `backend/runtime_audit.py`: opt-in (`VORTEX_AUDIT_RUNTIME=1`) forensic
+  log at `%LOCALAPPDATA%\Vortex\runtime_audit.log` (or `<repo>\runtime_audit.log`
+  from source). Records `process.open` (with decoded access mask, flags
+  `INVASIVE` bits), `process.launch`, `process.terminate`, `riot.api`
+  (method + path), `window.automation`, `child.command`, `file.outside`,
+  `live.provider`. Never logs passwords, tokens, Authorization/Basic-auth, or
+  bodies (with a scrub backstop for query strings and `//user:pass@`).
+- Wired it into: `elevation._process_elevation` + `relaunch_elevated`;
+  `client_launcher` `is_valorant_foreground`, `kill_valorant`,
+  `force_kill_riot_client`, `api_sign_out`, both Riot Client `Popen` launches,
+  `auto_fill_credentials`, `focus_window`; `valorant_client` `_remote` (non-GET),
+  `_spawn`, `_launch_via_client_api`; `overwolf` `ensure_running`, `_taskkill`,
+  both provider installers; `server._spawn_detached`; `updater` background spawn.
+
+Files:
+
+- `backend/runtime_audit.py` (new), `backend/elevation.py`,
+  `backend/client_launcher.py`, `backend/valorant_client.py`,
+  `backend/overwolf.py`, `backend/server.py`, `backend/updater.py`
+- `tests/test_runtime_audit.py` (new), `AI_CONTEXT.md`, `AI_CONTRACTS.md`,
+  `AI_CHANGES.md`, `AI_TASKS.md`
+
+Tests/build:
+
+- `python -m pytest -q` → 94 passed (2 pre-existing FastAPI deprecation
+  warnings). Was 91; +3 runtime-audit tests.
+- `python -m compileall -q app.py backend tests` and `git diff --check` passed.
+- Manual smoke: `VORTEX_AUDIT_RUNTIME=1` produces the expected audit lines and
+  correctly flags a synthetic `PROCESS_VM_WRITE` open as `INVASIVE`; secrets in
+  a URL are scrubbed to `<redacted>`.
+- Full app build (`build.bat`) not run this task (no code path affecting the
+  bundle changed; `binaries=[]` unchanged).
+
+Recommended removals (optional — all inert today):
+
+- `backend/native_autofill.cs` — dead C# mouse/keyboard autofill helper, never
+  built or referenced. Safe to delete outright; the Python UIA + pyautogui path
+  is the live implementation.
+
+Still needs manual review / not code-determinable here:
+
+- Overwolf's GEP runtime and the VAL Tracker app are third-party closed-source;
+  whether *they* attach to or read VALORANT is outside this repo. The isolation
+  lever is "Live Match Features off", which this audit confirms stops all Vortex
+  provider launches and cleans up.
+- A/B runtime test (Vortex fully closed vs running vs Live Match on) — procedure
+  documented in the FINAL REPORT; not executed here (no live VALORANT session).
+
+## 2026-09-02 — Codex — Enable Live Match Features lifecycle
+
+Changed:
+
+- Made the existing merged Live Match Features setting control Vortex live
+  runtime state and the Overwolf integration. Turning it off clears live
+  combat/session caches, blocks provider and installer launches, stops matching
+  external processes immediately, and runs the same cleanup once at Vortex
+  startup when the persisted setting is off. Account/login and autolock flows
+  remain separate.
+- Identifies the observed VAL Tracker runtime as `OverwolfBrowser.exe` with
+  the exact app UID
+  `ipmlnnogholfmdmenfijjifldcpjoecappfccceh`. The observed shared process set
+  is `Overwolf.exe`, `OverwolfBrowser.exe`, `OverwolfHelper.exe`, and
+  `OverwolfHelper64.exe`; the known `OverwolfLauncher.exe` identity is also
+  supported. Vortex-owned in-flight installers named
+  `OverwolfSetup-vortex.exe` and `ValorantTrackerSetup-vortex.exe` are also
+  targeted. Shutdown requests graceful tree termination, waits, then uses
+  `/F` only for remaining matching PIDs, with failures logged.
+- Startup cleanup is scoped to matching Overwolf/Tracker entries in HKCU/HKLM
+  `Run` and `RunOnce`, the matching HKCU `StartupApproved\Run` value, exact
+  startup-folder shortcut names, and clearly matching scheduled tasks. The
+  current machine had only `HKCU\...\Run\Overwolf`; no separate VAL Tracker
+  Windows startup entry or scheduled task was found. Removed/disabled entry
+  identity is stored as non-secret `live_match_startup_cleanup` metadata.
+- A shared Overwolf root is left running when an unknown user Overwolf app is
+  attached, while exact Tracker/Vortex-owned browser processes can still be
+  stopped. Re-enabling only re-arms on-demand behavior and does not recreate
+  startup registrations. The UI keeps one simple switch and explains the
+  external cleanup.
+
+Files:
+
+- `backend/overwolf.py`, `backend/server.py`, `frontend/index.html`
+- `tests/test_overwolf_lifecycle.py`, `tests/test_settings_and_ui.py`
+- `AI_CONTRACTS.md`, `AI_TASKS.md`, `AI_CHANGES.md`
+
+Tests/build:
+
+- `python -m pytest -q` — 91 passed; 2 existing FastAPI deprecation warnings.
+- `python -m compileall -q app.py backend tests`, `node --check
+  frontend/app.js`, and `git diff --check` passed.
+- Standard `build.bat` reached PyInstaller but could not replace the locked
+  existing `dist\Vortex` bundle because the running Vortex process holds its
+  files. The same PyInstaller spec built a fresh 3,868-file bundle in `%TEMP%`,
+  and Inno Setup successfully compiled `dist_installer\VortexSetup.exe` from
+  that verified bundle.
+
+Limitations:
+
+- Overwolf's observed `AutoLaunchInstalledApps` setting is global to Overwolf;
+  it was not modified because changing it would affect unrelated Overwolf
+  apps. Therefore this implementation removes Windows startup registrations
+  and prevents Vortex from re-launching the integration, but cannot safely
+  control Overwolf's own per-game autolaunch behavior for the Tracker when an
+  unrelated Overwolf app keeps the shared root alive.
+- Verification did not invoke the destructive off action on the live machine;
+  the observed Overwolf/Tracker processes were intentionally left running.
+
+## 2026-09-02 — Claude — External-only audit + path-safety guardrails
+
+Audit result:
+
+- Full workspace searched for Riot Client / VALORANT / Vanguard file or process tampering: install dirs, executables, DLLs, configs, manifests, pak/assets, registry keys, process memory, DLL injection, remote threads, hooks, handle manipulation, drivers, symlinks/junctions. Also Python, PowerShell, batch, VBS, installer, updater, bundled `.cs`, and the Overwolf extension.
+- **No Riot/VALORANT/Vanguard file is modified, replaced, patched, deleted, renamed, or created anywhere.** No `WriteProcessMemory` / `CreateRemoteThread` / `NtWriteVirtualMemory` / DLL injection / code caves / inline hooks exist. The only `OpenProcess` calls (`elevation.py`, `client_launcher.py`) use `PROCESS_QUERY_LIMITED_INFORMATION` — read-only token/name checks. No registry writes exist.
+- Riot interaction is entirely external: reads the Riot Client lockfile and `RiotGamesPrivateSettings.yaml` (`"r"` only), calls the Riot Client's own localhost REST API (`GET`/`DELETE /player-session`, product-launcher PLAY endpoint), reads `ShooterGame.log` / `RiotClientInstalls.json` / product settings, UI Automation + `native_autofill.cs` mouse/keyboard input on the Riot Client window, `subprocess.Popen` to start `RiotClientServices.exe`, and process/window detection via `tasklist` / toolhelp snapshot.
+- `game_config.py` was already reduced (in a prior task) to deleting Vortex-owned `settings_preset/` leftovers; the `AI_CONTEXT.md` / `AI_CONTRACTS.md` "settings-to-game configuration bridge" wording was stale and is now corrected.
+- `server.py` post-VALORANT-close launcher runs a **user-configured** program path (default points at a user-supplied `Desktop\Private\ldr.novgk.exe` if present). Vortex only `Popen`s it — never creates or modifies it. No change made; noted for manual review.
+- Installer (`vortex_setup.iss`) writes only to `{app}` and kills only Vortex/Overwolf/WebView2 processes. Updater writes only to `%TEMP%` and delegates install to the Inno installer. Neither touches Riot paths.
+
+Changed:
+
+- Added `backend/path_safety.py`: `guard_path(path, op)` normalizes + fully resolves a target and raises `ProtectedPathError` if it lands in a Riot Games / VALORANT / Riot Vanguard location (install trees, `%LOCALAPPDATA%\Riot Games`, `%LOCALAPPDATA%\VALORANT`, `Riot Vanguard`, `vgk.sys` / `vgc.sys`). `safe_remove(path)` is `os.remove` behind the same guard. Opt-in audit logging of every guarded write/delete via `VORTEX_AUDIT_FS=1` (logs path + operation only, never contents).
+- Wired the guard into every computed write/delete site: updater installer download (`updater.py`), Overwolf + Valorant Tracker installer downloads (`overwolf.py`), SQLite backup write and snapshot pruning (`database.py`), legacy preset cleanup (`game_config.py`). Fixed-constant `%TEMP%` handshake files were left as-is (not computed from external input).
+- `game_config.py` legacy cleanup now uses `safe_remove`; docstring clarified.
+
+Files:
+
+- `backend/path_safety.py` (new), `backend/game_config.py`, `backend/updater.py`, `backend/overwolf.py`, `backend/database.py`
+- `tests/test_path_safety.py` (new), `AI_CONTEXT.md`, `AI_CONTRACTS.md`, `AI_TASKS.md`, `AI_CHANGES.md`
+
+Tests/build:
+
+- `python -m pytest -q` → 83 passed (2 pre-existing FastAPI deprecation warnings). Was 79; +4 new path-safety tests.
+- `python -m compileall -q app.py backend tests` and `git diff --check` passed.
+
+Integration notes:
+
+- No endpoint, contract, or account/login/updater/installer behavior change. `guard_path` is a no-op for all existing paths (all Vortex-owned). New write/delete code on computed paths must call `guard_path` / `safe_remove` first (see the "Filesystem write/delete safety" contract).
+- App-level `saveBackup` (user-picked Save-As dialog for the user's own backup JSON) is intentionally not guarded — it is explicit user file selection, not a computed Vortex write.
+
+Still needs manual review:
+
+- The user-configured "run a program when VALORANT closes" feature and its `ldr.novgk.exe` default: Vortex's code is a plain process launch, but the external tool itself (user-supplied, not in this repo) is outside audit scope.
+
 ## 2026-09-01 — Codex — WebView2 diagnostic startup build
 
 Changed:

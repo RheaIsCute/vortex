@@ -29,6 +29,7 @@ import win32api
 from typing import Optional, Dict, Any, Tuple
 
 from backend import elevation
+from backend import runtime_audit
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pyautogui.PAUSE = 0.04
@@ -155,6 +156,7 @@ def is_valorant_foreground() -> bool:
         if not pid:
             return False
         # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        runtime_audit.process_open(0x1000, f"pid={pid}", "read foreground process image name")
         handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
             return False
@@ -928,8 +930,11 @@ class ClientLauncher:
         port, password = auth_info
         url = f"https://127.0.0.1:{port}/rso-auth/v1/session"
         try:
+            runtime_audit.riot_api("GET", f"https://127.0.0.1:{port}/rso-auth/v1/session", "local Riot Client API - session check")
             res = requests.get(url, auth=("riot", password), verify=False, timeout=1.0)
             if res.status_code == 200 and res.json().get("type") == "authenticated":
+                runtime_audit.riot_api("DELETE", f"https://127.0.0.1:{port}/rso-auth/v1/session", "local Riot Client API - sign out")
+                runtime_audit.process_terminate("Riot session", "local Riot Client REST API", "sign out active account")
                 del_res = requests.delete(url, auth=("riot", password), verify=False, timeout=1.5)
                 return del_res.status_code in (200, 204)
         except Exception:
@@ -983,6 +988,9 @@ class ClientLauncher:
             if not hwnd or not win32gui.IsWindow(hwnd):
                 return False
 
+            runtime_audit.window_automation(
+                "ShowWindow + AttachThreadInput + SetForegroundWindow", "Riot Client"
+            )
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             else:
@@ -1552,6 +1560,9 @@ class ClientLauncher:
             return
 
         login_logger.info("[%s] Riot Client window is up", username)
+        runtime_audit.window_automation(
+            "UIA read + clipboard paste + SendInput keystrokes (credential fill)", "Riot Client"
+        )
         _set_login_stage("waiting_window", "Waiting for the sign-in screen...", username)
 
         # ---- stage 1: the window that's already open ----------------------
@@ -1595,6 +1606,7 @@ class ClientLauncher:
         time.sleep(1.2)
 
         try:
+            runtime_audit.process_launch(target_path, "restart Riot Client (sign-in page reset)")
             subprocess.Popen([target_path], shell=False)
         except Exception as e:
             _set_login_stage("error", f"Couldn't restart the Riot Client: {e}", username)
@@ -1726,8 +1738,11 @@ class ClientLauncher:
     def kill_valorant() -> bool:
         """Force closes any running VALORANT game instances."""
         try:
+            cmd = ["taskkill", "/F", "/T", "/IM", "VALORANT.exe", "/IM", "VALORANT-Win64-Shipping.exe"]
+            runtime_audit.process_terminate("VALORANT.exe", "taskkill /F", "account switch teardown")
+            runtime_audit.child_command(cmd)
             res = subprocess.run(
-                ["taskkill", "/F", "/T", "/IM", "VALORANT.exe", "/IM", "VALORANT-Win64-Shipping.exe"],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 shell=True
@@ -1923,6 +1938,7 @@ class ClientLauncher:
             # its single-instance mutex, or the relaunch is swallowed.
             time.sleep(0.7)
 
+            runtime_audit.process_launch(target_path, "start Riot Client for login")
             subprocess.Popen([target_path], shell=False)
             _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
             cls.auto_fill_credentials(username, password, True, stay_signed_in, target_path)
@@ -1934,8 +1950,11 @@ class ClientLauncher:
     def force_kill_riot_client():
         """Force closes all Riot Client processes cleanly to reset rate limits and release session lock."""
         try:
+            cmd = ["taskkill", "/F", "/T", "/IM", "RiotClientServices.exe", "/IM", "RiotClientUx.exe", "/IM", "RiotClientCrashHandler.exe"]
+            runtime_audit.process_terminate("RiotClientServices.exe", "taskkill /F", "reset session lock / rate limits")
+            runtime_audit.child_command(cmd)
             subprocess.run(
-                ["taskkill", "/F", "/T", "/IM", "RiotClientServices.exe", "/IM", "RiotClientUx.exe", "/IM", "RiotClientCrashHandler.exe"],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 shell=True

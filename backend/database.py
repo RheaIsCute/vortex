@@ -12,6 +12,8 @@ import glob
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from backend.path_safety import guard_path, safe_remove
+
 if getattr(sys, "frozen", False):
     # Packaged .exe: store the DB in a writable per-user location, since
     # the install directory (e.g. Program Files) is typically read-only
@@ -57,6 +59,7 @@ class Database:
             if existing:
                 return existing[0]
         path = os.path.join(backup_dir, datetime.now().strftime("vortex-%Y%m%d-%H%M%S-%f.sqlite"))
+        guard_path(path, "write")
         source = sqlite3.connect(self.db_path, timeout=15.0)
         target = sqlite3.connect(path)
         try:
@@ -67,10 +70,7 @@ class Database:
         snapshots = sorted(glob.glob(os.path.join(backup_dir, "vortex-*.sqlite")),
                            key=os.path.getmtime, reverse=True)
         for old in snapshots[10:]:
-            try:
-                os.remove(old)
-            except OSError:
-                pass
+            safe_remove(old)
         return path
 
     def get_connection(self) -> sqlite3.Connection:
@@ -227,7 +227,7 @@ class Database:
             defaults = [
                 ("riot_client_path", r"C:\Riot Games\Riot Client\RiotClientServices.exe"),
                 ("riot_api_key", ""),
-                ("theme", "blue"),
+                ("theme", "purple"),
                 ("auto_minimize_on_launch", "true"),
                 # Tick Riot's "Stay signed in" during automated logins, so a
                 # relaunch of the Riot Client doesn't ask for the password again.
@@ -236,7 +236,10 @@ class Database:
                 # default - Login and Play stay distinct actions unless asked.
                 ("auto_launch_after_login", "0"),
                 # Passive top-right accuracy HUD.  Kept opt-in because it is
-                # intentionally always visible while a match is running.
+                # intentionally always visible while a match is running. This
+                # is the canonical persisted value for the user-facing Live
+                # Match Features switch; its historic name is retained so
+                # existing local databases keep working.
                 ("live_hud_enabled", "0"),
                 # Install (if missing) and tray-start Overwolf alongside
                 # VALORANT, so live combat stats work without being set up.
@@ -252,6 +255,22 @@ class Database:
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
+            # Older builds exposed these three provider/HUD values separately,
+            # while the UI already presented one merged switch. Preserve that
+            # effective state once, then let the canonical setting own all
+            # future lifecycle decisions.
+            cursor.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('live_hud_enabled', 'overwolf_enabled', 'valorant_tracker_enabled')"
+            )
+            live_values = {row["key"]: row["value"] for row in cursor.fetchall()}
+            if (live_values.get("live_hud_enabled", "0") != "1" and
+                    any(live_values.get(key, "0") == "1" for key in
+                        ("overwolf_enabled", "valorant_tracker_enabled"))):
+                cursor.execute(
+                    "UPDATE settings SET value = '1' WHERE key = 'live_hud_enabled'"
+                )
 
             # Removed features and their orphaned settings: the settings-profile
             # /preset feature, its legacy automatic Overwolf switch, and the

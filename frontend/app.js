@@ -63,7 +63,28 @@ const state = {
     pendingQueueId: null,   // mode picked here, before the client confirms it
     playPending: false,     // guards PLAY against a second click
     queueStartedAt: 0,
-    playerStats: null
+    playerStats: null,
+
+    // Request/timer ownership. These keep fast polling and repeated modal
+    // opens single-flight without changing the API contract.
+    _accountsRequestSeq: 0,
+    _bannedAccountsRequestSeq: 0,
+    _bannedAccountsSignature: null,
+    _checkPollPromise: null,
+    _checkProgressHideTimer: null,
+    _launchPollPromise: null,
+    _launchPollGeneration: 0,
+    _launchSettleTimer: null,
+    _launchDashboardTimer: null,
+    _launchWarningTimer: null,
+    _launchBackgroundRefreshTimer: null,
+    _matchHistoryRequestToken: 0,
+    _matchHistoryAbortController: null,
+    _profileRequestToken: 0,
+    _profileAbortController: null,
+    _statsPromise: null,
+    _statsSummaryPromise: null,
+    _statsRenderSignature: null
 };
 
 // Fallback tier mapping
@@ -419,16 +440,6 @@ const DOM = {
     launchPassVal: document.getElementById("launch-pass-val"),
     btnCopyLaunchUser: document.getElementById("btn-copy-launch-user"),
     btnCopyLaunchPass: document.getElementById("btn-copy-launch-pass"),
-
-    // Active Session Bar
-    sessionBar: document.getElementById("session-bar"),
-    sessionName: document.getElementById("session-name"),
-    sessionMeta: document.getElementById("session-meta"),
-    sessionRankImg: document.getElementById("session-rank-img"),
-    sessionStateChip: document.getElementById("session-state-chip"),
-    btnSessionPlay: document.getElementById("btn-session-play"),
-    sessionPlayLabel: document.getElementById("session-play-label"),
-    btnOpenDashboard: document.getElementById("btn-open-dashboard"),
 
     // Live Dashboard view
     headerActions: document.getElementById("header-actions"),
@@ -921,6 +932,15 @@ function initEventListeners() {
         fetchBannedAccounts();
     });
     if (DOM.modalBannedClose) DOM.modalBannedClose.addEventListener("click", () => closeModal(DOM.modalBanned));
+    if (DOM.bannedListContainer) DOM.bannedListContainer.addEventListener("click", (e) => {
+        const recheck = e.target.closest(".btn-recheck-banned");
+        if (recheck) {
+            recheckBannedAccount(recheck.dataset.id, recheck);
+            return;
+        }
+        const remove = e.target.closest(".btn-delete-banned");
+        if (remove) deleteBannedAccount(remove.dataset.id);
+    });
 
     DOM.btnCloseLaunch.addEventListener("click", () => {
         const stillRunning = !!state._launchPoll;
@@ -929,7 +949,11 @@ function initEventListeners() {
         if (stillRunning) {
             showToast("Login continues in the background", "info");
             // Backend login worker keeps running; refresh once it's had time to finish.
-            setTimeout(() => { fetchAccounts(); fetchStatsSummary(); }, 8000);
+            state._launchBackgroundRefreshTimer = setTimeout(() => {
+                state._launchBackgroundRefreshTimer = null;
+                fetchAccounts();
+                fetchStatsSummary();
+            }, 8000);
         }
     });
 
@@ -1089,6 +1113,10 @@ function stopCheckAccountsUi(hideBar = true) {
     state.isCheckingAccounts = false;
     if (state._checkPoll) { clearInterval(state._checkPoll); state._checkPoll = null; }
     if (state._checkPollDeadline) { clearTimeout(state._checkPollDeadline); state._checkPollDeadline = null; }
+    if (state._checkProgressHideTimer) {
+        clearTimeout(state._checkProgressHideTimer);
+        state._checkProgressHideTimer = null;
+    }
     if (DOM.btnCheckAllAccounts) {
         DOM.btnCheckAllAccounts.classList.remove("is-checking");
         DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
@@ -1114,6 +1142,10 @@ async function handleCheckAllAccounts() {
     }
 
     state.isCheckingAccounts = true;
+    if (state._checkProgressHideTimer) {
+        clearTimeout(state._checkProgressHideTimer);
+        state._checkProgressHideTimer = null;
+    }
     if (DOM.btnCheckAllAccounts) {
         DOM.btnCheckAllAccounts.classList.add("is-checking");
         DOM.btnCheckAllAccounts.setAttribute("aria-busy", "true");
@@ -1156,37 +1188,61 @@ async function handleCheckAllAccounts() {
         armWatchdog();
 
         // Poll progress until complete
-        state._checkPoll = setInterval(async () => {
-            try {
-                const statusRes = await fetch("/api/accounts/check-status");
-                const progress = await statusRes.json();
+        state._checkPoll = setInterval(() => {
+            // A slow status response must not overlap the next tick. The
+            // previous interval could otherwise stack requests and trigger
+            // several roster rebuilds for one backend update.
+            if (!state.isCheckingAccounts || state._checkPollPromise) return;
 
-                if (progress.current !== lastCurrent) { lastCurrent = progress.current; armWatchdog(); }
+            const task = (async () => {
+                try {
+                    const statusRes = await fetch("/api/accounts/check-status");
+                    const progress = await statusRes.json();
+                    const progressChanged = progress.current !== lastCurrent;
 
-                if (progress.running) {
-                    const pct = Math.max(10, Math.round((progress.current / Math.max(progress.total, 1)) * 100));
-                    DOM.syncProgressFill.style.width = `${pct}%`;
-                    DOM.syncProgressText.textContent = progress.message || `Checking accounts (${progress.current}/${progress.total})...`;
-                    fetchAccounts();
-                    fetchStatsSummary();
-                } else {
-                    DOM.syncProgressFill.style.width = "100%";
-                    DOM.syncProgressText.textContent = progress.message || "All accounts verified!";
-                    stopCheckAccountsUi(false);
-                    showToast(progress.message || "Account check completed!", "success");
+                    if (progressChanged) {
+                        lastCurrent = progress.current;
+                        armWatchdog();
+                    }
 
-                    setTimeout(() => {
-                        DOM.syncProgressBar.style.display = "none";
-                        DOM.syncProgressFill.style.width = "0%";
-                    }, 2500);
+                    if (progress.running) {
+                        const pct = Math.max(10, Math.round((progress.current / Math.max(progress.total, 1)) * 100));
+                        DOM.syncProgressFill.style.width = `${pct}%`;
+                        DOM.syncProgressText.textContent = progress.message || `Checking accounts (${progress.current}/${progress.total})...`;
+                        // Refresh only when the backend advances to another
+                        // account, and keep it silent so the grid does not
+                        // replay entrance animation during a scan.
+                        if (progressChanged) {
+                            fetchAccounts(true);
+                            fetchStatsSummary();
+                        }
+                    } else {
+                        DOM.syncProgressFill.style.width = "100%";
+                        DOM.syncProgressText.textContent = progress.message || "All accounts verified!";
+                        stopCheckAccountsUi(false);
+                        showToast(progress.message || "Account check completed!", "success");
 
-                    fetchAccounts();
-                    fetchStatsSummary();
-                    fetchBannedAccounts();
+                        state._checkProgressHideTimer = setTimeout(() => {
+                            state._checkProgressHideTimer = null;
+                            DOM.syncProgressBar.style.display = "none";
+                            DOM.syncProgressFill.style.width = "0%";
+                        }, 2500);
+
+                        fetchAccounts(true);
+                        fetchStatsSummary();
+                        fetchBannedAccounts();
+                    }
+                } catch (err) {
+                    // Ignore a single poll error; the watchdog covers a sustained one.
                 }
-            } catch (err) {
-                // Ignore a single poll error; the watchdog covers a sustained one.
-            }
+            })();
+
+            state._checkPollPromise = task;
+            task.then(() => {
+                if (state._checkPollPromise === task) state._checkPollPromise = null;
+            }, () => {
+                if (state._checkPollPromise === task) state._checkPollPromise = null;
+            });
         }, 1500);
 
     } catch (err) {
@@ -1228,6 +1284,7 @@ function accountsSignature(list) {
 }
 
 async function fetchAccounts(silent = false) {
+    const requestSeq = ++state._accountsRequestSeq;
     try {
         let tagParam = state.currentTag;
         let url = `/api/accounts?search=${encodeURIComponent(state.searchQuery)}&region=${encodeURIComponent(state.currentRegion)}&sort_by=${encodeURIComponent(state.currentSort)}`;
@@ -1244,6 +1301,9 @@ async function fetchAccounts(silent = false) {
 
         const res = await fetch(url);
         const data = await res.json();
+        // Search/filter changes can finish out of order. Only the newest
+        // request may update the roster or its render signature.
+        if (requestSeq !== state._accountsRequestSeq) return;
         let newAccounts = data.accounts || [];
 
         if (tagParam === "FAVORITES") {
@@ -1253,13 +1313,15 @@ async function fetchAccounts(silent = false) {
             newAccounts = newAccounts.filter(isLegacyRankedEligible);
         }
 
-        // Avoid unnecessary DOM rebuilds if data hasn't changed
+        // Avoid unnecessary DOM rebuilds if data hasn't changed. Keep the
+        // newest data in state even when no visible field changed, because
+        // match detail/profile actions may use the refreshed history.
         const signature = accountsSignature(newAccounts);
-        if (silent && state._lastAccountsSignature === signature) {
-            return;
-        }
+        const unchanged = state._lastAccountsSignature === signature;
         state._lastAccountsSignature = signature;
         state.accounts = newAccounts;
+
+        if (unchanged) return;
 
         renderAccounts(silent);
     } catch (err) {
@@ -1269,23 +1331,34 @@ async function fetchAccounts(silent = false) {
 }
 
 async function fetchStatsSummary() {
-    try {
-        const res = await fetch("/api/stats-summary");
-        const data = await res.json();
-        state.stats = data;
+    if (state._statsSummaryPromise) return state._statsSummaryPromise;
 
-        setStatValue(DOM.statTotal, data.total_accounts || 0);
-        setStatValue(DOM.statMains, data.main_accounts || 0);
-        setStatValue(DOM.statRanked, data.ranked_accounts || 0);
-        setStatValue(DOM.statUnrated, data.unrated_accounts || 0);
+    const task = (async () => {
+        try {
+            const res = await fetch("/api/stats-summary");
+            const data = await res.json();
+            state.stats = data;
 
-        if (DOM.bannedCountBadge) {
-            const bannedCount = data.banned_accounts || 0;
-            DOM.bannedCountBadge.textContent = bannedCount;
-            DOM.bannedCountBadge.style.display = bannedCount > 0 ? "flex" : "none";
+            setStatValue(DOM.statTotal, data.total_accounts || 0);
+            setStatValue(DOM.statMains, data.main_accounts || 0);
+            setStatValue(DOM.statRanked, data.ranked_accounts || 0);
+            setStatValue(DOM.statUnrated, data.unrated_accounts || 0);
+
+            if (DOM.bannedCountBadge) {
+                const bannedCount = data.banned_accounts || 0;
+                DOM.bannedCountBadge.textContent = bannedCount;
+                DOM.bannedCountBadge.style.display = bannedCount > 0 ? "flex" : "none";
+            }
+        } catch (err) {
+            console.error("Failed to load stats summary", err);
         }
-    } catch (err) {
-        console.error("Failed to load stats summary", err);
+    })();
+
+    state._statsSummaryPromise = task;
+    try {
+        return await task;
+    } finally {
+        if (state._statsSummaryPromise === task) state._statsSummaryPromise = null;
     }
 }
 
@@ -1294,14 +1367,22 @@ async function fetchStatsSummary() {
 // ==========================================================================
 
 async function fetchBannedAccounts(silent = false) {
+    const requestSeq = ++state._bannedAccountsRequestSeq;
     try {
         const res = await fetch("/api/banned-accounts");
         const data = await res.json();
+        if (requestSeq !== state._bannedAccountsRequestSeq) return;
         // Cached in state because the "currently logged in" card has to be
         // able to edit/delete a banned account without the Banned modal ever
         // having been opened.
         state.bannedAccounts = data.accounts || [];
-        if (DOM.bannedListContainer) renderBannedAccounts(state.bannedAccounts);
+        const signature = state.bannedAccounts.map(a => [
+            a.id, a.username, a.display_name, a.region, a.status
+        ].join("\x1f")).join("\x1e");
+        if (DOM.bannedListContainer && signature !== state._bannedAccountsSignature) {
+            state._bannedAccountsSignature = signature;
+            renderBannedAccounts(state.bannedAccounts);
+        }
     } catch (err) {
         if (!silent) showToast("Failed to load banned accounts", "error");
     }
@@ -1360,12 +1441,6 @@ function renderBannedAccounts(accounts) {
         DOM.bannedListContainer.appendChild(row);
     });
 
-    DOM.bannedListContainer.querySelectorAll(".btn-recheck-banned").forEach(btn => {
-        btn.addEventListener("click", () => recheckBannedAccount(btn.dataset.id, btn));
-    });
-    DOM.bannedListContainer.querySelectorAll(".btn-delete-banned").forEach(btn => {
-        btn.addEventListener("click", () => deleteBannedAccount(btn.dataset.id));
-    });
 }
 
 async function recheckBannedAccount(id, btnEl) {
@@ -1409,17 +1484,17 @@ async function loadSettings() {
     } catch (err) {
         console.error("Failed to load settings", err);
     }
-    applyTheme(state.settings.theme || "blue");
+    applyTheme(state.settings.theme || "purple");
 }
 
 // ==========================================================================
 // THEME
 // ==========================================================================
 
-const VALID_THEMES = ["blue", "purple", "emerald", "crimson", "amber", "cyan"];
+const VALID_THEMES = ["purple", "blue", "emerald", "crimson", "amber", "cyan"];
 
 function applyTheme(themeName) {
-    const theme = VALID_THEMES.includes(themeName) ? themeName : "blue";
+    const theme = VALID_THEMES.includes(themeName) ? themeName : "purple";
     document.body.className = document.body.className
         .split(/\s+/)
         .filter(c => !c.startsWith("theme-"))
@@ -1608,7 +1683,7 @@ function buildPeakBadge(acc) {
     const season = acc.peak_rank_season ? ` (${acc.peak_rank_season})` : "";
 
     const icon = iconUrl
-        ? `<img src="${iconUrl}" class="peak-emblem-icon" alt="${escapeHtml(label)}" onerror="this.style.display='none';">`
+        ? `<img src="${iconUrl}" class="peak-emblem-icon" alt="${escapeHtml(label)}" loading="lazy" decoding="async" onerror="this.style.display='none';">`
         : `<i class="fa-solid fa-trophy text-gold"></i>`;
 
     return `
@@ -1934,29 +2009,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
 
                     ${buildWinrateGraph(acc, v)}
 
-                    <div class="hero-creds-box">
-                        <div class="cred-row">
-                            <span class="cred-label"><i class="fa-solid fa-user"></i> User</span>
-                            <span class="cred-val-wrap">
-                                <span class="cred-text">${escapeHtml(acc.username)}</span>
-                                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.username)}', 'Username copied')" title="Copy Username">
-                                    <i class="fa-regular fa-copy"></i>
-                                </button>
-                            </span>
-                        </div>
-                        <div class="cred-row">
-                            <span class="cred-label"><i class="fa-solid fa-key"></i> Pass</span>
-                            <span class="cred-val-wrap">
-                                <span class="masked" id="pass-mask-${acc.id}">••••••••</span>
-                                <button class="btn-mini-copy" onclick="togglePasswordVisibility(${acc.id}, '${escapeHtml(acc.password)}')" title="Toggle View">
-                                    <i class="fa-regular fa-eye" id="eye-icon-${acc.id}"></i>
-                                </button>
-                                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.password)}', 'Password copied')" title="Copy Password">
-                                    <i class="fa-regular fa-copy"></i>
-                                </button>
-                            </span>
-                        </div>
-                    </div>
+                    <div class="hero-creds-box">${credRows(acc)}</div>
 
                     ${acc.notes ? `<div class="hero-notes" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</div>` : ''}
                 </div>
@@ -2165,29 +2218,7 @@ function renderGridView() {
                 </div>
 
                 <!-- Credentials (Masked) -->
-                <div class="credentials-box">
-                    <div class="cred-row">
-                        <span class="cred-label"><i class="fa-solid fa-user"></i> User</span>
-                        <span class="cred-val-wrap">
-                            <span class="cred-text">${escapeHtml(acc.username)}</span>
-                            <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.username)}', 'Username copied')" title="Copy Username">
-                                <i class="fa-regular fa-copy"></i>
-                            </button>
-                        </span>
-                    </div>
-                    <div class="cred-row">
-                        <span class="cred-label"><i class="fa-solid fa-key"></i> Pass</span>
-                        <span class="cred-val-wrap">
-                            <span class="masked" id="pass-mask-${acc.id}">••••••••</span>
-                            <button class="btn-mini-copy" onclick="togglePasswordVisibility(${acc.id}, '${escapeHtml(acc.password)}')" title="Toggle View">
-                                <i class="fa-regular fa-eye" id="eye-icon-${acc.id}"></i>
-                            </button>
-                            <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.password)}', 'Password copied')" title="Copy Password">
-                                <i class="fa-regular fa-copy"></i>
-                            </button>
-                        </span>
-                    </div>
-                </div>
+                <div class="credentials-box">${credRows(acc)}</div>
 
                 <!-- Last Logged In -->
                 <div class="card-last-login">
@@ -2358,6 +2389,11 @@ async function openMatchesModal(id) {
     const acc = state.accounts.find(a => a.id === id);
     if (!acc) return;
 
+    if (state._matchHistoryAbortController) state._matchHistoryAbortController.abort();
+    const requestToken = ++state._matchHistoryRequestToken;
+    const controller = new AbortController();
+    state._matchHistoryAbortController = controller;
+
     const rankInfo = ValorantAssets.getRank(acc.rank_tier, acc.rank_division);
     const peakInfo = ValorantAssets.getRank(acc.peak_rank_tier, acc.peak_rank_division);
 
@@ -2373,18 +2409,26 @@ async function openMatchesModal(id) {
 
     DOM.matchMetaWinrate.textContent = `${acc.winrate || 0}%`;
 
-    DOM.matchesListContainer.innerHTML = '<div class="no-matches-msg"><i class="fa-solid fa-spinner rotating"></i> Loading match history from Riot servers...</div>';
+    state.currentAccountMatches = [];
+    DOM.matchesListContainer.innerHTML = stateBlock({ kind: "loading", hint: "Loading match history from Riot servers…" });
     openModal(DOM.modalMatches);
 
     try {
-        const res = await fetch(`/api/accounts/${id}/matches`);
+        const res = await fetch(`/api/accounts/${id}/matches`, { signal: controller.signal });
         const data = await res.json();
+        if (requestToken !== state._matchHistoryRequestToken ||
+            state.activeMatchAccId !== id || !DOM.modalMatches.classList.contains("active")) return;
         const matches = data.matches || [];
         state.currentAccountMatches = matches;
         renderMatchHistoryList(matches);
         DOM.matchMetaWinrate.textContent = recentWinrateLabel(matches, acc.winrate);
     } catch (err) {
-        DOM.matchesListContainer.innerHTML = '<div class="no-matches-msg">Failed to load match history.</div>';
+        if (err.name === "AbortError" || requestToken !== state._matchHistoryRequestToken) return;
+        DOM.matchesListContainer.innerHTML = stateBlock({ kind: "error", icon: "fa-triangle-exclamation", title: "Couldn't load match history", hint: "Check the connection and refresh." });
+    } finally {
+        if (state._matchHistoryAbortController === controller) {
+            state._matchHistoryAbortController = null;
+        }
     }
 }
 
@@ -2478,9 +2522,9 @@ function matchCardHtml(m, i, source) {
             <span class="mh-cell mh-agent">
                 <span class="mh-avatar ${agentIcon ? "" : "is-empty"}">
                     ${agentIcon
-                        ? `<img src="${agentIcon}" alt="${escapeHtml(agentName)}" onerror="this.closest('.mh-avatar').classList.add('is-empty'); this.remove();">`
+                        ? `<img src="${agentIcon}" alt="${escapeHtml(agentName)}" loading="lazy" decoding="async" onerror="this.closest('.mh-avatar').classList.add('is-empty'); this.remove();">`
                         : `<i class="fa-solid fa-user"></i>`}
-                    ${agentAsset.roleIcon ? `<img class="mh-role" src="${agentAsset.roleIcon}" alt="" title="${escapeHtml(agentAsset.role)}">` : ""}
+                    ${agentAsset.roleIcon ? `<img class="mh-role" src="${agentAsset.roleIcon}" alt="" loading="lazy" decoding="async" title="${escapeHtml(agentAsset.role)}">` : ""}
                 </span>
                 <span class="mh-agent-text">
                     <span class="mh-agent-name">${escapeHtml(agentName)}</span>
@@ -2518,13 +2562,11 @@ function matchCardHtml(m, i, source) {
 
 function renderMatchHistoryList(matches) {
     if (!matches || matches.length === 0) {
-        DOM.matchesListContainer.innerHTML = `
-            <div class="no-matches-msg">
-                <i class="fa-solid fa-shield-halved" style="font-size: 32px; margin-bottom: 12px; color: var(--accent-purple);"></i>
-                <p>No recent match data available for this account.</p>
-                <p style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Play a game or check if your Riot ID is correct.</p>
-            </div>
-        `;
+        DOM.matchesListContainer.innerHTML = stateBlock({
+            icon: "fa-shield-halved",
+            title: "No recent match data for this account",
+            hint: "Play a game, or check the Riot ID is correct.",
+        });
         return;
     }
 
@@ -2569,7 +2611,7 @@ function profileStatsHtml(profile) {
         <div class="profile-cards-grid">
             <div class="profile-card profile-rank-card current-rank" style="--tier-color: ${currentRank.color}; --tier-glow: ${currentRank.glow};">
                 <div class="rank-emblem-wrap">
-                    <img src="${profile.rank_icon_url || currentRank.icon}" alt="${escapeHtml(currentLabel)}" class="rank-emblem-img">
+                    <img src="${profile.rank_icon_url || currentRank.icon}" alt="${escapeHtml(currentLabel)}" class="rank-emblem-img" loading="lazy" decoding="async">
                 </div>
                 <div class="profile-card-info">
                     <span class="profile-card-label">CURRENT RANK</span>
@@ -2580,7 +2622,7 @@ function profileStatsHtml(profile) {
 
             <div class="profile-card profile-rank-card peak-rank" style="--tier-color: ${peakRank.color}; --tier-glow: ${peakRank.glow};">
                 <div class="rank-emblem-wrap">
-                    <img src="${profile.peak_rank_icon_url || peakRank.icon}" alt="${escapeHtml(peakLabel)}" class="rank-emblem-img">
+                    <img src="${profile.peak_rank_icon_url || peakRank.icon}" alt="${escapeHtml(peakLabel)}" class="rank-emblem-img" loading="lazy" decoding="async">
                 </div>
                 <div class="profile-card-info">
                     <span class="profile-card-label">PEAK RANK</span>
@@ -2625,7 +2667,7 @@ function profileStatsHtml(profile) {
         <div class="matches-list matches-list-compact">
             ${matches.length
                 ? matches.map((m, i) => matchCardHtml(m, i, "profile")).join("")
-                : '<p class="no-matches-msg">No public recent-match data is available for this player.</p>'}
+                : stateBlock({ icon: "fa-clock-rotate-left", title: "No public recent-match data for this player" })}
         </div>`;
 }
 
@@ -2634,18 +2676,27 @@ async function openPlayerProfile(riotId, puuid = "") {
         showToast("This player has not resolved yet. Refresh the match and try again.", "warning");
         return;
     }
+    if (state._profileAbortController) state._profileAbortController.abort();
+    const requestToken = ++state._profileRequestToken;
+    const controller = new AbortController();
+
+    state._profileAbortController = controller;
     DOM.detailModalTitle.textContent = riotId && riotId.includes("#") ? riotId : "Loading player…";
     DOM.detailModalSub.textContent = "Loading profile and match history…";
-    DOM.matchDetailContent.innerHTML = '<div class="no-matches-msg"><i class="fa-solid fa-spinner rotating"></i> Looking up player data…</div>';
+    state.profileMatches = [];
+    DOM.matchDetailContent.innerHTML = stateBlock({ kind: "loading", hint: "Looking up player data…" });
     openModal(DOM.modalMatchDetail);
     try {
         const response = await fetch("/api/players/lookup", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ riot_id: riotId || "", puuid: puuid || "" })
+            body: JSON.stringify({ riot_id: riotId || "", puuid: puuid || "" }),
+            signal: controller.signal
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "Lookup failed");
+        if (requestToken !== state._profileRequestToken ||
+            !DOM.modalMatchDetail.classList.contains("active")) return;
         state.profileMatches = data.profile.match_history || [];
         DOM.detailModalTitle.textContent = data.riot_id;
         DOM.detailModalSub.textContent = data.identity_hidden
@@ -2653,18 +2704,14 @@ async function openPlayerProfile(riotId, puuid = "") {
             : "Player profile · click a match for its full scoreboard";
         DOM.matchDetailContent.innerHTML = profileStatsHtml(data.profile);
     } catch (error) {
+        if (error.name === "AbortError" || requestToken !== state._profileRequestToken) return;
         DOM.detailModalSub.textContent = "Player lookup unavailable";
-        DOM.matchDetailContent.innerHTML = `<div class="no-matches-msg">${escapeHtml(error.message || "Could not load this player.")}</div>`;
+        DOM.matchDetailContent.innerHTML = stateBlock({ kind: "error", icon: "fa-triangle-exclamation", title: "Couldn't load this player", hint: error.message || "" });
+    } finally {
+        if (state._profileAbortController === controller) {
+            state._profileAbortController = null;
+        }
     }
-}
-
-function matchTeamScore(m, teamId, teamIndex) {
-    const summary = (m.teams || []).find(t => String(t.team || "").toLowerCase() === String(teamId || "").toLowerCase());
-    if (summary) return Number(summary.rounds_won || 0);
-    const selfTeam = (m.roster || []).find(p => p.is_self)?.team;
-    if (selfTeam && String(selfTeam).toLowerCase() === String(teamId).toLowerCase()) return Number(m.rounds_won || 0);
-    if (selfTeam) return Number(m.rounds_lost || 0);
-    return teamIndex === 0 ? Number(m.rounds_won || 0) : Number(m.rounds_lost || 0);
 }
 
 function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
@@ -2710,9 +2757,9 @@ function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
                     <span class="detail-score-identity">
                         <div class="detail-score-agent-icon-wrap ${agentIcon ? "" : "is-empty"}">
                             ${agentIcon
-                                ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" onerror="this.closest('.detail-score-agent-icon-wrap').classList.add('is-empty'); this.remove();">`
+                                ? `<img src="${agentIcon}" alt="${escapeHtml(agentAsset.name)}" loading="lazy" decoding="async" onerror="this.closest('.detail-score-agent-icon-wrap').classList.add('is-empty'); this.remove();">`
                                 : `<i class="fa-solid fa-user"></i>`}
-                            ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="detail-score-role-icon" title="${agentAsset.role}">` : ''}
+                            ${agentAsset.roleIcon ? `<img src="${agentAsset.roleIcon}" class="detail-score-role-icon" loading="lazy" decoding="async" title="${agentAsset.role}">` : ''}
                         </div>
                         <span class="detail-score-names">
                             <strong>
@@ -2735,6 +2782,9 @@ function matchTeamHtml(m, teamObj, matchMvpPuuid, teamIndex) {
 }
 
 function openMatchDetail(index, source) {
+    if (state._profileAbortController) state._profileAbortController.abort();
+    state._profileRequestToken++;
+
     const matches = source === "account" ? state.currentAccountMatches : source === "profile" ? state.profileMatches : state.dashboardMatches;
     const m = matches && matches[index];
     if (!m) return;
@@ -2877,7 +2927,7 @@ function openMatchDetail(index, source) {
         </h4>
 
         <div class="detail-scoreboard">
-            ${activeTeams.length ? activeTeams.map((teamObj, i) => matchTeamHtml(m, teamObj, matchMvpPuuid, i)).join("") : '<p class="no-matches-msg">Scoreboard data will appear after this history is refreshed.</p>'}
+            ${activeTeams.length ? activeTeams.map((teamObj, i) => matchTeamHtml(m, teamObj, matchMvpPuuid, i)).join("") : stateBlock({ icon: "fa-table-list", title: "Scoreboard appears after this history is refreshed" })}
         </div>
 
         ${(m.round_results || []).length ? `
@@ -3358,6 +3408,23 @@ function stopLaunchPolling() {
         clearInterval(state._launchPoll);
         state._launchPoll = null;
     }
+    if (state._launchSettleTimer) {
+        clearTimeout(state._launchSettleTimer);
+        state._launchSettleTimer = null;
+    }
+    if (state._launchDashboardTimer) {
+        clearTimeout(state._launchDashboardTimer);
+        state._launchDashboardTimer = null;
+    }
+    if (state._launchWarningTimer) {
+        clearTimeout(state._launchWarningTimer);
+        state._launchWarningTimer = null;
+    }
+    if (state._launchBackgroundRefreshTimer) {
+        clearTimeout(state._launchBackgroundRefreshTimer);
+        state._launchBackgroundRefreshTimer = null;
+    }
+    state._launchPollGeneration++;
 }
 
 /**
@@ -3390,54 +3457,71 @@ async function relaunchVortexElevated() {
  */
 function startLaunchPolling(options = {}) {
     stopLaunchPolling();
-    let settleTimer = null;
+    const generation = state._launchPollGeneration;
 
-    state._launchPoll = setInterval(async () => {
-        try {
-            const p = await (await fetch("/api/login-progress")).json();
-            if (p.username && state.activeLaunchAcc &&
-                p.username.toLowerCase() !== state.activeLaunchAcc.username.toLowerCase()) {
-                return; // a different login took over
-            }
-            renderLaunchProgress(p);
+    state._launchPoll = setInterval(() => {
+        // Login progress is polled with an interval for responsiveness, but a
+        // slow request must not overlap the next tick or duplicate UI work.
+        if (state._launchPollPromise) return;
 
-            if (p.stage === "done" || p.stage === "error") {
-                stopLaunchPolling();
-                showToast(
-                    p.message || (p.stage === "done" ? "Logged in" : "Login failed"),
-                    p.stage === "done" ? "success" : "error"
-                );
-
-                // Riot's checkbox can't be read back, so the only honest signal
-                // is whether it left a persisted login behind. Say so when it
-                // didn't, rather than letting the next launch surprise the user
-                // with a password prompt.
-                if (p.stage === "done" && p.stay_signed_in === false) {
-                    setTimeout(() => showToast(
-                        "Signed in, but Riot didn't keep the session - you'll be asked for the password next time. " +
-                        "Tick \"Stay signed in\" yourself on the next login, or turn the option off in Settings.",
-                        "warning"
-                    ), 900);
+        const task = (async () => {
+            try {
+                const p = await (await fetch("/api/login-progress")).json();
+                if (generation !== state._launchPollGeneration) return;
+                if (p.username && state.activeLaunchAcc &&
+                    p.username.toLowerCase() !== state.activeLaunchAcc.username.toLowerCase()) {
+                    return; // a different login took over
                 }
+                renderLaunchProgress(p);
 
-                if (!settleTimer) {
-                    settleTimer = setTimeout(() => {
+                if (p.stage === "done" || p.stage === "error") {
+                    stopLaunchPolling();
+                    showToast(
+                        p.message || (p.stage === "done" ? "Logged in" : "Login failed"),
+                        p.stage === "done" ? "success" : "error"
+                    );
+
+                    // Riot's checkbox can't be read back, so the only honest signal
+                    // is whether it left a persisted login behind. Say so when it
+                    // didn't, rather than letting the next launch surprise the user
+                    // with a password prompt.
+                    if (p.stage === "done" && p.stay_signed_in === false) {
+                        state._launchWarningTimer = setTimeout(() => {
+                            state._launchWarningTimer = null;
+                            showToast(
+                                "Signed in, but Riot didn't keep the session - you'll be asked for the password next time. " +
+                                "Tick \"Stay signed in\" yourself on the next login, or turn the option off in Settings.",
+                                "warning"
+                            );
+                        }, 900);
+                    }
+
+                    state._launchSettleTimer = setTimeout(() => {
+                        state._launchSettleTimer = null;
                         fetchAccounts();
                         fetchStatsSummary();
                         scheduleLivePoll(0);
                     }, 1500);
-                }
 
-                // Signing in is exactly when the live dashboard becomes
-                // useful, so it opens itself once the session is up.
-                if (p.stage === "done" && options.openDashboardWhenDone) {
-                    setTimeout(() => {
-                        closeModal(DOM.modalLaunch);
-                        openDashboard();
-                    }, 1800);
+                    // Signing in is exactly when the live dashboard becomes
+                    // useful, so it opens itself once the session is up.
+                    if (p.stage === "done" && options.openDashboardWhenDone) {
+                        state._launchDashboardTimer = setTimeout(() => {
+                            state._launchDashboardTimer = null;
+                            closeModal(DOM.modalLaunch);
+                            openDashboard();
+                        }, 1800);
+                    }
                 }
-            }
-        } catch (e) { /* keep polling */ }
+            } catch (e) { /* keep polling */ }
+        })();
+
+        state._launchPollPromise = task;
+        task.then(() => {
+            if (state._launchPollPromise === task) state._launchPollPromise = null;
+        }, () => {
+            if (state._launchPollPromise === task) state._launchPollPromise = null;
+        });
     }, 700);
 }
 
@@ -3484,26 +3568,21 @@ async function launchAccount(id, inPlace = false) {
     startLaunchPolling({ openDashboardWhenDone: true });
 
     // Safety: refresh account list a few seconds in regardless.
-    setTimeout(() => { fetchAccounts(); fetchStatsSummary(); }, 6000);
-}
-
-function openTrackerUrl(displayName) {
-    const clean = displayName.replace("#", "%23");
-    const url = `https://tracker.gg/valorant/profile/riot/${clean}/overview`;
-    window.open(url, "_blank");
+    state._launchBackgroundRefreshTimer = setTimeout(() => {
+        state._launchBackgroundRefreshTimer = null;
+        fetchAccounts();
+        fetchStatsSummary();
+    }, 6000);
 }
 
 // ==========================================================================
 // SETTINGS & BACKUP
 // ==========================================================================
 
-// The three telemetry keys move together behind one user-facing toggle. Any
-// one of them being on is treated as the feature being on (covers existing
-// users who had only the Overwolf provider enabled before the merge).
+// This established database key is the one authoritative user-facing Live
+// Match switch. The backend migrates and mirrors historic provider keys.
 function liveMatchFeaturesOn() {
-    return state.settings.live_hud_enabled === "1"
-        || state.settings.overwolf_enabled === "1"
-        || state.settings.valorant_tracker_enabled === "1";
+    return state.settings.live_hud_enabled === "1";
 }
 
 function openSettingsModal() {
@@ -3547,17 +3626,14 @@ async function openLoginLog() {
 }
 
 async function saveSettings() {
-    // One user-facing toggle drives all three telemetry providers. Enabling it
-    // turns on the aim HUD plus the Overwolf feed and keeps the Valorant
-    // Tracker log as an internal fallback; disabling it turns all three off.
+    // The backend owns the provider mirrors and lifecycle transition; this
+    // client sends exactly one authoritative Live Match value.
     const liveMatchOn = !!DOM.settingsLiveMatchEnabled?.checked;
     const payload = {
         settings: {
             riot_client_path: DOM.settingsClientPath ? DOM.settingsClientPath.value.trim() : (state.settings.riot_client_path || ""),
             riot_api_key: DOM.settingsApiKey ? DOM.settingsApiKey.value.trim() : (state.settings.riot_api_key || ""),
             live_hud_enabled: liveMatchOn ? "1" : "0",
-            overwolf_enabled: liveMatchOn ? "1" : "0",
-            valorant_tracker_enabled: liveMatchOn ? "1" : "0",
             stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
             auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
@@ -3722,16 +3798,79 @@ function togglePasswordVisibility(id, password) {
     }
 }
 
+// Modal accessibility: remember what had focus, trap Tab inside the sheet while
+// it is open, lock body scroll, and restore focus on close.
+let _modalReturnFocus = null;
+const _modalTrap = new WeakMap();
+
+const _FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), '
+    + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function _visibleFocusable(el) {
+    return Array.from(el.querySelectorAll(_FOCUSABLE)).filter(n => n.offsetParent !== null);
+}
+
 function openModal(el) {
-    if (el) el.classList.add("active");
+    if (!el) return;
+    if (!el.classList.contains("active")) {
+        _modalReturnFocus = document.activeElement;
+    }
+    el.classList.add("active");
+    document.body.classList.add("modal-open");
+
+    if (!_modalTrap.has(el)) {
+        const handler = (e) => {
+            if (e.key !== "Tab") return;
+            const f = _visibleFocusable(el);
+            if (!f.length) return;
+            const first = f[0], last = f[f.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        };
+        el.addEventListener("keydown", handler);
+        _modalTrap.set(el, handler);
+    }
+
+    // Move focus into the sheet without landing on the close button: prefer an
+    // explicit autofocus, else the sheet container itself.
+    const sheet = el.querySelector(".modal-card") || el;
+    const target = el.querySelector("[autofocus]");
+    setTimeout(() => {
+        if (target) { target.focus(); return; }
+        if (!sheet.hasAttribute("tabindex")) sheet.setAttribute("tabindex", "-1");
+        sheet.focus();
+    }, 40);
 }
 
 function closeModal(el) {
-    if (el) el.classList.remove("active");
+    if (!el) return;
+    el.classList.remove("active");
+
+    if (!document.querySelector(".modal-overlay.active")) {
+        document.body.classList.remove("modal-open");
+        if (_modalReturnFocus && typeof _modalReturnFocus.focus === "function") {
+            _modalReturnFocus.focus();
+        }
+        _modalReturnFocus = null;
+    }
+
+    if (el === DOM.modalMatches) {
+        state._matchHistoryRequestToken++;
+        if (state._matchHistoryAbortController) {
+            state._matchHistoryAbortController.abort();
+            state._matchHistoryAbortController = null;
+        }
+    } else if (el === DOM.modalMatchDetail) {
+        state._profileRequestToken++;
+        if (state._profileAbortController) {
+            state._profileAbortController.abort();
+            state._profileAbortController = null;
+        }
+    }
 }
 
 function closeAllModals() {
-    document.querySelectorAll(".modal-overlay").forEach(m => m.classList.remove("active"));
+    document.querySelectorAll(".modal-overlay").forEach(closeModal);
 }
 
 const TOAST_ICONS = {
@@ -3776,6 +3915,52 @@ function escapeHtml(str) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+/**
+ * The user + password rows shared by the grid card and the hero card. The
+ * caller wraps them in its own box (`.credentials-box` / `.hero-creds-box`).
+ */
+function credRows(acc) {
+    return `
+        <div class="cred-row">
+            <span class="cred-label"><i class="fa-solid fa-user"></i> User</span>
+            <span class="cred-val-wrap">
+                <span class="cred-text">${escapeHtml(acc.username)}</span>
+                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.username)}', 'Username copied')" title="Copy Username">
+                    <i class="fa-regular fa-copy"></i>
+                </button>
+            </span>
+        </div>
+        <div class="cred-row">
+            <span class="cred-label"><i class="fa-solid fa-key"></i> Pass</span>
+            <span class="cred-val-wrap">
+                <span class="masked" id="pass-mask-${acc.id}">••••••••</span>
+                <button class="btn-mini-copy" onclick="togglePasswordVisibility(${acc.id}, '${escapeHtml(acc.password)}')" title="Toggle View">
+                    <i class="fa-regular fa-eye" id="eye-icon-${acc.id}"></i>
+                </button>
+                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.password)}', 'Password copied')" title="Copy Password">
+                    <i class="fa-regular fa-copy"></i>
+                </button>
+            </span>
+        </div>`;
+}
+
+/**
+ * The one shared loading / empty / error block. `kind` is "loading" | "empty"
+ * | "error"; `icon` is a FontAwesome class for the non-loading kinds.
+ */
+function stateBlock({ kind = "empty", icon, title, hint } = {}) {
+    const cls = kind === "error" ? "state-block state-block--error"
+        : kind === "loading" ? "state-block state-block--loading"
+        : "state-block";
+    const glyph = kind === "loading"
+        ? '<span class="spinner"></span>'
+        : `<i class="fa-solid ${icon || "fa-inbox"} state-block__icon"></i>`;
+    return `<div class="${cls}">${glyph}`
+        + (title ? `<p class="state-block__title">${escapeHtml(title)}</p>` : "")
+        + (hint ? `<p class="state-block__hint">${escapeHtml(hint)}</p>` : "")
+        + `</div>`;
 }
 
 function formatTimeAgo(isoString) {
@@ -4035,7 +4220,6 @@ async function pollLiveSessionOnce() {
         await fetchBannedAccounts(true);
     }
 
-    renderSessionBar(live);
     updateLiveHeroCardState(live);
 
     if (state.dashboardOpen) {
@@ -4068,44 +4252,6 @@ function sessionStateInfo(live) {
     if (!live || !live.available) return SESSION_STATES.OFFLINE;
     if (!live.valorant_running) return SESSION_STATES.OFFLINE;
     return SESSION_STATES[live.state] || SESSION_STATES.MENUS;
-}
-
-function renderSessionBar(live) {
-    if (!DOM.sessionBar) return;
-
-    if (!live || !live.available) {
-        DOM.sessionBar.style.display = "none";
-        return;
-    }
-
-    DOM.sessionBar.style.display = "flex";
-    DOM.sessionName.textContent = live.display_name || live.username || "Signed in";
-
-    const bits = [];
-    if (live.level) bits.push(`Level ${live.level}`);
-    if (live.rank_label) bits.push(live.rank_label);
-    if (live.region) bits.push(live.region);
-    if (live.party && live.party.size > 1) bits.push(`Party of ${live.party.size}`);
-    DOM.sessionMeta.textContent = bits.join(" · ") || "Signed in to Riot Client";
-
-    if (DOM.sessionRankImg) {
-        if (live.rank_icon_url) {
-            DOM.sessionRankImg.src = live.rank_icon_url;
-            DOM.sessionRankImg.style.display = "block";
-        } else {
-            DOM.sessionRankImg.style.display = "none";
-        }
-    }
-
-    const info = sessionStateInfo(live);
-    if (DOM.sessionStateChip) {
-        DOM.sessionStateChip.className = `session-state-chip ${info.cls}`;
-        DOM.sessionStateChip.textContent = live.valorant_running ? info.label : "VALORANT closed";
-    }
-
-    // The Play buttons are driven together by renderPlayButton, which also
-    // knows about a launch that's still in flight.
-    renderPlayButton(live);
 }
 
 async function playAccount(id) {
@@ -4242,14 +4388,16 @@ function highlightAccount(id) {
 // panel is pinned on top and slid off while the incoming one slides in. The
 // returned promise resolves once the slide has finished. `back` mirrors the
 // direction so leaving feels like the reverse of entering.
-function runViewSlide(swap, { back = false } = {}) {
+function runViewSlide(swap, { back = false, onStart = null } = {}) {
     const swapEl = DOM.viewSwap;
     const leaving = back ? DOM.dashView : DOM.accountsView;
     const entering = back ? DOM.accountsView : DOM.dashView;
 
     // No container or reduced motion: skip straight to the swapped state.
     if (!swapEl || !leaving || !entering || PREFERS_REDUCED_MOTION) {
-        return Promise.resolve(swap());
+        const result = swap();
+        if (onStart) onStart();
+        return Promise.resolve(result);
     }
 
     // Pin the slot to its current height and hold the outgoing panel in place
@@ -4270,12 +4418,28 @@ function runViewSlide(swap, { back = false } = {}) {
             swapEl.style.transition = "height var(--dur-4) var(--ease-out)";
             swapEl.style.height = endH + "px";
             swapEl.classList.add(back ? "slide-back" : "slide-forward");
+
+            // Let the transform animation get its first frame before doing a
+            // potentially large dashboard render. This removes the forward
+            // navigation pause while preserving the height transition.
+            if (onStart) {
+                requestAnimationFrame(() => {
+                    onStart();
+                    const renderedHeight = entering.offsetHeight;
+                    if (renderedHeight !== endH) swapEl.style.height = renderedHeight + "px";
+                });
+            }
         });
 
         let settled = false;
+        let finishTimer = null;
         const finish = () => {
             if (settled) return;
             settled = true;
+            if (finishTimer) {
+                clearTimeout(finishTimer);
+                finishTimer = null;
+            }
             swapEl.classList.remove("is-sliding", "slide-back", "slide-forward");
             leaving.classList.remove("view-leaving");
             entering.classList.remove("view-entering");
@@ -4294,7 +4458,7 @@ function runViewSlide(swap, { back = false } = {}) {
         };
         entering.addEventListener("animationend", onEnd);
         // Safety net in case animationend never lands (tab hidden mid-slide).
-        window.setTimeout(finish, 900);
+        finishTimer = window.setTimeout(finish, 900);
     });
 }
 
@@ -4313,11 +4477,14 @@ async function openDashboard() {
 
         moveTabGlide();
 
-        if (state.live) renderDashboard(state.live);
         scheduleLivePoll(0);
         // The roster collapses out from under the page, so anchor back to the
         // top rather than leaving the view stranded mid-document.
         window.scrollTo({ top: 0, behavior: "auto" });
+    }, {
+        onStart: () => {
+            if (state.dashboardOpen && state.live) renderDashboard(state.live);
+        }
     });
 
     // The incoming view is now mounted and the slide has been scheduled.
@@ -4899,12 +5066,12 @@ function renderMeCard(match) {
     const share = n => shots ? Math.round((n / shots) * 100) : 0;
 
     const agentHtml = me.agent_icon
-        ? '<img src="' + me.agent_icon + '" class="dash-me-agent" alt="' +
+        ? '<img src="' + me.agent_icon + '" class="dash-me-agent" loading="lazy" decoding="async" alt="' +
           escapeHtml(me.agent || "") + '" onerror="this.style.visibility=\'hidden\';">'
         : '<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>';
 
     const rankHtml = me.tier_icon
-        ? '<img src="' + me.tier_icon + '" class="dash-me-rank" alt="" onerror="this.style.display=\'none\';">'
+        ? '<img src="' + me.tier_icon + '" class="dash-me-rank" loading="lazy" decoding="async" alt="" onerror="this.style.display=\'none\';">'
         : "";
 
     // GEP combat is real live data, so don't waste space on a warning banner.
@@ -4983,7 +5150,7 @@ function renderRecap(live, hasMatch) {
             </div>
             <div class="dash-recap-score">${last.rounds_won} <span>-</span> ${last.rounds_lost}</div>
             <div class="dash-recap-sub">
-                ${last.agent_icon ? `<img src="${last.agent_icon}" alt="" onerror="this.style.display='none';">` : ""}
+                ${last.agent_icon ? `<img src="${last.agent_icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
                 ${escapeHtml(last.map || "")} · ${escapeHtml(last.mode || "")}
             </div>
             <div class="dash-recap-stats">
@@ -5107,7 +5274,7 @@ function renderRoster(el, players) {
             <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'), decodeURIComponent('${encodeURIComponent(p.puuid || "")}'))" title="Check this player's match history">
                 <div class="dash-player-lead">
                     ${p.agent_icon
-                        ? `<img src="${p.agent_icon}" class="dash-player-agent" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
+                        ? `<img src="${p.agent_icon}" class="dash-player-agent" loading="lazy" decoding="async" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
                         : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
                     ${p.locked ? `<span class="dash-player-locked" title="Locked in"><i class="fa-solid fa-lock"></i></span>` : ""}
                 </div>
@@ -5122,7 +5289,7 @@ function renderRoster(el, players) {
                         <span>${escapeHtml(p.agent || "Picking…")}</span>
                         ${p.level ? `<span class="dash-player-lvl">LV ${p.level}</span>` : ""}
                         ${hasPeak ? `<span class="dash-player-peak" title="Peak rank">
-                            <img src="${p.peak_tier_icon || DEFAULT_UNRANKED_ICON}" alt="" onerror="this.style.display='none';">
+                            <img src="${p.peak_tier_icon || DEFAULT_UNRANKED_ICON}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">
                             ${escapeHtml(p.peak_tier_label || "")}</span>` : ""}
                     </div>
                     <div class="dash-player-stats-row">
@@ -5131,7 +5298,7 @@ function renderRoster(el, players) {
                 </div>
 
                 <div class="dash-player-rank" title="${escapeHtml(tierLabel)}${p.rr ? ` (${p.rr} RR)` : ""}">
-                    <img src="${tierIcon}" alt="${escapeHtml(tierLabel)}" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
+                    <img src="${tierIcon}" alt="${escapeHtml(tierLabel)}" loading="lazy" decoding="async" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
                     <span class="dash-player-rr">${hasRank && p.rr ? `${p.rr} RR` : (hasRank ? "" : "Unranked")}</span>
                 </div>
             </button>
@@ -5311,9 +5478,6 @@ function renderModeGrid() {
         </button>
     `).join("");
 
-    DOM.dashModeGrid.querySelectorAll(".dash-mode-btn").forEach(btn => {
-        btn.addEventListener("click", () => changeMode(btn.dataset.queue));
-    });
 }
 
 async function changeMode(queueId) {
@@ -5419,9 +5583,6 @@ function renderAgentGrid() {
         </button>`;
     }).join("");
 
-    DOM.dashAgentGrid.querySelectorAll(".dash-agent-btn:not(.locked)").forEach(btn => {
-        btn.addEventListener("click", () => selectAgent(btn.dataset.agent));
-    });
 }
 
 /**
@@ -5604,26 +5765,51 @@ const STATS_REFRESH = 30000;
 async function refreshPlayerStats(force = false) {
     clearTimeout(state._statsTimer);
 
+    // Tab clicks and the live session can request the same expensive stats
+    // build at once. Share the in-flight request instead of racing duplicate
+    // backend work and repainting both panels repeatedly.
+    if (state._statsPromise) return state._statsPromise;
+
     if (state._statsDirty) {
         force = true;
         state._statsDirty = false;
     }
 
+    const task = (async () => {
+        try {
+            const res = await fetch(`/api/live/stats${force ? "?force=true" : ""}`);
+            state.playerStats = await res.json();
+        } catch (err) {
+            state.playerStats = { available: false, message: "Couldn't reach the app's backend." };
+        }
+
+        let renderSignature;
+        try {
+            renderSignature = JSON.stringify(state.playerStats);
+        } catch (err) {
+            // A non-JSON payload is still a new response and must repaint the
+            // fallback instead of accidentally matching the initial null value.
+            renderSignature = `unserializable-${Date.now()}`;
+        }
+        if (renderSignature !== state._statsRenderSignature) {
+            state._statsRenderSignature = renderSignature;
+            renderPlayerStats();
+            renderInventory();
+        }
+
+        // Keep polling while a stats tab is on screen - the first response is
+        // usually still building in the background.
+        if (state.dashboardOpen && (state.dashTab === "stats" || state.dashTab === "inventory")) {
+            const wait = state.playerStats && state.playerStats.loading ? 3000 : STATS_REFRESH;
+            state._statsTimer = setTimeout(() => refreshPlayerStats(), wait);
+        }
+    })();
+
+    state._statsPromise = task;
     try {
-        const res = await fetch(`/api/live/stats${force ? "?force=true" : ""}`);
-        state.playerStats = await res.json();
-    } catch (err) {
-        state.playerStats = { available: false, message: "Couldn't reach the app's backend." };
-    }
-
-    renderPlayerStats();
-    renderInventory();
-
-    // Keep polling while a stats tab is on screen - the first response is
-    // usually still building in the background.
-    if (state.dashboardOpen && (state.dashTab === "stats" || state.dashTab === "inventory")) {
-        const wait = state.playerStats && state.playerStats.loading ? 3000 : STATS_REFRESH;
-        state._statsTimer = setTimeout(() => refreshPlayerStats(), wait);
+        return await task;
+    } finally {
+        if (state._statsPromise === task) state._statsPromise = null;
     }
 }
 
@@ -5661,7 +5847,7 @@ function renderPlayerStats() {
     DOM.dashStatsBody.innerHTML = `
         <div class="stat-hero">
             <div class="stat-hero-rank">
-                <img src="${rank.icon || DEFAULT_TIER_ICON}" alt="${escapeHtml(rank.label || "Unranked")}"
+                <img src="${rank.icon || DEFAULT_TIER_ICON}" alt="${escapeHtml(rank.label || "Unranked")}" loading="lazy" decoding="async"
                      onerror="this.style.visibility='hidden';">
                 <div class="stat-hero-label">
                     <strong>${escapeHtml(rank.label || "Unranked")}</strong>
@@ -5682,7 +5868,7 @@ function renderPlayerStats() {
             </div>
 
             <div class="stat-hero-peak">
-                <img src="${peak.icon || DEFAULT_TIER_ICON}" alt="Peak rank" onerror="this.style.display='none';">
+                <img src="${peak.icon || DEFAULT_TIER_ICON}" alt="Peak rank" loading="lazy" decoding="async" onerror="this.style.display='none';">
                 <div>
                     <small>Peak</small>
                     <b>${escapeHtml(peak.label || "Unranked")}${peak.season ? ` · ${escapeHtml(peak.season)}` : ""}</b>
@@ -5732,7 +5918,7 @@ function renderPlayerStats() {
             <div class="stat-agents">
                 ${s.top_agents.map(a => `
                     <div class="stat-agent-row">
-                        <img src="${a.icon}" alt="${escapeHtml(a.name)}" onerror="this.style.visibility='hidden';">
+                        <img src="${a.icon}" alt="${escapeHtml(a.name)}" loading="lazy" decoding="async" onerror="this.style.visibility='hidden';">
                         <div class="stat-agent-meta">
                             <strong>${escapeHtml(a.name)}</strong>
                             <div class="stat-agent-bar"><span style="width:${a.winrate}%"></span></div>
@@ -5832,10 +6018,10 @@ function renderInventory() {
                     <div class="inv-skin" style="--skin-tint:${g.tier_color ? g.tier_color + "33" : "transparent"}">
                         <div class="inv-skin-top">
                             <span class="inv-skin-weapon">${escapeHtml(g.weapon)}</span>
-                            ${g.tier_icon ? `<img class="inv-skin-tier" src="${g.tier_icon}" alt="${escapeHtml(g.tier)}" title="${escapeHtml(g.tier)}" onerror="this.style.display='none';">` : ""}
+                        ${g.tier_icon ? `<img class="inv-skin-tier" src="${g.tier_icon}" alt="${escapeHtml(g.tier)}" title="${escapeHtml(g.tier)}" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
                         </div>
                         <span class="inv-skin-name ${g.is_default ? "is-default" : ""}">${escapeHtml(g.skin)}</span>
-                        ${g.icon ? `<img class="inv-skin-art" src="${g.icon}" alt="" onerror="this.style.display='none';">` : ""}
+                        ${g.icon ? `<img class="inv-skin-art" src="${g.icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
                     </div>
                 `).join("")}
             </div>` : '<p class="dash-roster-empty">Loadout unavailable - open VALORANT to the menus.</p>'}
@@ -5846,14 +6032,6 @@ function renderInventory() {
 // ==========================================================================
 
 function initLiveEventListeners() {
-    if (DOM.btnSessionPlay) {
-        DOM.btnSessionPlay.addEventListener("click", () => {
-            if (state.activeAccountId) playAccount(state.activeAccountId);
-            else forceLaunchValorant();
-        });
-    }
-
-    if (DOM.btnOpenDashboard) DOM.btnOpenDashboard.addEventListener("click", openDashboard);
     if (DOM.dashClose) DOM.dashClose.addEventListener("click", closeDashboard);
     if (DOM.btnDashPlay) DOM.btnDashPlay.addEventListener("click", forceLaunchValorant);
     if (DOM.btnSidePlay) DOM.btnSidePlay.addEventListener("click", forceLaunchValorant);
@@ -5870,6 +6048,14 @@ function initLiveEventListeners() {
     if (DOM.btnInstalockToggle) DOM.btnInstalockToggle.addEventListener("click", toggleInstalock);
     if (DOM.btnLockNow) DOM.btnLockNow.addEventListener("click", lockAgentNow);
     if (DOM.dashAgentSearch) DOM.dashAgentSearch.addEventListener("input", renderAgentGrid);
+    if (DOM.dashModeGrid) DOM.dashModeGrid.addEventListener("click", (e) => {
+        const btn = e.target.closest(".dash-mode-btn");
+        if (btn && !btn.disabled) changeMode(btn.dataset.queue);
+    });
+    if (DOM.dashAgentGrid) DOM.dashAgentGrid.addEventListener("click", (e) => {
+        const btn = e.target.closest(".dash-agent-btn:not(.locked)");
+        if (btn && !btn.disabled) selectAgent(btn.dataset.agent);
+    });
 
     // The glide pill is measured from layout, so it has to re-settle when the
     // panel changes width.
