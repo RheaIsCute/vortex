@@ -75,30 +75,6 @@
                 </span>
             </div>
 
-            <!-- Global Stats Bar -->
-            <div class="stats-overview">
-                <div class="stat-pill" title="Total Accounts">
-                    <i class="fa-solid fa-users text-purple"></i>
-                    <span class="stat-value" id="stat-total">0</span>
-                    <span class="stat-label">Total</span>
-                </div>
-                <div class="stat-pill" title="Main Accounts">
-                    <i class="fa-solid fa-star text-gold"></i>
-                    <span class="stat-value" id="stat-mains">0</span>
-                    <span class="stat-label">Mains</span>
-                </div>
-                <div class="stat-pill" title="Ranked Accounts (Level 20+)">
-                    <i class="fa-solid fa-shield-halved text-magenta"></i>
-                    <span class="stat-value" id="stat-ranked">0</span>
-                    <span class="stat-label">Ranked (20+)</span>
-                </div>
-                <div class="stat-pill" title="Unrated Accounts (Level < 20)">
-                    <i class="fa-solid fa-circle-notch text-cyan"></i>
-                    <span class="stat-value" id="stat-unrated">0</span>
-                    <span class="stat-label">Unrated (&lt;20)</span>
-                </div>
-            </div>
-
             <!-- Header Action Buttons -->
             <div class="header-actions" id="header-actions">
                 <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status">
@@ -352,20 +328,37 @@
         <!-- ACCOUNT ROSTER — collapses out of the way while the dashboard is open -->
         <div class="accounts-view" id="accounts-view">
 
-        <!-- CONTROLS & FILTER BAR -->
-        <section class="controls-bar">
-            <!-- Search Input -->
+        <!-- WORKSPACE STATUS STRIP — roster totals, and a one-click filter -->
+        <section class="status-strip" id="status-strip" aria-label="Account overview">
+            <button type="button" class="status-tile is-active" id="status-total" data-tag="ALL" title="Show every account">
+                <span class="status-tile__label">Total</span>
+                <span class="status-tile__value" id="stat-total">0</span>
+            </button>
+            <button type="button" class="status-tile" id="status-mains" data-tag="Main" title="Show main accounts">
+                <span class="status-tile__label">Mains</span>
+                <span class="status-tile__value" id="stat-mains">0</span>
+            </button>
+            <button type="button" class="status-tile" id="status-ranked" data-tag="Ranked" title="Show ranked accounts (level 20+)">
+                <span class="status-tile__label">Ranked</span>
+                <span class="status-tile__value" id="stat-ranked">0</span>
+            </button>
+            <button type="button" class="status-tile" id="status-unrated" data-tag="Unrated" title="Show unrated accounts (below level 20)">
+                <span class="status-tile__label">Unrated</span>
+                <span class="status-tile__value" id="stat-unrated">0</span>
+            </button>
+        </section>
+
+        <!-- ROSTER TOOLBAR — search, result count, filters, view switch -->
+        <section class="controls-bar" aria-label="Roster controls">
             <div class="search-wrapper">
                 <i class="fa-solid fa-magnifying-glass search-icon"></i>
                 <input type="text" id="search-input" placeholder="Search accounts, Riot IDs, notes..." autocomplete="off" spellcheck="false">
                 <button class="search-clear-btn" id="search-clear" title="Clear search"><i class="fa-solid fa-xmark"></i></button>
             </div>
 
-            <!-- Secondary Controls -->
             <div class="secondary-controls">
                 <span class="result-count" id="result-count"><strong>0</strong> shown</span>
 
-                <!-- Consolidated Filters popover -->
                 <div class="filter-control" id="filter-control">
                     <button type="button" class="btn-filters" id="btn-filters" aria-haspopup="true" aria-expanded="false">
                         <i class="fa-solid fa-sliders filter-icon"></i>
@@ -424,12 +417,11 @@
                     </div>
                 </div>
 
-                <!-- View Switcher -->
                 <div class="view-switcher" id="view-switcher" data-view="grid">
-                    <button class="view-btn active" id="view-grid-btn" title="Grid View">
-                        <i class="fa-solid fa-grip"></i>
+                    <button class="view-btn active" id="view-grid-btn" title="Roster rows">
+                        <i class="fa-solid fa-list-ul"></i>
                     </button>
-                    <button class="view-btn" id="view-table-btn" title="Table View">
+                    <button class="view-btn" id="view-table-btn" title="Table view">
                         <i class="fa-solid fa-table-list"></i>
                     </button>
                 </div>
@@ -440,16 +432,16 @@
         <main class="accounts-container" id="accounts-container">
             <!-- First-load Skeleton -->
             <div class="skeleton-grid" id="skeleton-grid">
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
-                <div class="skeleton-card"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
             </div>
 
             <!-- Grid View -->
-            <div class="accounts-grid" id="accounts-grid" style="display: none;"></div>
+            <div class="accounts-grid" id="accounts-grid" role="list" style="display: none;"></div>
 
             <!-- Table View -->
             <div class="accounts-table-wrapper" id="accounts-table-wrapper" style="display: none;">

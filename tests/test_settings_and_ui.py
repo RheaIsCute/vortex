@@ -167,3 +167,54 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         # 6. Missing combat data shows a dash, not a misleading "0 / 0 / 0".
         self.assertIn("const hasCombat =", app_js)
         self.assertIn('"—"', app_js)
+
+    def test_roster_workspace_layout(self):
+        """The desktop workspace is a status strip + dense roster rows."""
+        root = Path(__file__).parent.parent
+        index_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        # 1. Status strip owns the roster totals and doubles as a tag filter.
+        self.assertIn('id="status-strip"', index_html)
+        for tile in ("status-total", "status-mains", "status-ranked", "status-unrated"):
+            self.assertIn('id="%s"' % tile, index_html)
+        # The stat ids the summary endpoint writes into must survive the move.
+        for stat in ("stat-total", "stat-mains", "stat-ranked", "stat-unrated"):
+            self.assertIn('id="%s"' % stat, index_html)
+        self.assertIn("function initStatusStrip(", app_js)
+        # The strip writes the same filter state the popover owns - one source.
+        self.assertIn("state.currentTag = (state.currentTag === tag)", app_js)
+        self.assertIn("syncStatusStrip();", app_js)
+
+        # 2. The roster renders one row per account, not a card wall.
+        self.assertIn("account-card roster-row", app_js)
+        self.assertIn(".account-card.roster-row {", styles_css)
+        row_block = styles_css.split(".account-card.roster-row {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("display: grid", row_block)
+        self.assertIn("grid-template-columns:", row_block)
+        # The list itself is a flex column; app.js must not re-impose a grid.
+        self.assertIn('DOM.accountsGrid.style.display = "flex"', app_js)
+        self.assertNotIn('DOM.accountsGrid.style.display = "grid"', app_js)
+
+        # 3. Credentials stay out of the resting layout until revealed.
+        self.assertIn("function toggleRosterCreds(", app_js)
+        self.assertIn('class="roster-creds"', app_js)
+        self.assertIn("hidden>${credRows(acc)}", app_js)
+        # A bare display:flex would beat [hidden]; the drawer must opt out.
+        self.assertIn(".roster-creds[hidden] { display: none; }", styles_css)
+
+        # 4. Every retired grid-card class is gone from both files.
+        for dead in ("card-badges", "card-profile", "card-stats-row",
+                     "card-btn-group", "card-last-login", "winrate-bar-track",
+                     "winrate-bar-fill", "winrate-meta", "btn-launch-card",
+                     "level-bubble", "rank-tier-title", "stats-overview",
+                     "skeleton-card"):
+            self.assertNotIn(dead, app_js, "%s still in app.js" % dead)
+            self.assertNotIn(dead, styles_css, "%s still in styles.css" % dead)
+
+        # 5. The row keeps the launch/check/play verbs and the check spinner.
+        self.assertIn("roster-act is-play", app_js)
+        self.assertIn("roster-act is-check", app_js)
+        self.assertIn('id="btn-check-${acc.id}"', app_js)
+        self.assertIn(".roster-act.is-check.is-checking", styles_css)

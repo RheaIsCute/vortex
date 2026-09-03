@@ -515,79 +515,11 @@ body.effects-paused .scroll-top-btn {
 }
 
 /* --- Stat pills --- */
-.stats-overview {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--sp-3);
-}
-
-.stat-pill {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-    gap: var(--sp-3);
-    padding: var(--sp-2) var(--sp-6);
-    background: var(--surface-1);
-    border: 1px solid var(--stroke-1);
-    border-radius: var(--radius-full);
-    font-size: var(--fs-base);
-    position: relative;
-    overflow: hidden;
-    cursor: default;
-    transition: transform var(--dur-2) var(--ease-spring),
-                background var(--dur-2) ease,
-                border-color var(--dur-2) ease,
-                box-shadow var(--dur-2) ease;
-}
-
-.stat-pill::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at 50% 140%, rgba(var(--a-rgb), 0.3), transparent 70%);
-    opacity: 0;
-    transition: opacity var(--dur-3) ease;
-}
-
-.stat-pill:hover {
-    background: var(--surface-2);
-    border-color: var(--edge);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-sm);
-}
-
-.stat-pill:hover::after { opacity: 1; }
-
-.stat-pill i {
-    font-size: 12px;
-    position: relative;
-    z-index: 1;
-}
-
-.stat-value {
-    font-weight: 800;
-    font-family: var(--font-mono);
-    font-size: 14px;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
-    position: relative;
-    z-index: 1;
-}
-
-.stat-label {
-    color: var(--text-muted);
-    font-size: 12px;
-    position: relative;
-    z-index: 1;
-}
-
 .text-purple { color: var(--a-soft); }
 .text-gold { color: var(--gold); }
 .text-cyan { color: var(--info); }
 .text-magenta { color: var(--accent-magenta); }
 .text-red { color: var(--danger); }
-.text-green { color: var(--ok); }
 .text-dim { color: var(--text-dim); }
 .text-right { text-align: right; }
 .text-center { text-align: center; }
@@ -738,13 +670,6 @@ body.effects-paused .scroll-top-btn {
 
 /* Destructive icon buttons resolve to red on hover instead of the accent. */
 .btn-icon.is-danger:hover,
-.btn-danger-hover:hover {
-    color: #fff;
-    border-color: rgba(var(--danger-rgb), 0.55);
-    background: rgba(var(--danger-rgb), 0.16);
-    box-shadow: 0 0 18px -6px rgba(var(--danger-rgb), 0.8);
-}
-
 .btn-sm {
     padding: 6px 12px;
     font-size: 12px;
@@ -755,27 +680,6 @@ body.effects-paused .scroll-top-btn {
     width: 32px;
     height: 32px;
     font-size: 12.5px;
-}
-
-.btn-text-action {
-    background: var(--tint-2);
-    color: var(--a-soft);
-    border: 1px solid var(--edge);
-    border-radius: var(--radius-xs);
-    font-size: 11px;
-    font-weight: 700;
-    padding: 3px 8px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    transition: var(--transition);
-}
-
-.btn-text-action:hover {
-    background: var(--grad-primary);
-    color: #fff;
-    border-color: transparent;
 }
 
 /* Header icon button carrying a count badge (e.g. Banned Accounts).
@@ -851,14 +755,12 @@ body.effects-paused .scroll-top-btn {
     animation: check-loader-spin 0.72s linear infinite;
 }
 
-.btn-check-card.is-checking > i,
-.btn-launch-card.is-checking > i,
+.roster-act.is-check.is-checking > i,
 .btn-icon.is-checking > i {
     display: none;
 }
 
-.btn-check-card.is-checking .account-check-loader,
-.btn-launch-card.is-checking .account-check-loader,
+.roster-act.is-check.is-checking .account-check-loader,
 .btn-icon.is-checking .account-check-loader {
     display: inline-block;
 }
@@ -991,25 +893,6 @@ body.effects-paused .scroll-top-btn {
     transform: scale(1.12);
 }
 
-.search-kbd {
-    position: absolute;
-    right: 12px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    padding: 3px 7px;
-    background: var(--surface-2);
-    border: 1px solid var(--stroke-2);
-    border-bottom-width: 2px;
-    border-radius: 5px;
-    color: var(--text-muted);
-    pointer-events: none;
-    transition: opacity var(--dur-2) ease;
-}
-
-.search-wrapper:focus-within .search-kbd {
-    opacity: 0;
-}
-
 .search-clear-btn {
     position: absolute;
     right: 10px;
@@ -1039,72 +922,6 @@ body.effects-paused .scroll-top-btn {
     align-items: center;
     gap: 9px;
     flex-wrap: wrap;
-}
-
-.custom-select-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.select-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--text-muted);
-    font-size: 11.5px;
-    pointer-events: none;
-    z-index: 1;
-    transition: color var(--dur-2) ease;
-}
-
-.custom-select-wrapper::after {
-    content: '\f078';
-    font-family: 'Font Awesome 6 Free';
-    font-weight: 900;
-    position: absolute;
-    right: 12px;
-    font-size: 9px;
-    color: var(--text-dim);
-    pointer-events: none;
-    transition: color var(--dur-2) ease;
-}
-
-.custom-select-wrapper:hover .select-icon,
-.custom-select-wrapper:hover::after {
-    color: var(--a-soft);
-}
-
-.custom-select-wrapper select {
-    height: 38px;
-    padding: 0 32px 0 33px;
-    background: var(--bg-input);
-    border: 1px solid var(--stroke-1);
-    border-radius: var(--radius-sm);
-    color: var(--text-sub);
-    font-family: var(--font-main);
-    font-size: 12.5px;
-    font-weight: 500;
-    cursor: pointer;
-    outline: none;
-    appearance: none;
-    -webkit-appearance: none;
-    transition: var(--transition);
-}
-
-.custom-select-wrapper select:hover {
-    background: var(--surface-2);
-    border-color: var(--stroke-2);
-    color: #fff;
-}
-
-.custom-select-wrapper select:focus {
-    border-color: var(--edge-strong);
-    box-shadow: var(--ring);
-}
-
-.custom-select-wrapper select option {
-    background: var(--panel-raised);
-    color: var(--text-main);
 }
 
 /* --- View switcher: sliding pill indicator --- */
@@ -1327,7 +1144,7 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     contain-intrinsic-size: auto 460px;
 }
 
-/* Cursor-tracking spotlight — coordinates come from app.js. */
+/* Cursor-tracking spotlight (hero card only — rows opt out). */
 .account-card::after {
     content: '';
     position: absolute;
@@ -1378,26 +1195,7 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 /* Dimmed while a background refresh is in flight. */
-.account-card.is-busy {
-    opacity: 0.65;
-    pointer-events: none;
-}
-
 /* --- Card header --- */
-.card-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.card-badges {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    flex-wrap: wrap;
-}
-
 /* Card badges share the .chip primitive; each keeps only its own colour. */
 .badge-region,
 .badge-tag,
@@ -1491,12 +1289,6 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 /* --- Profile row --- */
-.card-profile {
-    display: flex;
-    align-items: center;
-    gap: 13px;
-}
-
 .rank-emblem-wrap {
     width: 62px;
     height: 62px;
@@ -1551,25 +1343,7 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     transform: scale(1.1) translateY(-1px);
 }
 
-.level-bubble {
-    position: absolute;
-    bottom: -7px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 2px 8px;
-    background: var(--panel-raised);
-    border: 1px solid var(--edge);
-    border-radius: var(--radius-full);
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    color: #fff;
-    white-space: nowrap;
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.75);
-}
-
-/* In-flow level pill for the table view — .level-bubble is absolutely
+/* In-flow level pill for the table view — the roster row pill is absolutely
    positioned so it can hang off the emblem, which a <td> would clip. */
 .level-chip {
     display: inline-block;
@@ -1582,21 +1356,6 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     font-weight: 700;
     color: var(--text-main);
     white-space: nowrap;
-}
-
-.profile-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.summoner-name-row {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    min-width: 0;
 }
 
 .summoner-name {
@@ -1630,13 +1389,6 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 
 .btn-mini-copy:active {
     transform: scale(0.88);
-}
-
-.rank-tier-title,
-.rank-text {
-    font-size: 13.5px;
-    font-weight: 700;
-    letter-spacing: 0.2px;
 }
 
 /* --- Peak rank badge --- */
@@ -1711,95 +1463,22 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 .tier-unranked  { --tier-glow: rgba(107, 114, 128, 0.22); }
 
 /* --- Winrate meter --- */
-.card-stats-row {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.winrate-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11.5px;
-    color: var(--text-muted);
-}
-
-.winrate-meta strong {
-    color: var(--text-main);
-    font-family: var(--font-mono);
-    font-weight: 700;
-}
-
-.winrate-bar-track {
-    width: 100%;
-    height: 6px;
-    background: rgba(0, 0, 0, 0.45);
-    border-radius: var(--radius-full);
-    overflow: hidden;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
-}
-
-.winrate-bar-fill {
-    height: 100%;
-    border-radius: var(--radius-full);
-    background: linear-gradient(90deg, var(--a), var(--ok));
-    box-shadow: 0 0 12px -2px rgba(var(--a-rgb), 0.9);
-    position: relative;
-    overflow: hidden;
-    transition: width 0.4s ease;
-}
-
 /* Travelling highlight so the meter feels alive. */
-.winrate-bar-fill::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
-    transform: translateX(-100%);
-    animation: meter-sheen 2.6s var(--ease-out) infinite;
-}
-
-.winrate-bar-fill.wr-low  { background: linear-gradient(90deg, #f87171, #fb923c); box-shadow: 0 0 12px -2px rgba(248, 113, 113, 0.8); }
-.winrate-bar-fill.wr-mid  { background: linear-gradient(90deg, #fbbf24, #a3e635); box-shadow: 0 0 12px -2px rgba(251, 191, 36, 0.8); }
-.winrate-bar-fill.wr-high { background: linear-gradient(90deg, var(--a), var(--ok)); }
 
 /* --- Last Logged In --- */
-.card-last-login {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    font-size: 11px;
-    padding: 5px 9px;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: var(--radius-xs);
-    color: var(--text-dim);
-    font-family: var(--font-mono);
-    margin-top: 2px;
-}
-
-.card-last-login .last-login-label {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    color: var(--text-dim);
-    font-size: 10.5px;
-}
-
-.card-last-login .last-login-val {
+.roster-checked .last-login-val {
     font-weight: 700;
     color: var(--text-sub);
 }
 
-.card-last-login .last-login-val.is-active {
+.roster-checked .last-login-val.is-active {
     color: #4ade80;
     display: inline-flex;
     align-items: center;
     gap: 5px;
 }
 
-.card-last-login .last-login-val.is-never {
+.roster-checked .last-login-val.is-never {
     color: var(--text-dim);
     opacity: 0.7;
 }
@@ -1874,105 +1553,7 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 /* --- Notes --- */
-.card-notes,
-.account-notes {
-    font-size: 11.5px;
-    color: var(--text-muted);
-    font-style: italic;
-    background: var(--surface-1);
-    padding: 5px 9px;
-    border-radius: var(--radius-xs);
-    border-left: 2px solid var(--edge);
-    margin-top: 6px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* --- Card footer --- */
-.card-actions {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: auto;
-    padding-top: 12px;
-    border-top: 1px solid var(--stroke-1);
-}
-
-.card-btn-group {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex-shrink: 0;
-}
-
-.btn-launch-card {
-    flex: 1;
-    background: var(--grad-primary);
-    color: #fff;
-    padding: 9px 12px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-main);
-    font-size: 12.5px;
-    font-weight: 700;
-    letter-spacing: 0.6px;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-    outline: none;
-    box-shadow: 0 4px 14px -5px rgba(var(--a-rgb), 0.85), var(--bevel);
-    transition: transform var(--dur-2) var(--ease-spring), box-shadow var(--dur-2) ease;
-}
-
-.btn-launch-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background: var(--grad-primary-hover);
-    opacity: 0;
-    transition: opacity var(--dur-3) ease;
-}
-
-.btn-launch-card::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -150%;
-    width: 60%;
-    height: 100%;
-    z-index: -1;
-    background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-    transform: skewX(-18deg);
-    transition: left 0.7s var(--ease-out);
-}
-
-.btn-launch-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px -6px rgba(var(--a-rgb), 0.9), var(--glow-sm);
-}
-
-.btn-launch-card:hover::before { opacity: 1; }
-.btn-launch-card:hover::after  { left: 150%; }
-.btn-launch-card:active { transform: scale(0.97); }
-
-.btn-launch-card i {
-    transition: transform var(--dur-2) var(--ease-spring);
-}
-
-.btn-launch-card:hover i {
-    transform: translateX(3px);
-}
-
 /* ==========================================================================
    SKELETON LOADING
    ========================================================================== */
@@ -1983,22 +1564,477 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     gap: 18px;
 }
 
-.skeleton-card {
-    height: 268px;
-    border-radius: var(--radius-lg);
+/* ==========================================================================
+   6.5 WORKSPACE — STATUS STRIP + ROSTER ROWS
+   The desktop workspace has three levels of hierarchy:
+     1. status strip  — how the roster breaks down, and a one-click filter
+     2. active session — the hero card (the account you are signed in to)
+     3. roster rows    — every other account, one glanceable line each
+   ========================================================================== */
+
+/* --- 1. Status strip ---------------------------------------------------- */
+
+.status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+}
+
+.status-tile {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-6);
     border: 1px solid var(--stroke-1);
-    background: rgba(9, 12, 20, 0.75);
+    border-left: 2px solid var(--stroke-2);
+    border-radius: var(--radius-sm);
+    background: rgba(9, 12, 20, 0.72);
+    color: var(--text-sub);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: background var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out),
+                color var(--dur-2) var(--ease-out);
+}
+
+.status-tile:hover {
+    background: var(--surface-2);
+    border-left-color: var(--a-soft);
+    color: var(--text-main);
+}
+
+.status-tile.is-active {
+    background: var(--tint-2);
+    border-color: var(--edge);
+    border-left-color: var(--a);
+    color: var(--text-main);
+}
+
+.status-tile__label {
+    font-size: var(--fs-2xs);
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.status-tile.is-active .status-tile__label { color: var(--a-soft); }
+
+.status-tile__value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xl);
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+}
+
+/* --- 2. Roster rows ------------------------------------------------------ */
+
+/* The row grid. One line per account: pin, rank, identity, tags, winrate,
+   last-checked, actions. The credential drawer spans the full width and only
+   occupies space once it is opened. */
+.accounts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+
+.account-card.roster-row {
+    display: grid;
+    grid-template-columns:
+        22px                /* pin */
+        40px                /* rank emblem */
+        minmax(190px, 1fr) /* identity */
+        minmax(150px, max-content) /* region + type + status */
+        66px                /* winrate */
+        minmax(96px, auto)  /* last checked */
+        minmax(232px, auto);/* actions */
+    align-items: center;
+    gap: var(--sp-5);
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--stroke-1);
+    background: rgba(9, 12, 20, 0.72);
+    box-shadow: none;
+    transition: background var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out);
+}
+
+/* No lift, no spotlight, no per-row capline — a 20-row roster must stay calm. */
+.account-card.roster-row::before,
+.account-card.roster-row::after { content: none; }
+
+.account-card.roster-row:hover {
+    transform: none;
+    background: var(--surface-2);
+    border-color: var(--edge);
+    box-shadow: none;
+}
+
+.account-card.roster-row.is-favorite {
+    border-left: 2px solid rgba(var(--warn-rgb), 0.75);
+}
+
+.account-card.roster-row.is-active-session {
+    border-left: 2px solid var(--a);
+    background: var(--tint-1);
+}
+
+.account-card.roster-row.needs-check {
+    border-left: 2px solid rgba(var(--info-rgb), 0.6);
+}
+
+.account-card.roster-row.is-highlighted {
+    border-color: var(--a);
+    background: var(--tint-2);
+}
+
+.roster-row .roster-pin {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    transition: color var(--dur-2) var(--ease-out);
+}
+
+.roster-row .roster-pin:hover { color: var(--gold); }
+.roster-row .roster-pin.active { color: var(--gold); }
+
+/* Rank emblem + level, tight. */
+.roster-rank {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+}
+
+.roster-rank-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55));
+}
+
+.roster-level {
+    position: absolute;
+    right: -5px;
+    bottom: -3px;
+    min-width: 17px;
+    padding: 1px 3px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--stroke-2);
+    background: var(--bg-deep);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: center;
+    color: var(--text-sub);
+}
+
+/* Identity: name on top, rank title + peak + note underneath. */
+.roster-identity {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.roster-name-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+}
+
+.roster-name {
+    font-size: var(--fs-md);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.roster-name-line .btn-mini-copy {
+    opacity: 0;
+    transition: opacity var(--dur-2) var(--ease-out);
+}
+
+.roster-row:hover .roster-name-line .btn-mini-copy,
+.roster-name-line .btn-mini-copy:focus-visible { opacity: 1; }
+
+.roster-meta-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    min-width: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+}
+
+.roster-tier {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.roster-tier.is-unset { color: var(--text-dim); }
+
+.roster-note {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    min-width: 0;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Region / type / status chips. */
+.roster-tags {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+
+/* Winrate as a figure — the meter bar was per-card noise at roster scale. */
+.roster-wr {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    text-align: right;
+}
+
+.roster-wr-val {
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+}
+
+.roster-wr-val small {
+    margin-left: 1px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.roster-wr-val.wr-high { color: var(--ok); }
+.roster-wr-val.wr-mid  { color: var(--warn); }
+.roster-wr-val.wr-low  { color: var(--danger); }
+.roster-wr-val.is-unset { color: var(--text-dim); }
+
+.roster-wr-sub {
+    font-size: var(--fs-2xs);
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+/* Last checked / last login. */
+.roster-checked {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.roster-checked .last-login-val { color: var(--text-sub); }
+.roster-checked .last-login-val.is-never { color: var(--text-dim); }
+
+/* Actions: one primary verb + a quiet icon cluster. */
+.roster-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--sp-3);
+}
+
+.roster-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    min-width: 104px;
+    height: 30px;
+    padding: 0 var(--sp-5);
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--edge);
+    background: var(--tint-2);
+    color: var(--a-soft);
+    font-family: inherit;
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out),
+                color var(--dur-2) var(--ease-out);
+}
+
+.roster-act:hover {
+    background: var(--a);
+    border-color: var(--a);
+    color: #fff;
+}
+
+.roster-act.is-play {
+    background: var(--grad-primary);
+    border-color: transparent;
+    color: #fff;
+}
+
+.roster-act.is-play:hover { filter: brightness(1.12); }
+
+.roster-act.is-check {
+    background: rgba(var(--info-rgb), 0.12);
+    border-color: rgba(var(--info-rgb), 0.4);
+    color: var(--info);
+}
+
+.roster-act.is-check:hover {
+    background: var(--info);
+    border-color: var(--info);
+    color: var(--bg-deep);
+}
+
+.roster-icons {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+}
+
+.roster-icon {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--radius-xs);
+    border: 1px solid transparent;
+    background: none;
+    color: var(--text-dim);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    transition: background var(--dur-2) var(--ease-out),
+                color var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out);
+}
+
+.roster-icon:hover {
+    background: var(--surface-3);
+    border-color: var(--stroke-2);
+    color: var(--text-main);
+}
+
+.roster-icon.is-on {
+    background: var(--tint-2);
+    border-color: var(--edge);
+    color: var(--a-soft);
+}
+
+.roster-icon.is-live { color: var(--a-soft); }
+.roster-icon.is-danger:hover {
+    background: rgba(var(--danger-rgb), 0.14);
+    border-color: rgba(var(--danger-rgb), 0.35);
+    color: var(--danger);
+}
+
+/* Credential drawer — spans the row, only present once revealed. */
+.roster-creds[hidden] { display: none; }
+
+.roster-creds {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-3) var(--sp-8);
+    margin-top: var(--sp-2);
+    padding-top: var(--sp-3);
+    border-top: 1px dashed var(--stroke-2);
+}
+
+.roster-row.is-creds-open { background: var(--surface-2); }
+
+/* The shared .cred-row uses space-between for the narrow hero card; in the
+   full-width drawer that strands the value at the far edge. */
+.roster-creds .cred-row {
+    flex: 0 1 auto;
+    justify-content: flex-start;
+    gap: var(--sp-4);
+}
+
+.roster-creds .cred-val-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+}
+
+
+/* --- 3. Roster-scale trims ---------------------------------------------- */
+
+/* Rows are short, so the card-level content-visibility budget is wrong. */
+.account-card.roster-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 58px;
+}
+
+/* The skeleton mirrors the row rhythm instead of the old card wall. */
+.skeleton-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+
+.skeleton-row {
+    height: 58px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--stroke-1);
+    background: rgba(9, 12, 20, 0.72);
     position: relative;
     overflow: hidden;
 }
 
-.skeleton-card::after {
+.skeleton-row::after {
     content: '';
     position: absolute;
     inset: 0;
     background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.05) 50%, transparent 80%);
     transform: translateX(-100%);
     animation: shimmer 1.5s infinite;
+}
+
+/* --- 4. Responsive: fold the row down as the window narrows ------------- */
+
+@media (max-width: 1320px) {
+    .account-card.roster-row {
+        grid-template-columns: 22px 40px minmax(170px, 1fr) minmax(120px, max-content) 62px minmax(210px, max-content);
+    }
+    /* Last-checked is the first thing to go: it is also on the row's title. */
+    .roster-checked { display: none; }
+}
+
+@media (max-width: 1120px) {
+    .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .account-card.roster-row {
+        grid-template-columns: 22px 40px minmax(150px, 1fr) 62px minmax(200px, auto);
+    }
+    .roster-tags { display: none; }
+    .roster-meta-line .roster-note { display: none; }
 }
 
 /* ==========================================================================
@@ -2344,8 +2380,6 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 .flex-1 { flex: 1; min-width: 0; }
-.flex-2 { flex: 2; min-width: 0; }
-
 .form-group {
     display: flex;
     flex-direction: column;
@@ -2542,17 +2576,6 @@ select.form-control option {
 }
 
 .field-help code,
-.combo-format-pill code,
-.modal-sub code {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    background: var(--surface-2);
-    border: 1px solid var(--stroke-1);
-    padding: 1px 5px;
-    border-radius: 4px;
-    color: var(--a-soft);
-}
-
 /* --- Custom checkbox --- */
 .form-checkbox {
     display: flex;
@@ -3206,7 +3229,6 @@ select.form-control option {
     .matches-list-compact .mh-date-full { display: none; }
     .matches-list-compact .mh-date-short { display: inline; }
 }
-
 
 /* ==========================================================================
    BANNED ACCOUNTS
@@ -3928,18 +3950,12 @@ select.form-control option {
    ========================================================================== */
 
 @media (max-width: 1400px) {
-    .accounts-grid,
-    .skeleton-grid {
-        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    }
 }
 
 @media (max-width: 1280px) {
     .app-container {
         padding: 16px 20px 50px;
     }
-
-    .stats-overview { gap: 6px; }
 
     .stat-pill { padding: 7px 11px; }
 
@@ -3958,13 +3974,6 @@ select.form-control option {
 
     .header-actions { gap: 6px; }
 
-    /* Once the header groups wrap, let the stats take their own row. */
-    .stats-overview {
-        order: 3;
-        width: 100%;
-        justify-content: flex-start;
-    }
-
     /* Action buttons collapse to icons to keep the row on one line. */
     .header-actions .btn > span {
         display: none;
@@ -3979,10 +3988,6 @@ select.form-control option {
         justify-content: center;
     }
 
-    .accounts-grid,
-    .skeleton-grid {
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    }
 }
 
 @media (max-width: 900px) {
@@ -4048,8 +4053,7 @@ select.form-control option {
 
 /* --- 10.2 Play button -------------------------------------------------- */
 
-.btn.btn-play,
-.btn-launch-card.is-play {
+.btn.btn-play {
     background: linear-gradient(135deg, #22c55e 0%, #16a34a 55%, #0f9b6c 100%);
     color: #04140c;
     border: none;
@@ -4057,8 +4061,7 @@ select.form-control option {
     box-shadow: 0 4px 16px -6px rgba(var(--ok-rgb), 0.9), var(--bevel);
 }
 
-.btn.btn-play:hover:not(:disabled),
-.btn-launch-card.is-play:hover {
+.btn.btn-play:hover:not(:disabled) {
     filter: brightness(1.08);
     transform: translateY(-1px);
 }
@@ -4437,15 +4440,6 @@ select.form-control option {
     font-weight: 600;
 }
 
-.hero-winrate-track {
-    width: 100%;
-    height: 8px;
-    background: rgba(0, 0, 0, 0.5);
-    border-radius: var(--radius-full);
-    overflow: hidden;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
-}
-
 /* Cumulative win-rate sparkline (replaces the flat meter). */
 .hero-winrate-graph {
     width: 100%;
@@ -4704,52 +4698,7 @@ tr.is-highlighted > td {
     background: rgba(var(--a-rgb), 0.08);
 }
 
-.btn-check-card {
-    width: 100%;
-    margin-bottom: 10px;
-    padding: 9px 12px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    border-radius: var(--radius-sm);
-    border: 1px solid rgba(var(--warn-rgb), 0.38);
-    background: rgba(var(--warn-rgb), 0.09);
-    color: var(--warn);
-    font-family: var(--font-main);
-    font-size: 12.5px;
-    font-weight: 700;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
-    transition: var(--transition);
-}
-
-.btn-check-card:hover:not(:disabled) {
-    background: rgba(var(--warn-rgb), 0.16);
-    border-color: rgba(var(--warn-rgb), 0.6);
-    transform: translateY(-1px);
-}
-
-.btn-check-card:disabled { cursor: progress; opacity: 0.75; }
-
-.check-card-hint {
-    margin-left: auto;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-}
-
 /* --- Unverified account placeholders --------------------------------- */
-
-/* CHECK ACCOUNT button taking the LOGIN slot on unverified cards */
-.btn-launch-card.btn-check-inline {
-    background: linear-gradient(135deg, rgba(var(--warn-rgb), 0.9) 0%, rgba(var(--warn-rgb), 0.7) 100%);
-    color: #1a1200;
-}
-.btn-launch-card.btn-check-inline:hover { filter: brightness(1.06); }
-.btn-launch-card.is-checking { cursor: progress; opacity: 0.8; }
 
 /* Small inline "still loading / no data" spinner next to placeholder marks */
 .mini-spinner {
@@ -4800,20 +4749,10 @@ tr.is-highlighted > td {
     50%      { box-shadow: 0 0 0 1px rgba(var(--warn-rgb), 0.24), 0 0 26px -2px rgba(var(--warn-rgb), 0.45); }
 }
 
-.level-bubble.is-unset,
-.rank-tier-title.is-unset,
-.winrate-meta.is-unset {
+.roster-level.is-unset,
+.roster-tier.is-unset {
     color: var(--text-muted) !important;
     font-style: italic;
-}
-
-.winrate-bar-fill.is-unset {
-    background: repeating-linear-gradient(
-        45deg,
-        rgba(var(--warn-rgb), 0.25) 0 6px,
-        rgba(var(--warn-rgb), 0.1) 6px 12px
-    );
-    animation: unset-shimmer 1.2s linear infinite;
 }
 
 @keyframes unset-shimmer {
@@ -4925,24 +4864,6 @@ body.dashboard-mode .accounts-view {
     display: flex;
     flex-direction: column;
     gap: 16px;
-}
-
-/* Header stats give up their room first - they describe the roster, which
-   is no longer on screen. */
-body.dashboard-mode .stats-overview {
-    max-width: 0;
-    opacity: 0;
-    overflow: hidden;
-    flex-wrap: nowrap;
-    pointer-events: none;
-    transform: translateX(14px);
-}
-
-.stats-overview {
-    max-width: 1200px;
-    transition: max-width var(--dur-4) var(--ease-out),
-                opacity var(--dur-2) var(--ease-out),
-                transform var(--dur-3) var(--ease-out);
 }
 
 .header-actions {
@@ -5402,19 +5323,6 @@ body.dashboard-mode .header-actions .header-divider {
     filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
 }
 
-.dash-me-flag {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    flex: none;
-    padding: 3px 9px;
-    border-radius: var(--radius-full);
-    font-size: 9px;
-    font-weight: 900;
-    letter-spacing: 0.9px;
-    cursor: help;
-}
-
 .dash-me-flag.is-live {
     color: var(--ok);
     background: rgba(var(--ok-rgb), 0.12);
@@ -5475,39 +5383,10 @@ body.dashboard-mode .header-actions .header-divider {
 .dash-me-tile.is-adr .dash-me-tile-v { color: #38bdf8; }
 .dash-me-tile.is-acs .dash-me-tile-v { color: var(--gold); }
 
-.dash-hs-bar {
-    display: flex;
-    height: 7px;
-    border-radius: var(--radius-full);
-    overflow: hidden;
-    background: var(--surface-3);
-}
-
-.dash-hs-seg { transition: width var(--dur-3, 0.3s) var(--ease-out); }
 .dash-hs-seg.is-head { background: linear-gradient(90deg, #fb7185, #f43f5e); }
 .dash-hs-seg.is-body { background: linear-gradient(90deg, #38bdf8, #0ea5e9); }
 .dash-hs-seg.is-leg { background: linear-gradient(90deg, #a78bfa, #8b5cf6); }
 
-.dash-hs-legend {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--text-muted);
-}
-
-.dash-hs-legend .dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-right: 4px;
-    border-radius: 2px;
-}
-
-.dash-hs-legend .dot.is-head { background: #f43f5e; }
-.dash-hs-legend .dot.is-body { background: #0ea5e9; }
 .dash-hs-legend .dot.is-leg { background: #8b5cf6; }
 .dash-hs-dmg { margin-left: auto; color: var(--text-dim); }
 
@@ -5722,13 +5601,6 @@ body.dashboard-mode .header-actions .header-divider {
     box-shadow: 0 0 10px -2px rgba(244, 63, 94, 0.3);
 }
 
-.dash-side-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-weight: 800;
-}
-
 .dash-side-chip.side-defender {
     color: #38bdf8;
 }
@@ -5932,12 +5804,6 @@ body.dashboard-mode .header-actions .header-divider {
     font-size: 11.5px;
 }
 
-.dash-me-form-lbl {
-    font-weight: 700;
-    color: var(--text-muted);
-    font-size: 11px;
-}
-
 .dash-me-form-sub {
     margin-left: auto;
     font-family: var(--font-mono);
@@ -5994,12 +5860,6 @@ body.dashboard-mode .header-actions .header-divider {
 
 /* Premade colouring. Each group queued together on a team gets one of these
    ramps, shared by the card's edge stripe and its chip. */
-.pg-1 { --pg: #fbbf24; --pg-soft: rgba(251, 191, 36, 0.14); --pg-line: rgba(251, 191, 36, 0.48); }
-.pg-2 { --pg: #22d3ee; --pg-soft: rgba(34, 211, 238, 0.14); --pg-line: rgba(34, 211, 238, 0.48); }
-.pg-3 { --pg: #a78bfa; --pg-soft: rgba(167, 139, 250, 0.14); --pg-line: rgba(167, 139, 250, 0.48); }
-.pg-4 { --pg: #f472b6; --pg-soft: rgba(244, 114, 182, 0.14); --pg-line: rgba(244, 114, 182, 0.48); }
-.pg-5 { --pg: #4ade80; --pg-soft: rgba(74, 222, 128, 0.14); --pg-line: rgba(74, 222, 128, 0.48); }
-
 .dash-party-count {
     display: inline-flex;
     align-items: center;
@@ -6331,12 +6191,6 @@ body.dashboard-mode .header-actions .header-divider {
 .ranked-cta-text small {
     font-size: 11px;
     opacity: 0.82;
-}
-
-.dash-queue-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 11px;
 }
 
 .dash-queue-status {
@@ -8270,30 +8124,6 @@ button.match-card, button.dash-player {
     color: var(--text-dim);
 }
 
-.dash-me-install-tracker-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: rgba(168, 85, 247, 0.18);
-    border: 1px solid rgba(168, 85, 247, 0.45);
-    color: #f0abfc;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.15s ease;
-}
-
-.dash-me-install-tracker-btn:hover {
-    background: rgba(168, 85, 247, 0.35);
-    border-color: #f0abfc;
-    color: #fff;
-    transform: translateY(-1px);
-}
-
 .dash-me-section.is-recent .dash-me-tiles {
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -8608,7 +8438,6 @@ body.accent-anim *::after {
 
 .combo-info-bar .combo-invalid { color: var(--warn); }
 .combo-info-bar .combo-invalid strong { color: var(--warn); }
-.combo-info-bar .combo-dupe { color: var(--text-sub); }
 
 .combo-result {
     display: grid;

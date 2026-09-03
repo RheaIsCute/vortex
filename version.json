@@ -1,5 +1,5 @@
 {
-  "version": "5.5.42",
+  "version": "5.5.43",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.42: UI refresh - unified design system (spacing, type, chips, cards, modals), grouped Settings, purple accent by default, cleaner Legacy Ranked highlight, accessible modals, and dead-code cleanup."
+  "changelog": "Vortex v5.5.43: workspace redesign - roster totals moved into a clickable status strip, the account grid replaced by dense single-line roster rows (rank, region, type, winrate, last-checked, launch), and credentials now reveal on demand instead of sitting on the card at all times."
 }

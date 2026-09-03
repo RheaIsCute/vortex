@@ -138,6 +138,27 @@ tokenisation, physical §11 fold, responsive-breakpoint consolidation, the
 dashboard-internal half of the chip migration. Plan:
 `~/.claude/plans/before-making-any-changes-mossy-ember.md`.
 
+### Claude (workspace roster redesign)
+
+Status: DONE
+
+Scope: Structural UI/UX redesign of the Account Manager workspace — stats moved
+out of the header into a clickable status strip, the account-card wall replaced
+by dense roster rows, credentials revealed on demand, and the orphaned CSS from
+the retired card removed.
+
+Files owned: `frontend/index.html`, `frontend/styles.css`, `frontend/app.js`
+(presentational + filter wiring only), `tests/test_settings_and_ui.py`,
+`AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserved the shared `matchCardHtml` row, the Live Match
+lifecycle contract, the hero/active-session card and the table view.
+
+Notes: Completed 2026-09-03. `buildAccountView()` was deliberately left
+untouched, so filtering/sorting/eligibility behaviour is identical. Verified
+with 99 passing tests and headless-Chrome/CDP rendering against the real
+backend (zero console errors). See `AI_CHANGES.md`.
+
 ### Gemini
 
 Status: TODO

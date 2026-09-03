@@ -296,6 +296,7 @@ function getRankIconUrl(tier, division) {
 
 // DOM Elements
 const DOM = {
+    statusStrip: document.getElementById("status-strip"),
     statTotal: document.getElementById("stat-total"),
     statMains: document.getElementById("stat-mains"),
     statRanked: document.getElementById("stat-ranked"),
@@ -796,6 +797,7 @@ function initEventListeners() {
         fetchAccounts();
     });
 
+    initStatusStrip();
     initFilterPopover();
 
     DOM.viewGridBtn.addEventListener("click", () => setViewMode("grid"));
@@ -1550,6 +1552,35 @@ async function selectTheme(themeName) {
 
 const FILTER_DEFAULTS = { region: "ALL", tag: "ALL", sort: "recent" };
 
+/**
+ * The workspace status strip doubles as a one-click account-type filter. It
+ * writes the same `state.currentTag` the Filters popover owns, then re-runs
+ * the normal fetch, so both controls can never disagree.
+ */
+function initStatusStrip() {
+    if (!DOM.statusStrip) return;
+
+    DOM.statusStrip.addEventListener("click", (e) => {
+        const tile = e.target.closest(".status-tile");
+        if (!tile) return;
+        // Clicking the tile that is already applied clears back to "All".
+        const tag = tile.dataset.tag || "ALL";
+        state.currentTag = (state.currentTag === tag) ? FILTER_DEFAULTS.tag : tag;
+        applyFilterStateToInputs();
+        syncFilterIndicators();
+        fetchAccounts();
+    });
+}
+
+/** Mirror the active tag filter onto the status strip. */
+function syncStatusStrip() {
+    if (!DOM.statusStrip) return;
+    const tag = state.currentTag || FILTER_DEFAULTS.tag;
+    DOM.statusStrip.querySelectorAll(".status-tile").forEach(tile => {
+        tile.classList.toggle("is-active", (tile.dataset.tag || "ALL") === tag);
+    });
+}
+
 function initFilterPopover() {
     if (!DOM.btnFilters || !DOM.filterPopover) return;
 
@@ -1633,6 +1664,7 @@ function activeFilterCount() {
 }
 
 function syncFilterIndicators() {
+    syncStatusStrip();
     const n = activeFilterCount();
     if (DOM.filterCount) {
         DOM.filterCount.textContent = n;
@@ -1824,7 +1856,7 @@ function renderAccounts(silent = false) {
     DOM.emptyState.style.display = "none";
 
     if (state.viewMode === "grid") {
-        DOM.accountsGrid.style.display = "grid";
+        DOM.accountsGrid.style.display = "flex";
         DOM.accountsTableWrapper.style.display = "none";
         // Clear the hidden view so its markup can't duplicate element ids.
         DOM.accountsTableBody.innerHTML = "";
@@ -2150,115 +2182,78 @@ function renderGridView() {
         const peakBadge = buildPeakBadge(acc);
         const animIndex = (activeAcc ? 1 : 0) + i;
 
+        // Primary action follows the account's real state: an unverified row
+        // must be checked first, the signed-in row plays, everything else
+        // logs in. Same handlers as before - only the presentation changed.
+        const action = v.isActive
+            ? `<button class="roster-act is-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account"><i class="fa-solid fa-play"></i> PLAY</button>`
+            : v.needsCheck
+                ? `<button class="roster-act is-check" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Log in once to confirm the username and password work, and pull the real Riot ID, level and rank"><i class="fa-solid fa-shield-halved"></i><span class="account-check-loader" aria-hidden="true"></span> CHECK</button>`
+                : `<button class="roster-act" onclick="launchAccount(${acc.id})" title="Auto-fill login into Riot Client"><i class="fa-solid fa-arrow-right-to-bracket"></i> LOGIN</button>`;
+
         return `
-            <div class="account-card ${acc.favorite ? 'is-favorite' : ''} ${v.needsCheck ? 'needs-check' : ''} ${v.cardFlags}" data-id="${acc.id}" style="--i:${Math.min(animIndex, 24)}">
-                <!-- Header -->
-                <div class="card-header">
-                    <div class="card-badges">
-                        ${v.needsCheck ? `
-                            <span class="badge-unset" title="Log in once to verify these credentials and pull live account data">
-                                <span class="mini-spinner"></span> Unverified
-                            </span>
-                            <span class="badge-region is-muted" title="Region not confirmed yet">Region: <span class="mini-spinner"></span></span>
-                        ` : `
-                            <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
-                            <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
-                            ${v.statusBadge}
-                        `}
-                        ${v.legacyBadge}
-                        ${v.liveBadge}
-                    </div>
-                    <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account">
-                        <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
-                    </button>
+            <article class="account-card roster-row ${acc.favorite ? 'is-favorite' : ''} ${v.needsCheck ? 'needs-check' : ''} ${v.cardFlags}" data-id="${acc.id}" role="listitem" style="--i:${Math.min(animIndex, 24)}">
+                <button class="roster-pin card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account" aria-label="Pin account">
+                    <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
+                </button>
+
+                <div class="roster-rank ${v.tierClass}" title="Current Rank: ${v.rankTitle}">
+                    <img src="${v.rankIconSrc}" alt="${v.rankTitle}" class="roster-rank-img" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
+                    <span class="roster-level">${v.needsCheck ? '?' : (acc.level || '-')}</span>
                 </div>
 
-                <!-- Profile Info & Official Emblem -->
-                <div class="card-profile">
-                    <div class="rank-emblem-wrap ${v.tierClass}" title="Current Rank: ${v.rankTitle}">
-                        <img src="${v.rankIconSrc}" alt="${v.rankTitle}" class="rank-emblem-img" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';">
-                        <span class="level-bubble${v.needsCheck ? ' is-unset' : ''}">${v.needsCheck ? '<span class="mini-spinner"></span> LV ?' : 'LV ' + (acc.level || "-")}</span>
+                <div class="roster-identity">
+                    <div class="roster-name-line">
+                        <span class="roster-name" title="${escapeHtml(v.displayName)}">${escapeHtml(v.displayName)}</span>
+                        ${acc.display_name ? `<button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.display_name)}', 'Riot ID copied')" title="Copy Riot ID"><i class="fa-regular fa-copy"></i></button>` : ''}
+                        ${v.liveBadge}${v.legacyBadge}
                     </div>
-                    <div class="profile-info">
-                        <div class="summoner-name-row">
-                            <span class="summoner-name" title="${escapeHtml(v.displayName)}">${escapeHtml(v.displayName)}</span>
-                            ${acc.display_name ? `
-                                <button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.display_name)}', 'Riot ID copied')" title="Copy Riot ID">
-                                    <i class="fa-regular fa-copy"></i>
-                                </button>
-                            ` : ''}
-                        </div>
+                    <div class="roster-meta-line">
                         ${v.needsCheck
-                            ? `<span class="rank-tier-title is-unset"><span class="mini-spinner"></span> No rank data</span>`
-                            : `<span class="rank-tier-title ${v.rankInfo.colorClass}">${v.rankTitle}</span>`}
+                            ? '<span class="roster-tier is-unset"><span class="mini-spinner"></span> No rank data</span>'
+                            : `<span class="roster-tier ${v.rankInfo.colorClass}">${v.rankTitle}</span>`}
                         ${v.needsCheck ? '' : peakBadge}
-                        ${acc.notes ? `<p class="account-notes" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</p>` : ''}
+                        ${acc.notes ? `<span class="roster-note" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</span>` : ''}
                     </div>
                 </div>
 
-                <!-- Winrate & Matches -->
-                <div class="card-stats-row">
+                <div class="roster-tags">
+                    ${v.needsCheck
+                        ? '<span class="badge-region is-muted" title="Region not confirmed yet">--</span>'
+                        : `<span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>`}
+                    <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
+                    ${v.needsCheck ? '<span class="badge-unset" title="Log in once to verify these credentials and pull live account data"><span class="mini-spinner"></span> Unverified</span>' : v.statusBadge}
+                </div>
+
+                <div class="roster-wr" title="${v.needsCheck ? 'No match data yet' : v.winrate + '% across ' + v.gamesPlayed + ' matches'}">
                     ${v.needsCheck ? `
-                        <div class="winrate-meta is-unset">
-                            <span><span class="mini-spinner"></span> Winrate no data</span>
-                            <span>Matches <span class="mini-spinner"></span></span>
-                        </div>
-                        <div class="winrate-bar-track">
-                            <div class="winrate-bar-fill is-unset" style="width: 100%;"></div>
-                        </div>
+                        <span class="roster-wr-val is-unset">--</span>
+                        <span class="roster-wr-sub">no data</span>
                     ` : `
-                        <div class="winrate-meta">
-                            <span>Winrate <strong>${v.winrate}%</strong></span>
-                            <span>Matches <strong>${v.gamesPlayed}</strong></span>
-                        </div>
-                        <div class="winrate-bar-track">
-                            <div class="winrate-bar-fill ${v.wrClass}" style="width: ${v.winrate}%;"></div>
-                        </div>
+                        <span class="roster-wr-val ${v.wrClass}">${v.winrate}<small>%</small></span>
+                        <span class="roster-wr-sub">${v.gamesPlayed} played</span>
                     `}
                 </div>
 
-                <!-- Credentials (Masked) -->
-                <div class="credentials-box">${credRows(acc)}</div>
-
-                <!-- Last Logged In -->
-                <div class="card-last-login">
-                    <span class="last-login-label"><i class="fa-regular fa-clock"></i> Last Logged In:</span>
+                <div class="roster-checked" title="Last logged in">
                     ${v.lastLoginFormatted}
                 </div>
 
-                <!-- Actions Footer -->
-                <div class="card-actions">
-                    ${v.isActive ? `
-                        <button class="btn-launch-card is-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account">
-                            <i class="fa-solid fa-play"></i> PLAY
+                <div class="roster-actions">
+                    ${action}
+                    <div class="roster-icons">
+                        <button class="roster-icon js-creds-toggle" onclick="toggleRosterCreds(${acc.id}, this)" title="Show credentials" aria-expanded="false" aria-controls="creds-${acc.id}">
+                            <i class="fa-solid fa-key"></i>
                         </button>
-                    ` : v.needsCheck ? `
-                        <button class="btn-launch-card btn-check-inline" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Log in once to confirm the username and password work, and pull the real Riot ID, level and rank">
-                            <i class="fa-solid fa-shield-halved"></i><span class="account-check-loader" aria-hidden="true"></span> CHECK ACCOUNT
-                        </button>
-                    ` : `
-                        <button class="btn-launch-card" onclick="launchAccount(${acc.id})" title="Auto-fill login into Riot Client">
-                            <i class="fa-solid fa-arrow-right-to-bracket"></i> LOGIN
-                        </button>
-                    `}
-                    <div class="card-btn-group">
-                        ${v.isActive ? `
-                            <button class="btn btn-icon btn-sm is-live" onclick="openDashboard()" title="Open the live match dashboard">
-                                <i class="fa-solid fa-gauge-high"></i>
-                            </button>
-                        ` : ''}
-                        <button class="btn btn-icon btn-sm" onclick="openMatchesModal(${acc.id})" title="View Match History & Live Rank Details">
-                            <i class="fa-solid fa-clock-rotate-left"></i>
-                        </button>
-                        <button class="btn btn-icon btn-sm" onclick="openEditModal(${acc.id})" title="Edit Account">
-                            <i class="fa-solid fa-pen"></i>
-                        </button>
-                        <button class="btn btn-icon btn-sm is-danger" onclick="deleteAccount(${acc.id})" title="Delete Account">
-                            <i class="fa-solid fa-trash"></i>
-                        </button>
+                        ${v.isActive ? `<button class="roster-icon is-live" onclick="openDashboard()" title="Open the live match dashboard"><i class="fa-solid fa-gauge-high"></i></button>` : ''}
+                        <button class="roster-icon" onclick="openMatchesModal(${acc.id})" title="View Match History &amp; Live Rank Details"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                        <button class="roster-icon" onclick="openEditModal(${acc.id})" title="Edit Account"><i class="fa-solid fa-pen"></i></button>
+                        <button class="roster-icon is-danger" onclick="deleteAccount(${acc.id})" title="Delete Account"><i class="fa-solid fa-trash"></i></button>
                     </div>
                 </div>
-            </div>
+
+                <div class="roster-creds" id="creds-${acc.id}" hidden>${credRows(acc)}</div>
+            </article>
         `;
     }).join("");
 
@@ -3921,6 +3916,24 @@ function escapeHtml(str) {
  * The user + password rows shared by the grid card and the hero card. The
  * caller wraps them in its own box (`.credentials-box` / `.hero-creds-box`).
  */
+/**
+ * Show / hide one roster row's credential drawer. Credentials stay out of the
+ * resting layout (and off-screen for a shoulder surfer) until asked for.
+ */
+function toggleRosterCreds(id, btn) {
+    const box = document.getElementById(`creds-${id}`);
+    if (!box) return;
+    const show = box.hidden;
+    box.hidden = !show;
+    const row = box.closest(".roster-row");
+    if (row) row.classList.toggle("is-creds-open", show);
+    if (btn) {
+        btn.classList.toggle("is-on", show);
+        btn.setAttribute("aria-expanded", show ? "true" : "false");
+        btn.title = show ? "Hide credentials" : "Show credentials";
+    }
+}
+
 function credRows(acc) {
     return `
         <div class="cred-row">
@@ -4008,7 +4021,7 @@ function initRipples() {
     if (PREFERS_REDUCED_MOTION) return;
 
     document.addEventListener("pointerdown", (e) => {
-        const target = e.target.closest(".btn, .btn-launch-card, .view-btn, .theme-swatch, .backup-card .btn");
+        const target = e.target.closest(".btn, .roster-act, .view-btn, .theme-swatch, .backup-card .btn");
         if (!target || target.disabled) return;
 
         const rect = target.getBoundingClientRect();

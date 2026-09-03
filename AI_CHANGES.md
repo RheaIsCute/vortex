@@ -2,6 +2,25 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-03 — Release v5.5.43
+
+Published the Account Manager workspace redesign (status strip + roster rows,
+see "Claude — Account Manager workspace redesign" below) as v5.5.43.
+`backend/version.py`, `version.json`, `installer/vortex_setup.iss` bumped
+5.5.42 → 5.5.43. 99 tests pass (`pytest -q tests` — 8/8 in
+`test_settings_and_ui.py` including the new `test_roster_workspace_layout`);
+`python -m compileall -q backend tests app.py` and `node --check
+frontend/app.js` both clean. No installer build was run in this environment
+(Inno Setup not present) — GitHub Actions / a local build with Inno Setup
+installed still needs to produce and attach `VortexSetup.exe` to the release
+for the in-app updater to pick it up.
+
+## 2026-09-03 — Codex — Repository structure documentation
+
+Added `docs/REPO_STRUCTURE.md`, a current-state repository map based on the
+refreshed Graphify graph and direct source-tree inspection. No runtime behavior
+was changed.
+
 ## 2026-09-03 — Release v5.5.42
 
 Published the accumulated completed work as v5.5.42: the external-only
@@ -907,6 +926,88 @@ Tests:
 - `python -m compileall -q backend` and `git diff --check` passed.
 
 No version bump, installer build, GitHub push, tag, or release was created.
+
+## 2026-09-03 — Claude — Account Manager workspace redesign (roster rows)
+
+Frontend layout restructuring of the desktop workspace. No backend change; the
+UI still talks to the same `/api/*` endpoints with the same payloads.
+
+### Audit (Graphify + source cross-check)
+
+Reused the existing `graphify-out/` graph, then verified against source:
+
+- One render path — `fetchAccounts()` → `renderAccounts()` →
+  `renderGridView()` / `renderTableView()`, both consuming the shared
+  `buildAccountView(acc)` view model. `buildAccountView` was left untouched, so
+  filtering, sorting, ranked-eligibility and status logic are unchanged.
+- 198 ids in `index.html`, 194 referenced from `app.js`. Only
+  `settings-log-path` binds to an element that does not exist — pre-existing and
+  required absent by `test_frontend_settings_and_search_markup`.
+- 23 CSS classes were defined but referenced nowhere in
+  `index.html` / `app.js` / `live_overlay.*` / `boot.*`. `tier-*`, `theme-*`,
+  `toast-*` and `chip--*` are built dynamically in JS and were kept.
+
+### Changes
+
+**Layout hierarchy (`index.html`)** — the workspace now reads in three levels:
+a **status strip** (roster totals), the **active-session hero card**, then the
+**roster rows**. The four stat pills moved out of the sticky header into that
+strip, leaving the header as brand + actions only.
+
+**Status strip** — `#status-strip` with four `.status-tile` buttons. Each tile
+is also a one-click account-type filter: it writes the same `state.currentTag`
+the Filters popover owns, then calls the normal `fetchAccounts()`, so the strip,
+the popover, the "N shown" count and the filter badge can never disagree.
+`initStatusStrip()` binds it; `syncStatusStrip()` is called from the existing
+`syncFilterIndicators()` so the mirror runs on every filter change. The
+`stat-total` / `stat-mains` / `stat-ranked` / `stat-unrated` ids are preserved,
+so `fetchStatsSummary()` is unchanged.
+
+**Roster rows (`renderGridView`)** — the ~344px card wall was replaced by one
+dense row per account: pin, rank emblem + level, identity (name, rank title,
+peak badge, note), region/type/status chips, winrate figure, last-checked, and
+the actions cluster. `.accounts-grid` is now a flex column and each
+`.roster-row` is its own fixed-column grid. The per-card cursor spotlight,
+accent capline and hover lift were dropped — at 20 rows they read as noise.
+
+**Credentials on demand** — the always-visible masked credential rows are gone
+from the resting layout. Each row has a key toggle that opens a
+`.roster-creds` drawer rendered from the existing shared `credRows(acc)` helper.
+`.roster-creds[hidden] { display: none }` is required because a bare
+`display: flex` otherwise beats the `hidden` attribute.
+
+**Dead code removed** — 40+ orphaned rules: the retired grid-card internals
+(`.card-header`, `.card-badges`, `.card-profile`, `.card-stats-row`,
+`.card-actions`, `.card-btn-group`, `.card-last-login`, `.winrate-meta`,
+`.winrate-bar-track`, `.winrate-bar-fill`, `.level-bubble`, `.rank-tier-title`,
+`.summoner-name-row`, `.profile-info`, `.btn-launch-card`, `.btn-check-card`,
+`.skeleton-card`), the moved `.stats-overview` pills, and long-dead leftovers
+(`.combo-dupe`, `.custom-select-wrapper`, `.search-kbd`, `.flex-2`, `.pg-1..5`,
+`.rank-text`, `.text-green`, `.hero-winrate-track`, `.account-card.is-busy`).
+Fixed a latent bug found while cutting: a dangling `.rank-tier-title,` selector
+had been left attached to `.peak-emblem-badge`. The ripple delegation in
+`app.js` was repointed from `.btn-launch-card` to `.roster-act`.
+
+### Verification
+
+- `python -m compileall -q backend tests app.py` — clean.
+- `node --check frontend/app.js` — clean; `styles.css` braces balanced.
+- `pytest -q tests/test_settings_and_ui.py` — 8 passed (7 existing + 1 new
+  `test_roster_workspace_layout`). Full suite: **99 passed**.
+- Rendered live in headless Chrome over CDP against the real backend and a
+  17-account database: 17 rows, status strip filter 17 → 9 with the count and
+  filter badge following, credential drawer opening only its own row, match
+  history rendering `matchCardHtml` rows, table view 17 rows, import / banned /
+  settings modals all opening, and no horizontal overflow at 1280px or 1040px.
+  **Zero console errors or warnings** in every pass.
+- Graphify `update` rebuilt the graph (1301 nodes); `toggleRosterCreds`,
+  `initStatusStrip` and `syncStatusStrip` are present and connected, with no
+  new frontend→backend edges.
+
+Not changed: `backend/*`, `frontend/assets/*`, `live_overlay.*`, `boot.*`,
+installer and root build files. The hero/active-session card, the shared
+`matchCardHtml` row, the Live Match lifecycle and the table view keep their
+existing contracts.
 
 ## 2026-09-02 - Codex - Recent-match role badge positioning
 
