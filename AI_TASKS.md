@@ -13,7 +13,7 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ### Codex
 
-Status: IN PROGRESS
+Status: DONE
 
 Scope: Build and publish the completed batch-login reliability work as v5.5.44.
 
@@ -22,7 +22,9 @@ Files owned: `backend/version.py`, `version.json`,
 
 Dependencies: The completed background batch verification change directly below.
 
-Notes:
+Notes: Completed 2026-09-03. Built and published v5.5.44 from commit
+`a712427`; installer ProductVersion is 5.5.44 and the GitHub release contains
+`VortexSetup.exe`.
 
 ### Codex
 
