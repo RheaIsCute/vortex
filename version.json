@@ -1,5 +1,5 @@
 {
-  "version": "5.5.43",
+  "version": "5.5.44",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.43: workspace redesign - roster totals moved into a clickable status strip, the account grid replaced by dense single-line roster rows (rank, region, type, winrate, last-checked, launch), and credentials now reveal on demand instead of sitting on the card at all times."
+  "changelog": "Vortex v5.5.44: reliable multi-account verification with background-first credential entry, event-driven login waits, mid-flow popup recovery, a real Stop action, and a global banned-username registry that prevents redundant checks."
 }

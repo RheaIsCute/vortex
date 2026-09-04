@@ -191,6 +191,8 @@ LOGIN_PROGRESS: Dict[str, Any] = {
     # administrator" action instead of a plain retry.
     "needs_elevation": False,
 }
+_LOGIN_PROGRESS_CONDITION = threading.Condition()
+_LOGIN_PROGRESS_REVISION = 0
 
 # A login that hangs - a wedged UI Automation call, a Riot Client that never
 # answers - used to leave the progress modal spinning with no error and no way
@@ -203,9 +205,11 @@ _LOGIN_HARD_LIMIT = 210.0
 # arriving together must never run that sequence concurrently, otherwise each
 # worker can close the window the other worker is trying to fill.
 _LOGIN_START_LOCK = threading.Lock()
+_LOGIN_CANCEL_EVENT = threading.Event()
 
 
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
+    global _LOGIN_PROGRESS_REVISION
     terminal = stage in ("done", "error", "idle")
     if terminal:
         login_logger.info("[%s] login cleanup starting for terminal stage=%s", username or LOGIN_PROGRESS.get("username", ""), stage)
@@ -235,6 +239,24 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
     if terminal:
         login_logger.info("[%s] login cleanup complete; state reset and next attempt allowed",
                           LOGIN_PROGRESS.get("username", ""))
+    with _LOGIN_PROGRESS_CONDITION:
+        _LOGIN_PROGRESS_REVISION += 1
+        _LOGIN_PROGRESS_CONDITION.notify_all()
+
+
+def wait_for_login_progress_change(revision: int, timeout: float = 1.0):
+    """Block until a login stage changes, returning ``(revision, snapshot)``."""
+    with _LOGIN_PROGRESS_CONDITION:
+        if _LOGIN_PROGRESS_REVISION == revision:
+            _LOGIN_PROGRESS_CONDITION.wait(timeout=max(0.0, timeout))
+        return _LOGIN_PROGRESS_REVISION, dict(LOGIN_PROGRESS)
+
+
+def cancel_active_login(message: str = "Verification cancelled.") -> None:
+    """Stop the active automation worker at its next safe checkpoint."""
+    _LOGIN_CANCEL_EVENT.set()
+    if LOGIN_PROGRESS.get("active"):
+        _set_login_stage("error", message, LOGIN_PROGRESS.get("username") or None)
 
 
 def _elevation_blocked_login(username: Optional[str] = None) -> bool:
@@ -400,8 +422,8 @@ def set_stay_signed_in(hwnd: int) -> Optional[bool]:
 
         # Toggling moves keyboard focus onto the checkbox, and Enter is only
         # a submit from inside the password field - so focus has to go back.
-        password_field = window.EditControl(searchDepth=40, Name="PASSWORD")
-        if password_field.Exists(1):
+        _, password_field = ClientLauncher._find_login_fields(window)
+        if password_field is not None:
             password_field.SetFocus()
             time.sleep(0.25)
 
@@ -1276,6 +1298,8 @@ class ClientLauncher:
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return None
             auth = cls.get_lockfile_auth()
             if not auth:
                 # No lockfile means no client session at all - signed out by
@@ -1327,6 +1351,8 @@ class ClientLauncher:
         deadline = time.time() + timeout
         last_seen = ""
         while time.time() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return None
             hwnd = cls.find_riot_window()
             if not hwnd:
                 last_seen = "no Riot Client window yet"
@@ -1336,9 +1362,8 @@ class ClientLauncher:
                 auto.SetGlobalSearchTimeout(1)
                 window = auto.ControlFromHandle(hwnd)
                 if window:
-                    user_field = window.EditControl(searchDepth=40, Name="USERNAME")
-                    pass_field = window.EditControl(searchDepth=40, Name="PASSWORD")
-                    if user_field.Exists(0.6) and pass_field.Exists(0.6):
+                    user_field, pass_field = cls._find_login_fields(window)
+                    if user_field is not None and pass_field is not None:
                         if user_field.IsEnabled and pass_field.IsEnabled:
                             login_logger.info("login form is up and interactive")
                             return window, user_field, pass_field
@@ -1351,6 +1376,45 @@ class ClientLauncher:
 
         login_logger.warning("login form never appeared - last state: %s", last_seen)
         return None
+
+    @staticmethod
+    def _find_login_fields(window):
+        """Find Riot's credential controls without depending on label casing.
+
+        Riot has changed the accessible names and nesting of these controls
+        more than once. Prefer semantic password/name properties, then fall
+        back to the first two visible edit controls in form order.
+        """
+        edits = []
+        for control in _iter_uia_descendants(window):
+            control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
+            if "edit" not in control_type:
+                continue
+            try:
+                if getattr(control, "IsOffscreen", False):
+                    continue
+            except Exception:
+                pass
+            edits.append(control)
+
+        user_field = pass_field = None
+        for field in edits:
+            name = _normalise_ui_text(getattr(field, "Name", ""))
+            automation_id = _normalise_ui_text(getattr(field, "AutomationId", ""))
+            try:
+                is_password = bool(getattr(field, "IsPassword", False))
+            except Exception:
+                is_password = False
+            identity = f"{name} {automation_id}"
+            if is_password or "password" in identity:
+                pass_field = pass_field or field
+            elif any(token in identity for token in ("username", "user name", "email")):
+                user_field = user_field or field
+
+        if len(edits) >= 2:
+            user_field = user_field or edits[0]
+            pass_field = pass_field or next((field for field in edits if field is not user_field), None)
+        return user_field, pass_field
 
     @staticmethod
     def _field_text(field) -> str:
@@ -1379,6 +1443,25 @@ class ClientLauncher:
         the wrong field (the classic "password typed into the username box").
         """
         for attempt in range(1, attempts + 1):
+            # ValuePattern writes directly to the control and normally works
+            # without activating Riot Client. This keeps a long batch scan in
+            # the background instead of stealing the user's keyboard focus.
+            try:
+                value_pattern = field.GetValuePattern()
+                if value_pattern is not None and not getattr(value_pattern, "IsReadOnly", False):
+                    value_pattern.SetValue(value)
+                    time.sleep(0.12)
+                    got = cls._field_text(field)
+                    ok = (len(got) == len(value)) if masked else (got == value)
+                    if ok:
+                        login_logger.info("%s: entered in background and verified (attempt %d)", label, attempt)
+                        return True
+            except Exception as e:
+                login_logger.debug("%s: background ValuePattern entry unavailable: %s", label, e)
+
+            # Some Riot builds expose a read-only ValuePattern even though
+            # keyboard entry works. Keep the proven foreground path as a
+            # compatibility fallback.
             try:
                 field.SetFocus()
             except Exception as e:
@@ -1418,6 +1501,24 @@ class ClientLauncher:
         submission path the Riot Client handles reliably. Focus is re-asserted
         first, because ticking the checkbox moves it.
         """
+        # Invoke the form button through UIA first; this does not require the
+        # Riot window to become foreground. Names vary by build, so accept the
+        # normal sign-in labels and the otherwise unnamed submit button.
+        for control in _iter_uia_descendants(window):
+            control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
+            name = _normalise_ui_text(getattr(control, "Name", ""))
+            automation_id = _normalise_ui_text(getattr(control, "AutomationId", ""))
+            if "button" not in control_type or not (
+                    "sign in" in name or "login" in name or "submit" in automation_id):
+                continue
+            try:
+                invoke = control.GetInvokePattern()
+                if invoke is not None:
+                    invoke.Invoke()
+                    return True
+            except Exception:
+                continue
+
         try:
             pass_field.SetFocus()
             time.sleep(0.2)
@@ -1449,12 +1550,21 @@ class ClientLauncher:
         filled, and None when no form appeared at all.
         """
         for attempt in range(1, tries + 1):
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
             form = cls.wait_for_login_form(timeout=form_timeout if attempt == 1 else 10.0)
             if form is None:
                 return None
 
             window, user_field, pass_field = form
             hwnd = cls.find_riot_window()
+
+            popup = cls.find_transient_login_popup(hwnd)
+            if popup is not None:
+                cls.click_transient_login_sign_out(hwnd)
+                cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                cls.wait_for_signed_out(timeout=8.0)
+                continue
 
             if attempt == 1:
                 # The sign-in page reliably re-mounts shortly after it first
@@ -1473,22 +1583,29 @@ class ClientLauncher:
                     username
                 )
 
-            for _ in range(8):
-                cls.focus_window(hwnd)
-                time.sleep(0.2)
-                try:
-                    if win32gui.GetForegroundWindow() == hwnd:
-                        break
-                except Exception:
-                    break
-
             _set_login_stage("typing", "Entering username...", username)
             if not cls.fill_field_verified(user_field, username, "username"):
                 continue
 
+            if cls.find_transient_login_popup(hwnd) is not None:
+                cls.click_transient_login_sign_out(hwnd)
+                cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                cls.wait_for_signed_out(timeout=8.0)
+                continue
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
+
             _set_login_stage("typing", "Entering password...", username)
             if not cls.fill_field_verified(pass_field, password, "password", masked=True):
                 continue
+
+            if cls.find_transient_login_popup(hwnd) is not None:
+                cls.click_transient_login_sign_out(hwnd)
+                cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                cls.wait_for_signed_out(timeout=8.0)
+                continue
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
 
             # The reload check. Both fields are re-read now, together, so a
             # page reset between the two entries is caught before anything is
@@ -1548,6 +1665,8 @@ class ClientLauncher:
         policy above.
         """
         _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
+        if _LOGIN_CANCEL_EVENT.is_set():
+            return
         hwnd = None
         for _ in range(120):
             hwnd = cls.find_riot_window()
@@ -1567,6 +1686,8 @@ class ClientLauncher:
 
         # ---- stage 1: the window that's already open ----------------------
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3)
+        if _LOGIN_CANCEL_EVENT.is_set():
+            return
         if result is True:
             cls._monitor_login_result(username, password, stay_signed_in, client_path)
             return
@@ -1787,6 +1908,7 @@ class ClientLauncher:
             LOGIN_PROGRESS["stay_signed_in"] = None
             LOGIN_PROGRESS["needs_elevation"] = False
             LOGIN_PROGRESS["active"] = True
+            _LOGIN_CANCEL_EVENT.clear()
         login_logger.info("[%s] login attempt started mode=%s", username,
                           "retry" if not restart_client else "standard")
         _set_login_stage("opening", "Preparing to sign in...", username)

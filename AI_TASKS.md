@@ -13,6 +13,41 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ### Codex
 
+Status: IN PROGRESS
+
+Scope: Build and publish the completed batch-login reliability work as v5.5.44.
+
+Files owned: `backend/version.py`, `version.json`,
+`installer/vortex_setup.iss`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: The completed background batch verification change directly below.
+
+Notes:
+
+### Codex
+
+Status: DONE
+
+Scope: Repair multi-account credential entry; use event-driven login progress,
+mid-entry popup checks, background-first UI Automation input, explicit batch
+Stop UI, and a user-global banned-username registry for batch skip decisions.
+
+Files owned: `backend/client_launcher.py`, `backend/server.py`,
+`backend/database.py`, `frontend/index.html`, `frontend/app.js`,
+`tests/test_login_flow.py`, `tests/test_batch_account_check.py`,
+`tests/test_account_import_and_eligibility.py`, `AI_CHANGES.md`, `AI_TASKS.md`,
+`AI_CONTRACTS.md`
+
+Dependencies: Preserve single-account Login / Check Account behavior and the
+existing local banned-account store.
+
+Notes: Completed 2026-09-03. Batch entry now uses background-first UIA,
+event-driven stage waits, mid-fill popup checks, worker cancellation, an
+explicit Stop state, and a credential-free global banned-username registry.
+Validated with 104 passing tests plus Python/JS/diff checks.
+
+### Codex
+
 Status: DONE
 
 Scope: Frontend performance / smoothness pass: audit and make targeted,

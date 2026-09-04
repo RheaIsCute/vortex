@@ -97,6 +97,57 @@ class LoginThreadingTests(unittest.TestCase):
             self.assertTrue(done.wait(5))
 
 
+class CredentialInputTests(unittest.TestCase):
+    class Control:
+        def __init__(self, name="", control_type="EditControl", automation_id="",
+                     is_password=False, children=None):
+            self.Name = name
+            self.ControlTypeName = control_type
+            self.AutomationId = automation_id
+            self.IsPassword = is_password
+            self.IsOffscreen = False
+            self.IsEnabled = True
+            self._children = children or []
+
+        def GetChildren(self):
+            return self._children
+
+    def test_fields_survive_riot_accessibility_name_changes(self):
+        username = self.Control(name="Username or email", automation_id="login-user")
+        password = self.Control(name="", automation_id="password-input", is_password=True)
+        window = self.Control(control_type="WindowControl", children=[username, password])
+
+        found_user, found_password = cl.ClientLauncher._find_login_fields(window)
+
+        self.assertIs(found_user, username)
+        self.assertIs(found_password, password)
+
+    def test_value_pattern_enters_without_foreground_focus(self):
+        field = MagicMock()
+        pattern = MagicMock(IsReadOnly=False)
+        current = {"value": ""}
+        pattern.SetValue.side_effect = lambda value: current.update(value=value)
+        field.GetValuePattern.return_value = pattern
+        with patch.object(cl.ClientLauncher, "_field_text", side_effect=lambda _field: current["value"]), \
+             patch.object(cl.time, "sleep"):
+            self.assertTrue(cl.ClientLauncher.fill_field_verified(field, "secret", "username"))
+
+        pattern.SetValue.assert_called_once_with("secret")
+        field.SetFocus.assert_not_called()
+
+    def test_progress_wait_wakes_on_stage_event(self):
+        revision, _ = cl.wait_for_login_progress_change(-1, 0)
+        result = []
+        waiter = threading.Thread(
+            target=lambda: result.append(cl.wait_for_login_progress_change(revision, 1.0))
+        )
+        waiter.start()
+        cl._set_login_stage("typing", "Entering username...", "acc")
+        waiter.join(1.0)
+        self.assertTrue(result)
+        self.assertEqual(result[0][1]["stage"], "typing")
+
+
 class RiotTransientLoginPopupTests(unittest.TestCase):
     def setUp(self):
         self._orig = dict(cl.LOGIN_PROGRESS)

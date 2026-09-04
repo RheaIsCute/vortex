@@ -40,7 +40,8 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["invalid_credentials"])
         self.assertIsNone(result["info"])
 
-    async def test_batch_failure_never_deletes_the_account(self):
+    @patch.object(server.db, "is_globally_banned", return_value=False)
+    async def test_batch_failure_never_deletes_the_account(self, _global_banned):
         account = {"id": 7, "username": "example", "password": "saved", "tag": ""}
         retryable = {
             "info": None, "cancelled": False, "invalid_credentials": False,
@@ -79,7 +80,8 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sign-in form", result["message"])
         waiter.assert_awaited_once_with("bad-then-good", timeout=120.0, cancel_with_batch=False)
 
-    async def test_batch_finally_releases_a_leftover_login_attempt(self):
+    @patch.object(server.db, "is_globally_banned", return_value=False)
+    async def test_batch_finally_releases_a_leftover_login_attempt(self, _global_banned):
         account = {"id": 7, "username": "example", "password": "saved", "tag": ""}
         server.client_launcher.LOGIN_PROGRESS.update(
             active=True, stage="submitted", username="example", message="Signing in..."
@@ -96,6 +98,17 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(server.client_launcher.LOGIN_PROGRESS["active"])
         self.assertEqual(server.client_launcher.LOGIN_PROGRESS["stage"], "error")
+
+    async def test_batch_skips_and_moves_globally_known_banned_username(self):
+        account = {"id": 7, "username": "known-ban", "password": "saved", "tag": ""}
+        with patch.object(server.db, "get_all_accounts", return_value=[account]), patch.object(
+                server.db, "is_globally_banned", return_value=True), patch.object(
+                server.db, "move_to_banned", return_value=True) as move, patch.object(
+                server.launcher, "login_account") as login:
+            await server.run_batch_account_check()
+
+        move.assert_called_once_with(7)
+        login.assert_not_called()
 
 
 if __name__ == "__main__":

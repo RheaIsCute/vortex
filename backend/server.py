@@ -69,6 +69,7 @@ CHECK_PROGRESS = {
     "message": "",
     "verified": 0,
     "failed": 0,
+    "skipped_banned": 0,
 }
 
 
@@ -369,6 +370,7 @@ async def _wait_for_checked_account(username: str, timeout: float = 120.0,
     wanted = (username or "").strip().lower()
     deadline = time.monotonic() + timeout
     saw_credentials = False
+    progress_revision = -1
 
     while time.monotonic() < deadline:
         if cancel_with_batch and not CHECK_PROGRESS.get("running"):
@@ -419,7 +421,14 @@ async def _wait_for_checked_account(username: str, timeout: float = 120.0,
             return {"info": None, "cancelled": False, "invalid_credentials": invalid,
                     "message": message or "The Riot login could not be completed."}
 
-        await asyncio.sleep(0.75)
+        # Wake immediately when the worker advances instead of blindly
+        # sleeping through fast stages. The short timeout still lets us see
+        # Riot session changes that happen without a progress transition.
+        progress_revision, _ = await asyncio.to_thread(
+            client_launcher.wait_for_login_progress_change,
+            progress_revision,
+            min(0.5, max(0.0, deadline - time.monotonic())),
+        )
 
     message = "Timed out waiting for Riot Client; the account was kept for retry."
     client_launcher._set_login_stage("error", message, username)
@@ -435,8 +444,15 @@ async def run_batch_account_check():
     """
     accounts = db.get_all_accounts()
 
-    # Skip accounts that have already been verified
-    to_check = [a for a in accounts if account_needs_check(a)]
+    # A separately persisted, user-global registry survives main database
+    # restores/imports. Move matching rows aside without logging in again.
+    globally_banned = [a for a in accounts if db.is_globally_banned(a.get("username", ""))]
+    for account in globally_banned:
+        db.move_to_banned(account["id"])
+
+    # Skip accounts that have already been verified or globally known banned.
+    banned_ids = {a["id"] for a in globally_banned}
+    to_check = [a for a in accounts if a["id"] not in banned_ids and account_needs_check(a)]
 
     if not to_check:
         CHECK_PROGRESS["running"] = False
@@ -448,6 +464,7 @@ async def run_batch_account_check():
     CHECK_PROGRESS["current"] = 0
     CHECK_PROGRESS["verified"] = 0
     CHECK_PROGRESS["failed"] = 0
+    CHECK_PROGRESS["skipped_banned"] = len(globally_banned)
 
     settings = db.get_settings()
     custom_path = settings.get("riot_client_path", "")
@@ -814,14 +831,20 @@ async def check_all_accounts(background_tasks: BackgroundTasks):
         return {"success": False, "message": "Account check is already in progress"}
 
     accounts = db.get_all_accounts()
-    unverified = [a for a in accounts if account_needs_check(a)]
+    known_banned = [a for a in accounts if db.is_globally_banned(a.get("username", ""))]
+    known_banned_ids = {a["id"] for a in known_banned}
+    unverified = [
+        a for a in accounts
+        if a["id"] not in known_banned_ids and account_needs_check(a)
+    ]
 
     if not unverified:
         return {
             "success": True, 
             "to_check_count": 0, 
-            "skipped_count": len(accounts), 
-            "message": f"All {len(accounts)} accounts are already checked! Use 'Sync All' to refresh live ranks."
+            "skipped_count": len(accounts),
+            "skipped_banned": len(known_banned),
+            "message": f"Nothing to check ({len(known_banned)} globally known banned skipped)." if known_banned else f"All {len(accounts)} accounts are already checked! Use 'Sync All' to refresh live ranks."
         }
 
     background_tasks.add_task(run_batch_account_check)
@@ -831,6 +854,7 @@ async def check_all_accounts(background_tasks: BackgroundTasks):
         "success": True, 
         "to_check_count": len(unverified), 
         "skipped_count": skipped_count,
+        "skipped_banned": len(known_banned),
         "message": f"Checking {len(unverified)} unverified accounts{skip_msg}..."
     }
 
@@ -847,6 +871,7 @@ async def cancel_check_accounts():
     """Cancels the running batch account check and force-closes Riot Client."""
     CHECK_PROGRESS["running"] = False
     CHECK_PROGRESS["message"] = "Verification cancelled. Riot Client closed."
+    client_launcher.cancel_active_login("Verification cancelled by user.")
     await asyncio.to_thread(launcher.force_kill_riot_client)
     return {"success": True, "message": "Account check cancelled"}
 

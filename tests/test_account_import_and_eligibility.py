@@ -1,6 +1,18 @@
 from backend.database import Database
 
 
+def test_global_banned_username_survives_main_database_replacement(tmp_path):
+    first = Database(str(tmp_path / "first.sqlite"))
+    first.add_account({"username": "KnownBan", "password": "pw", "status": "BANNED"})
+    assert first.is_globally_banned(" knownban ")
+
+    replacement = Database(str(tmp_path / "replacement.sqlite"))
+    account_id = replacement.add_account({"username": "KNOWNBAN", "password": "new"})
+
+    assert replacement.get_account_by_id(account_id) is None
+    assert replacement.get_banned_account_by_id(account_id)["username"] == "KNOWNBAN"
+
+
 def test_raw_combo_import_preserves_password_after_first_colon(tmp_path):
     db = Database(str(tmp_path / "accounts.sqlite"))
 

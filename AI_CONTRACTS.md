@@ -19,6 +19,11 @@ Account import and eligibility metadata:
 - `Database.import_accounts_from_raw(raw_text)` accepts one `USER:PASSWORD` row per line and returns created rows, duplicate counts, and malformed-line details. It shares the existing TXT import storage and identity checks.
 - `/api/import-raw` is the UI-facing HTTP entry point for that method.
 - Account responses may include `competitive_queue_eligible` (`true`, `false`, or `null`), `ranked_eligibility_source`, `is_legacy_ranked_eligible`, and `ranked_capable`. `null` means Riot did not provide a usable eligibility response and must not be interpreted as ineligible.
+- `global_banned_usernames.sqlite` is a credential-free, per-user registry kept
+  outside the replaceable main database. Confirmed banned/suspended usernames
+  are recorded there, existing banned rows seed it on migration, imports and
+  batch checks skip/move matches without logging in, and a confirmed playable
+  restore removes the username from the registry.
 
 ## HTTP application boundary
 
@@ -43,6 +48,11 @@ Input: Credentials, optional client path, and sign-in preferences.
 Output: Login/result dictionaries and active-account metadata.
 
 Stability: Timing-sensitive Windows contract. Keep credential handling local and never log credential values.
+
+Credential entry prefers UI Automation `ValuePattern` and button invocation so
+batch checks can run without activating Riot Client. Foreground keyboard input
+is a compatibility fallback only. Login stage transitions notify event waiters;
+batch cancellation sets the shared cancellation event and closes Riot Client.
 
 ## Local VALORANT client integration
 

@@ -43,11 +43,83 @@ END, lp DESC
 class Database:
     def __init__(self, db_path: str = DB_FILE):
         self.db_path = db_path
+        # This intentionally lives beside, but outside, the replaceable main
+        # database. Restores/imports can swap database.sqlite without losing
+        # the user-wide memory of usernames Riot confirmed as banned.
+        if os.path.abspath(self.db_path) == os.path.abspath(DB_FILE):
+            global_dir = os.path.join(
+                os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "Vortex"
+            )
+        else:
+            # Custom/test databases stay self-contained in their own folder.
+            global_dir = os.path.dirname(os.path.abspath(self.db_path))
+        os.makedirs(global_dir, exist_ok=True)
+        self.global_bans_path = os.path.join(global_dir, "global_banned_usernames.sqlite")
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self.init_db()
+        self._init_global_bans()
+        self._seed_global_bans()
         # Keep a small, automatic history outside the live SQLite files.  A
         # snapshot is made at most once per day and before every restore.
         self.create_backup(daily=True)
+
+    def _init_global_bans(self) -> None:
+        guard_path(self.global_bans_path, "write")
+        with sqlite3.connect(self.global_bans_path, timeout=15.0) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS banned_usernames (
+                    username_norm TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL
+                )
+            """)
+
+    def remember_globally_banned(self, username: str) -> None:
+        username = (username or "").strip()
+        if not username:
+            return
+        now = datetime.now().isoformat()
+        with sqlite3.connect(self.global_bans_path, timeout=15.0) as conn:
+            conn.execute(
+                """INSERT INTO banned_usernames(username_norm, username, first_seen, last_seen)
+                   VALUES (LOWER(?), ?, ?, ?)
+                   ON CONFLICT(username_norm) DO UPDATE SET
+                     username=excluded.username, last_seen=excluded.last_seen""",
+                (username, username, now, now),
+            )
+
+    def is_globally_banned(self, username: str) -> bool:
+        username = (username or "").strip()
+        if not username:
+            return False
+        with sqlite3.connect(self.global_bans_path, timeout=15.0) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM banned_usernames WHERE username_norm=LOWER(?) LIMIT 1", (username,)
+            ).fetchone()
+        return row is not None
+
+    def forget_globally_banned(self, username: str) -> None:
+        username = (username or "").strip()
+        if not username:
+            return
+        with sqlite3.connect(self.global_bans_path, timeout=15.0) as conn:
+            conn.execute("DELETE FROM banned_usernames WHERE username_norm=LOWER(?)", (username,))
+
+    def _seed_global_bans(self) -> None:
+        """Migrate usernames already retained by older Vortex databases."""
+        with self.get_connection() as source, sqlite3.connect(
+                self.global_bans_path, timeout=15.0) as target:
+            now = datetime.now().isoformat()
+            for row in source.execute("SELECT username FROM banned_accounts"):
+                username = (row["username"] or "").strip()
+                if username:
+                    target.execute(
+                        """INSERT OR IGNORE INTO banned_usernames
+                           (username_norm, username, first_seen, last_seen)
+                           VALUES (LOWER(?), ?, ?, ?)""",
+                        (username, username, now, now),
+                    )
 
     def create_backup(self, daily: bool = False) -> str:
         """Create a consistent SQLite snapshot and retain the newest 10."""
@@ -701,7 +773,8 @@ class Database:
             new_id = cursor.lastrowid
             conn.commit()
 
-            if (account.get("status") or "").upper() in ("BANNED", "SUSPENDED"):
+            if ((account.get("status") or "").upper() in ("BANNED", "SUSPENDED") or
+                    self.is_globally_banned(account.get("username", ""))):
                 self.move_to_banned(new_id)
 
             return new_id
@@ -833,6 +906,7 @@ class Database:
             )
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
             conn.commit()
+            self.remember_globally_banned(data.get("username", ""))
             return True
         finally:
             conn.close()
@@ -915,6 +989,7 @@ class Database:
             new_id = cursor.lastrowid
             cursor.execute("DELETE FROM banned_accounts WHERE id = ?", (account_id,))
             conn.commit()
+            self.forget_globally_banned(data.get("username", ""))
             return new_id
         finally:
             conn.close()

@@ -1041,3 +1041,49 @@ Tests:
 - `python -m pytest tests/test_settings_and_ui.py -q` -> 7 passed (2 FastAPI deprecation warnings).
 - `python -m pytest -q` -> 79 passed (2 FastAPI deprecation warnings).
 - `git diff --check` passed.
+# 2026-09-03 - Codex - Reliable background batch account verification
+
+Changed:
+
+- Made Riot credential-field discovery resilient to accessible-name casing and
+  nesting changes, using password/name/automation-id semantics with form-order
+  fallback.
+- Credential entry now tries UI Automation ValuePattern writes and UIA button
+  invocation first, so Check Accounts can normally type and submit without
+  bringing Riot Client to the foreground. The proven clipboard/keyboard path
+  remains as a compatibility fallback.
+- Added popup checks before username entry, between username/password, and
+  before submission. Added event-driven login-stage wakeups to the batch waiter
+  while retaining a short timed check for session changes outside Vortex.
+- Batch Stop is now explicit on the main button and signals the active login
+  worker before closing Riot Client; the UI waits for backend confirmation
+  before allowing another scan.
+- Added `%LOCALAPPDATA%\Vortex\global_banned_usernames.sqlite`, containing only
+  normalized usernames and timestamps. Existing banned rows seed it; confirmed
+  bans update it; imports and batch scans move/skip matches without logging in;
+  confirmed playable restores remove the name.
+
+Files:
+
+- `backend/client_launcher.py`, `backend/server.py`, `backend/database.py`
+- `frontend/app.js`
+- `tests/test_login_flow.py`, `tests/test_batch_account_check.py`,
+  `tests/test_account_import_and_eligibility.py`
+- `AI_CONTRACTS.md`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Validation:
+
+- `python -m pytest -q` -> 104 passed (2 pre-existing FastAPI warnings).
+- `python -m compileall -q app.py backend tests`, `node --check frontend/app.js`,
+  and `git diff --check` passed.
+
+No version bump, build, tag, push, or release was created.
+
+## v5.5.44 release
+
+- Bumped `backend/version.py`, `version.json`, and the Inno Setup default to
+  `5.5.44`.
+- Re-ran the full test suite: 104 passed.
+- Built `dist/Vortex/Vortex.exe` and `dist_installer/VortexSetup.exe`.
+- Verified installer ProductVersion `5.5.44`; SHA-256:
+  `1C8BAA5D9C4A60CA2008E00EDFA6125F4FADD893045E8A43BD7389BACB4BC4ED`.

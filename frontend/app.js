@@ -1121,7 +1121,12 @@ function stopCheckAccountsUi(hideBar = true) {
     }
     if (DOM.btnCheckAllAccounts) {
         DOM.btnCheckAllAccounts.classList.remove("is-checking");
+        DOM.btnCheckAllAccounts.classList.remove("is-danger");
+        DOM.btnCheckAllAccounts.disabled = false;
         DOM.btnCheckAllAccounts.removeAttribute("aria-busy");
+        const label = DOM.btnCheckAllAccounts.querySelector("span");
+        if (label) label.textContent = "Check Accounts";
+        DOM.btnCheckAllAccounts.title = "Log into every account sequentially to sync all info and ban status";
     }
     if (DOM.checkAllIcon) {
         DOM.checkAllIcon.className = "fa-solid fa-list-check";
@@ -1134,12 +1139,14 @@ function stopCheckAccountsUi(hideBar = true) {
 
 async function handleCheckAllAccounts() {
     if (state.isCheckingAccounts) {
+        if (DOM.btnCheckAllAccounts) DOM.btnCheckAllAccounts.disabled = true;
         try {
             await fetch("/api/accounts/cancel-check", { method: "POST" });
             showToast("Stopping account check...", "info");
-        } catch (e) {}
-        // Don't wait on the poll loop to notice - release the button now.
-        stopCheckAccountsUi(true);
+        } catch (e) {
+            if (DOM.btnCheckAllAccounts) DOM.btnCheckAllAccounts.disabled = false;
+        }
+        // The status poll owns cleanup after the backend confirms it stopped.
         return;
     }
 
@@ -1150,7 +1157,11 @@ async function handleCheckAllAccounts() {
     }
     if (DOM.btnCheckAllAccounts) {
         DOM.btnCheckAllAccounts.classList.add("is-checking");
+        DOM.btnCheckAllAccounts.classList.add("is-danger");
         DOM.btnCheckAllAccounts.setAttribute("aria-busy", "true");
+        const label = DOM.btnCheckAllAccounts.querySelector("span");
+        if (label) label.textContent = "Stop";
+        DOM.btnCheckAllAccounts.title = "Stop checking accounts";
     }
     if (DOM.checkAllIcon) {
         DOM.checkAllIcon.className = "fa-solid fa-spinner rotating";
