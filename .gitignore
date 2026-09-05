@@ -15,7 +15,9 @@ login_debug.log*
 
 # Build artifacts
 build/
+build_verified/
 dist/
+dist_verified/
 dist_installer/
 *.spec.bak
 installer_output/

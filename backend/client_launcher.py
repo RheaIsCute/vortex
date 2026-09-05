@@ -26,6 +26,7 @@ import win32gui
 import win32con
 import win32process
 import win32api
+from ctypes import wintypes
 from typing import Optional, Dict, Any, Tuple
 
 from backend import elevation
@@ -106,6 +107,34 @@ def _is_process_running_fast(targets: set) -> bool:
         return False
 
 
+def _running_process_ids(targets: set) -> set:
+    """Return matching process IDs from one Toolhelp snapshot."""
+    if os.name != "nt":
+        return set()
+    wanted = {str(name).lower() for name in targets}
+    found = set()
+    try:
+        k32 = ctypes.windll.kernel32
+        snap = k32.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snap == -1 or not snap:
+            return found
+        try:
+            entry = _PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+            if not k32.Process32FirstW(snap, ctypes.byref(entry)):
+                return found
+            while True:
+                if entry.szExeFile.lower() in wanted:
+                    found.add(int(entry.th32ProcessID))
+                if not k32.Process32NextW(snap, ctypes.byref(entry)):
+                    break
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:
+        pass
+    return found
+
+
 _VALORANT_PROCS = {"valorant.exe", "valorant-win64-shipping.exe"}
 _RIOT_PROCS = {"riotclientservices.exe", "riotclientux.exe",
                "riotclientuxrender.exe", "riotclientcrashhandler.exe"}
@@ -114,8 +143,55 @@ _RIOT_PROCS = {"riotclientservices.exe", "riotclientux.exe",
 # Keep this retry budget local to one login request so a flaky client cannot
 # create an unbounded sign-out/sign-in loop.
 _RIOT_POPUP_MAX_ATTEMPTS = 3
-_RIOT_POPUP_RETRY_DELAY = 3.0
 _RIOT_POPUP_RESULT_TIMEOUT = 45.0
+
+# Opt-in, credential-free performance diagnostics. Milestone names and elapsed
+# durations are logged; account identifiers and credential properties are not.
+_LOGIN_TIMING_ENABLED = (os.getenv("VORTEX_LOGIN_TIMING") or "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+_LOGIN_TIMING_LOCAL = threading.local()
+_LOGIN_UI_SCAN_LOCAL = threading.local()
+_LOGIN_TIMING_LOCK = threading.Lock()
+_LAST_LOGIN_FINISHED_MONOTONIC = 0.0
+
+
+def _timing_begin() -> None:
+    previous = _LAST_LOGIN_FINISHED_MONOTONIC
+    now = time.perf_counter()
+    _LOGIN_TIMING_LOCAL.trace = {
+        "started": now, "last": now, "previous": previous, "marks": set(),
+    }
+    if _LOGIN_TIMING_ENABLED:
+        login_logger.info("timing milestone=attempt_started elapsed_ms=0.0 delta_ms=0.0")
+
+
+def _timing_mark(milestone: str) -> None:
+    if not _LOGIN_TIMING_ENABLED:
+        return
+    trace = getattr(_LOGIN_TIMING_LOCAL, "trace", None)
+    if trace is None:
+        _timing_begin()
+        trace = _LOGIN_TIMING_LOCAL.trace
+    if milestone in trace["marks"]:
+        return
+    trace["marks"].add(milestone)
+    now = time.perf_counter()
+    elapsed = (now - trace["started"]) * 1000.0
+    delta = (now - trace["last"]) * 1000.0
+    trace["last"] = now
+    previous = trace.get("previous") or 0.0
+    batch = f" batch_transition_ms={(now - previous) * 1000.0:.1f}" if previous else ""
+    login_logger.info(
+        "timing milestone=%s elapsed_ms=%.1f delta_ms=%.1f%s",
+        milestone, elapsed, delta, batch,
+    )
+
+
+def _timing_finish() -> None:
+    global _LAST_LOGIN_FINISHED_MONOTONIC
+    with _LOGIN_TIMING_LOCK:
+        _LAST_LOGIN_FINISHED_MONOTONIC = time.perf_counter()
 
 
 def is_valorant_running() -> bool:
@@ -239,6 +315,9 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
     if terminal:
         login_logger.info("[%s] login cleanup complete; state reset and next attempt allowed",
                           LOGIN_PROGRESS.get("username", ""))
+        if stage == "done":
+            _timing_mark("login_result_observed")
+            _timing_finish()
     with _LOGIN_PROGRESS_CONDITION:
         _LOGIN_PROGRESS_REVISION += 1
         _LOGIN_PROGRESS_CONDITION.notify_all()
@@ -338,6 +417,123 @@ def _drop_stale_uia_client() -> None:
         pass
 
 
+class _ScopedUiChangeListener:
+    """Process-scoped WinEvent wakeup for Riot UI structure/state changes.
+
+    UIA's Python wrapper does not expose automation event registration. Native
+    WinEvent hooks provide the equivalent create/show/hide/reorder/focus/state
+    signals from the one Riot window process without subscribing to the whole
+    desktop. Out-of-context callbacks are pumped on the login worker's COM/UI
+    thread and every hook is removed by ``close``/the context manager.
+    """
+
+    _EVENT_OBJECT_CREATE = 0x8000
+    _EVENT_OBJECT_STATECHANGE = 0x800A
+    _WINEVENT_OUTOFCONTEXT = 0x0000
+    _WINEVENT_SKIPOWNPROCESS = 0x0002
+    _QS_ALLINPUT = 0x04FF
+    _WAIT_OBJECT_0 = 0
+
+    def __init__(self, hwnd: Optional[int]):
+        self.hwnd = hwnd
+        self.event = threading.Event()
+        self.hook = None
+        self._callback = None
+        if os.name != "nt" or not hwnd:
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if not pid:
+                return
+            callback_type = ctypes.WINFUNCTYPE(
+                None,
+                wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
+                wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD,
+            )
+
+            def _wake(_hook, _event, _event_hwnd, _object_id, _child_id, _thread, _time):
+                self.event.set()
+
+            self._callback = callback_type(_wake)
+            user32 = ctypes.windll.user32
+            # ctypes otherwise assumes a 32-bit integer return value and can
+            # truncate HWINEVENTHOOK on 64-bit Windows, leaking a hook that
+            # UnhookWinEvent can no longer identify.
+            user32.SetWinEventHook.argtypes = [
+                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE, callback_type,
+                wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+            ]
+            user32.SetWinEventHook.restype = wintypes.HANDLE
+            user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+            user32.UnhookWinEvent.restype = wintypes.BOOL
+            self.hook = user32.SetWinEventHook(
+                self._EVENT_OBJECT_CREATE,
+                self._EVENT_OBJECT_STATECHANGE,
+                None,
+                self._callback,
+                int(pid),
+                0,
+                self._WINEVENT_OUTOFCONTEXT | self._WINEVENT_SKIPOWNPROCESS,
+            )
+        except Exception:
+            self.hook = None
+
+    @property
+    def available(self) -> bool:
+        return bool(self.hook)
+
+    def poll(self, clear: bool = False) -> bool:
+        try:
+            win32gui.PumpWaitingMessages()
+        except Exception:
+            pass
+        changed = self.event.is_set()
+        if changed and clear:
+            self.event.clear()
+        return changed
+
+    def wait(self, timeout: float, cancel_event: Optional[threading.Event] = None) -> bool:
+        """Wait for a scoped event while remaining cancellation-responsive."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if self.poll():
+                self.event.clear()
+                return True
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            wait_slice = min(remaining, 0.05)
+            if not self.available:
+                if cancel_event is not None:
+                    cancel_event.wait(wait_slice)
+                else:
+                    time.sleep(wait_slice)
+                continue
+            try:
+                ctypes.windll.user32.MsgWaitForMultipleObjects(
+                    0, None, False, max(1, int(wait_slice * 1000)), self._QS_ALLINPUT
+                )
+            except Exception:
+                time.sleep(wait_slice)
+
+    def close(self) -> None:
+        hook, self.hook = self.hook, None
+        if hook:
+            try:
+                ctypes.windll.user32.UnhookWinEvent(hook)
+            except Exception:
+                pass
+        self._callback = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        self.close()
+
+
 def _login_watchdog() -> None:
     """
     Forces a stuck login to an error so the progress modal can never spin
@@ -370,7 +566,8 @@ def _login_watchdog() -> None:
 threading.Thread(target=_login_watchdog, name="vortex-login-watchdog", daemon=True).start()
 
 
-def set_stay_signed_in(hwnd: int) -> Optional[bool]:
+def set_stay_signed_in(hwnd: int, window=None, checkbox=None,
+                       password_field=None) -> Optional[bool]:
     """
     Ticks the Riot Client's "Stay signed in" checkbox, and puts keyboard focus
     back on the password field afterwards.
@@ -398,13 +595,15 @@ def set_stay_signed_in(hwnd: int) -> Optional[bool]:
         return None
 
     try:
-        auto.SetGlobalSearchTimeout(3)
-        window = auto.ControlFromHandle(hwnd)
+        auto.SetGlobalSearchTimeout(0.25)
+        window = window or auto.ControlFromHandle(hwnd)
         if not window:
             return None
 
-        checkbox = window.CheckBoxControl(searchDepth=40, Name="Stay signed in")
-        if not checkbox.Exists(2):
+        if checkbox is None:
+            snapshot = ClientLauncher._scan_login_controls(window)
+            checkbox = snapshot.get("stay_signed_in")
+        if checkbox is None:
             login_logger.warning("stay-signed-in: checkbox not found in the login form")
             return False
 
@@ -416,16 +615,15 @@ def set_stay_signed_in(hwnd: int) -> Optional[bool]:
         # already-ticked box must be left alone or it comes back off.
         if toggle.ToggleState != 1:
             toggle.Toggle()
-            time.sleep(0.35)
-
         ticked = checkbox.GetTogglePattern().ToggleState == 1
-
-        # Toggling moves keyboard focus onto the checkbox, and Enter is only
-        # a submit from inside the password field - so focus has to go back.
-        _, password_field = ClientLauncher._find_login_fields(window)
-        if password_field is not None:
-            password_field.SetFocus()
-            time.sleep(0.25)
+        # TogglePattern normally updates synchronously. If a Riot build delays
+        # it, observe the actual state for a short bound instead of sleeping a
+        # fixed amount on every successful normal-path toggle.
+        deadline = time.monotonic() + 0.4
+        while not ticked and time.monotonic() < deadline:
+            if _LOGIN_CANCEL_EVENT.wait(0.02):
+                return False
+            ticked = checkbox.GetTogglePattern().ToggleState == 1
 
         login_logger.info("stay-signed-in: checkbox ticked=%s", ticked)
         return ticked
@@ -520,11 +718,20 @@ def _iter_uia_descendants(root):
 
 
 class ClientLauncher:
-    @staticmethod
-    def detect_riot_client_path() -> Optional[str]:
-        """Scans standard installation paths and Windows Registry for Riot Client."""
+    _last_riot_hwnd: Optional[int] = None
+    _last_riot_pid: Optional[int] = None
+    _cached_riot_client_path: Optional[str] = None
+
+    @classmethod
+    def detect_riot_client_path(cls) -> Optional[str]:
+        """Find Riot once, reusing only the static executable path across a batch."""
+        cached = cls._cached_riot_client_path
+        if cached and os.path.exists(cached):
+            return cached
+        cls._cached_riot_client_path = None
         for path in DEFAULT_VALORANT_PATHS:
             if os.path.exists(path):
+                cls._cached_riot_client_path = path
                 return path
 
         registry_keys = [
@@ -541,8 +748,10 @@ class ClientLauncher:
                         if os.path.isdir(val):
                             possible_exe = os.path.join(val, "RiotClientServices.exe")
                             if os.path.exists(possible_exe):
+                                cls._cached_riot_client_path = possible_exe
                                 return possible_exe
                         else:
+                            cls._cached_riot_client_path = val
                             return val
             except Exception:
                 continue
@@ -965,19 +1174,54 @@ class ClientLauncher:
 
     @classmethod
     def find_riot_window(cls) -> Optional[int]:
-        """Finds HWND of the main visible Riot Client window."""
+        """Find the main Riot HWND, preferring the known/cached process window."""
         candidates = []
+
+        def valid(hwnd, riot_pids=None):
+            try:
+                if not hwnd or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+                    return False
+                if "riot client" not in _normalise_ui_text(win32gui.GetWindowText(hwnd)):
+                    return False
+                rect = win32gui.GetWindowRect(hwnd)
+                if (rect[2] - rect[0]) < 300 or (rect[3] - rect[1]) < 200:
+                    return False
+                if riot_pids is not None:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if pid not in riot_pids:
+                        return False
+                return True
+            except Exception:
+                return False
+
+        # The normal path never enumerates the desktop: keep using the HWND
+        # until Riot destroys/replaces it, then try its exact titles.
+        if valid(cls._last_riot_hwnd):
+            try:
+                _, current_pid = win32process.GetWindowThreadProcessId(cls._last_riot_hwnd)
+            except Exception:
+                current_pid = None
+            if cls._last_riot_pid is not None and current_pid == cls._last_riot_pid:
+                return cls._last_riot_hwnd
+        cls._last_riot_hwnd = None
+        cls._last_riot_pid = None
+
+        riot_pids = _running_process_ids(_RIOT_PROCS)
+        for title in ("Riot Client", "Riot Client Main"):
+            try:
+                hwnd = win32gui.FindWindow(None, title)
+            except Exception:
+                hwnd = None
+            if valid(hwnd, riot_pids):
+                cls._last_riot_hwnd = hwnd
+                _, cls._last_riot_pid = win32process.GetWindowThreadProcessId(hwnd)
+                return hwnd
 
         def enum_cb(hwnd, _):
             try:
-                if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
-                    if "Riot Client" in title:
-                        rect = win32gui.GetWindowRect(hwnd)
-                        w = rect[2] - rect[0]
-                        h = rect[3] - rect[1]
-                        if w >= 300 and h >= 200:
-                            candidates.append((w * h, hwnd))
+                if valid(hwnd, riot_pids):
+                    rect = win32gui.GetWindowRect(hwnd)
+                    candidates.append(((rect[2] - rect[0]) * (rect[3] - rect[1]), hwnd))
             except Exception:
                 pass
             return True
@@ -987,17 +1231,15 @@ class ClientLauncher:
             if candidates:
                 # Sort by window area descending so the largest visible main window is preferred
                 candidates.sort(reverse=True)
-                return candidates[0][1]
+                cls._last_riot_hwnd = candidates[0][1]
+                _, cls._last_riot_pid = win32process.GetWindowThreadProcessId(
+                    cls._last_riot_hwnd
+                )
+                return cls._last_riot_hwnd
         except Exception:
             pass
-
-        for title in ["Riot Client", "Riot Client Main"]:
-            hwnd = win32gui.FindWindow(None, title)
-            if hwnd and win32gui.IsWindowVisible(hwnd):
-                rect = win32gui.GetWindowRect(hwnd)
-                if (rect[2] - rect[0]) >= 300 and (rect[3] - rect[1]) >= 200:
-                    return hwnd
-
+        cls._last_riot_hwnd = None
+        cls._last_riot_pid = None
         return None
 
     @staticmethod
@@ -1068,6 +1310,22 @@ class ClientLauncher:
             return False
 
     @classmethod
+    def read_login_ui_state(cls, hwnd: Optional[int] = None):
+        """Return popup and validation state from one scoped UIA traversal."""
+        auto = _uia()
+        if auto is None:
+            return None, None
+        try:
+            hwnd = hwnd or cls.find_riot_window()
+            if not hwnd:
+                return None, None
+            snapshot = cls._snapshot_for_hwnd(hwnd, auto)
+            return snapshot.get("popup_sign_out"), snapshot.get("validation_error")
+        except Exception as exc:
+            login_logger.debug("login state detection failed: %s", exc)
+            return None, None
+
+    @classmethod
     def find_transient_login_popup(cls, hwnd: Optional[int] = None):
         """Return the Riot ``Sign out`` button for the transient login modal.
 
@@ -1075,67 +1333,19 @@ class ClientLauncher:
         action. That keeps a generic Riot button, or a normal signed-in client,
         from triggering account recovery.
         """
-        auto = _uia()
-        if auto is None:
-            return None
-
-        try:
-            hwnd = hwnd or cls.find_riot_window()
-            if not hwnd:
-                return None
-            auto.SetGlobalSearchTimeout(0.5)
-            window = auto.ControlFromHandle(hwnd)
-            if not window:
-                return None
-
-            names = []
-            sign_out = None
-            for control in _iter_uia_descendants(window):
-                name = _normalise_ui_text(getattr(control, "Name", ""))
-                if not name:
-                    continue
-                names.append(name)
-                if name == "sign out":
-                    control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
-                    if not control_type or "button" in control_type:
-                        sign_out = control
-
-            all_text = " ".join(names)
-            has_failure_copy = (
-                "unable to load" in all_text or
-                "trouble signing you in right now" in all_text
-            )
-            return sign_out if has_failure_copy and sign_out is not None else None
-        except Exception as exc:
-            login_logger.debug("transient login popup detection failed: %s", exc)
-            return None
+        popup, _ = cls.read_login_ui_state(hwnd)
+        return popup
 
     @classmethod
     def find_login_validation_error(cls, hwnd: Optional[int] = None) -> Optional[str]:
         """Return known client-side form validation copy without reading credentials."""
-        auto = _uia()
-        if auto is None:
-            return None
-        try:
-            hwnd = hwnd or cls.find_riot_window()
-            if not hwnd:
-                return None
-            auto.SetGlobalSearchTimeout(0.5)
-            window = auto.ControlFromHandle(hwnd)
-            names = " ".join(
-                _normalise_ui_text(getattr(control, "Name", ""))
-                for control in _iter_uia_descendants(window)
-            )
-            if "special characters" in names and ("can't put" in names or "cannot put" in names):
-                return "unsupported special characters"
-        except Exception as exc:
-            login_logger.debug("login validation detection failed: %s", exc)
-        return None
+        _, validation_error = cls.read_login_ui_state(hwnd)
+        return validation_error
 
     @classmethod
-    def click_transient_login_sign_out(cls, hwnd: Optional[int] = None) -> bool:
+    def click_transient_login_sign_out(cls, hwnd: Optional[int] = None, button=None) -> bool:
         """Click the detected modal action through UI Automation."""
-        button = cls.find_transient_login_popup(hwnd)
+        button = button or cls.find_transient_login_popup(hwnd)
         if button is None:
             return False
         try:
@@ -1158,10 +1368,14 @@ class ClientLauncher:
         """Wait until the detected modal is no longer present."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if cls.find_transient_login_popup() is None:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
+            popup, _ = cls.read_login_ui_state()
+            if popup is None:
                 return True
-            time.sleep(0.25)
-        return cls.find_transient_login_popup() is None
+            _LOGIN_CANCEL_EVENT.wait(0.1)
+        popup, _ = cls.read_login_ui_state()
+        return popup is None
 
     @classmethod
     def _monitor_login_result(cls, username: str, password: str,
@@ -1178,6 +1392,8 @@ class ClientLauncher:
         popup_attempt = 1
 
         while time.monotonic() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
             session = cls.get_active_riot_session(username)
             session_user = (session.get("username") or "").strip().lower() if session else ""
             if session and session.get("found") and session_user == username.strip().lower():
@@ -1188,7 +1404,8 @@ class ClientLauncher:
                 )
                 return True
 
-            if cls.find_transient_login_popup() is not None:
+            popup_button, validation_error = cls.read_login_ui_state()
+            if popup_button is not None:
                 login_logger.warning("[%s] Riot transient login popup detected", username)
                 if popup_attempt >= _RIOT_POPUP_MAX_ATTEMPTS:
                     message = f"Riot login temporarily unavailable after {_RIOT_POPUP_MAX_ATTEMPTS} attempts."
@@ -1198,7 +1415,7 @@ class ClientLauncher:
 
                 _set_login_stage("signout", "Riot login failed temporarily - signing out...", username)
                 login_logger.info("[%s] Clicking Sign out", username)
-                if not cls.click_transient_login_sign_out():
+                if not cls.click_transient_login_sign_out(button=popup_button):
                     _set_login_stage(
                         "error", "Riot's transient login failure could not be cleared.", username
                     )
@@ -1221,7 +1438,6 @@ class ClientLauncher:
                 _set_login_stage(
                     "waiting_window", "Waiting for Riot login screen...", username
                 )
-                time.sleep(_RIOT_POPUP_RETRY_DELAY)
                 if cls.wait_for_login_form(timeout=20.0) is None:
                     _set_login_stage(
                         "error", "Riot did not return to the sign-in screen after Sign out.", username
@@ -1247,7 +1463,6 @@ class ClientLauncher:
                     return False
                 continue
 
-            validation_error = cls.find_login_validation_error()
             if validation_error:
                 login_logger.warning("[%s] Riot client-side validation detected: %s", username, validation_error)
                 _set_login_stage(
@@ -1269,7 +1484,7 @@ class ClientLauncher:
                 )
                 return False
 
-            time.sleep(0.5)
+            _LOGIN_CANCEL_EVENT.wait(0.2)
 
         message = "Riot did not confirm this sign-in before the attempt timed out. Please try again."
         login_logger.warning("[%s] login result monitor timed out", username)
@@ -1323,9 +1538,11 @@ class ClientLauncher:
         """Blocks until none of `names` is running. Lowercase exe names."""
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return False
             if not _is_process_running_fast(names):
                 return True
-            time.sleep(0.2)
+            _LOGIN_CANCEL_EVENT.wait(0.1)
         return not _is_process_running_fast(names)
 
     @classmethod
@@ -1348,54 +1565,110 @@ class ClientLauncher:
         if auto is None:
             return None
 
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + max(0.0, timeout)
         last_seen = ""
-        while time.time() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
-                return None
-            hwnd = cls.find_riot_window()
-            if not hwnd:
-                last_seen = "no Riot Client window yet"
-                time.sleep(0.3)
-                continue
-            try:
-                auto.SetGlobalSearchTimeout(1)
-                window = auto.ControlFromHandle(hwnd)
-                if window:
-                    user_field, pass_field = cls._find_login_fields(window)
-                    if user_field is not None and pass_field is not None:
-                        if user_field.IsEnabled and pass_field.IsEnabled:
-                            login_logger.info("login form is up and interactive")
-                            return window, user_field, pass_field
-                        last_seen = "credential fields present but not enabled yet"
-                    else:
-                        last_seen = "window up, credential fields not mounted yet"
-            except Exception as e:
-                last_seen = f"reading the window failed: {e}"
-            time.sleep(0.3)
+        listener = None
+        listener_hwnd = None
+        poll_interval = 0.04
+        try:
+            while True:
+                if _LOGIN_CANCEL_EVENT.is_set():
+                    return None
+                hwnd = cls.find_riot_window()
+                if not hwnd:
+                    last_seen = "no Riot Client window yet"
+                else:
+                    _timing_mark("riot_window_discovered")
+                    form, state = cls._login_form_from_hwnd(hwnd, auto)
+                    last_seen = state
+                    if form is not None:
+                        _timing_mark("login_controls_detected")
+                        return form
+
+                    if listener is None or listener_hwnd != hwnd:
+                        if listener is not None:
+                            listener.close()
+                        listener = _ScopedUiChangeListener(hwnd)
+                        listener_hwnd = hwnd
+                        # Close the check/subscription race: controls can mount
+                        # between the first tree read and hook registration.
+                        form, state = cls._login_form_from_hwnd(hwnd, auto)
+                        last_seen = state
+                        if form is not None:
+                            _timing_mark("login_controls_detected")
+                            return form
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                wait_for = min(remaining, poll_interval)
+                woke = (
+                    listener.wait(wait_for, _LOGIN_CANCEL_EVENT)
+                    if listener else _LOGIN_CANCEL_EVENT.wait(wait_for)
+                )
+                poll_interval = 0.04 if woke else min(0.25, poll_interval * 1.6)
+        finally:
+            if listener is not None:
+                listener.close()
 
         login_logger.warning("login form never appeared - last state: %s", last_seen)
         return None
 
-    @staticmethod
-    def _find_login_fields(window):
-        """Find Riot's credential controls without depending on label casing.
+    @classmethod
+    def _login_form_from_hwnd(cls, hwnd: int, auto=None):
+        """Resolve one scoped Riot root once; return ``(form, state)``."""
+        auto = auto or _uia()
+        if auto is None:
+            return None, "UI Automation unavailable"
+        try:
+            auto.SetGlobalSearchTimeout(0.25)
+            window = auto.ControlFromHandle(hwnd)
+            if not window:
+                return None, "Riot Client window has no UIA root"
+            snapshot = cls._scan_login_controls(window)
+            _LOGIN_UI_SCAN_LOCAL.cached = (hwnd, time.monotonic(), snapshot)
+            user_field = snapshot.get("username")
+            pass_field = snapshot.get("password")
+            if user_field is None or pass_field is None:
+                return None, "window up, credential fields not mounted yet"
+            try:
+                enabled = bool(user_field.IsEnabled and pass_field.IsEnabled)
+            except Exception:
+                return None, "credential controls became stale"
+            if not enabled:
+                return None, "credential fields present but not enabled yet"
+            return (window, user_field, pass_field), "login form ready"
+        except Exception as exc:
+            return None, f"reading the window failed: {type(exc).__name__}"
 
-        Riot has changed the accessible names and nesting of these controls
-        more than once. Prefer semantic password/name properties, then fall
-        back to the first two visible edit controls in form order.
+    @staticmethod
+    def _scan_login_controls(window):
+        """Resolve all login controls in one scoped tree traversal.
+
+        These dynamic objects are used only for the current page mount. A
+        structure event or stale-control exception causes a new traversal.
         """
         edits = []
+        buttons = []
+        checkbox = None
+        names = []
         for control in _iter_uia_descendants(window):
+            name = _normalise_ui_text(getattr(control, "Name", ""))
+            automation_id = _normalise_ui_text(getattr(control, "AutomationId", ""))
             control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
-            if "edit" not in control_type:
-                continue
+            if name:
+                names.append(name)
             try:
-                if getattr(control, "IsOffscreen", False):
+                if getattr(control, "IsOffscreen", False) is True:
                     continue
             except Exception:
                 pass
-            edits.append(control)
+            if "edit" in control_type:
+                edits.append(control)
+            elif "button" in control_type or (not control_type and name == "sign out"):
+                buttons.append((control, name, automation_id))
+            elif "checkbox" in control_type and name == "stay signed in":
+                checkbox = checkbox or control
 
         user_field = pass_field = None
         for field in edits:
@@ -1414,7 +1687,64 @@ class ClientLauncher:
         if len(edits) >= 2:
             user_field = user_field or edits[0]
             pass_field = pass_field or next((field for field in edits if field is not user_field), None)
-        return user_field, pass_field
+
+        submit = None
+        sign_out = None
+        for button, name, automation_id in buttons:
+            if name == "sign out":
+                sign_out = sign_out or button
+            if submit is None and (
+                "sign in" in name or name == "login" or "submit" in automation_id
+            ):
+                submit = button
+        all_text = " ".join(names)
+        popup_failure = (
+            "unable to load" in all_text or
+            "trouble signing you in right now" in all_text
+        )
+        validation_error = None
+        if "special characters" in all_text and (
+            "can't put" in all_text or "cannot put" in all_text
+        ):
+            validation_error = "unsupported special characters"
+        return {
+            "window": window,
+            "username": user_field,
+            "password": pass_field,
+            "submit": submit,
+            "stay_signed_in": checkbox,
+            "popup_sign_out": sign_out if popup_failure else None,
+            "validation_error": validation_error,
+        }
+
+    @classmethod
+    def _snapshot_for_hwnd(cls, hwnd: int, auto=None, max_age: float = 0.0):
+        """Read current scoped controls, optionally reusing a same-operation scan."""
+        cached = getattr(_LOGIN_UI_SCAN_LOCAL, "cached", None)
+        now = time.monotonic()
+        if max_age > 0 and cached and cached[0] == hwnd and now - cached[1] <= max_age:
+            return cached[2]
+        auto = auto or _uia()
+        if auto is None:
+            return {}
+        auto.SetGlobalSearchTimeout(0.25)
+        window = auto.ControlFromHandle(hwnd)
+        if not window:
+            return {}
+        snapshot = cls._scan_login_controls(window)
+        _LOGIN_UI_SCAN_LOCAL.cached = (hwnd, now, snapshot)
+        return snapshot
+
+    @staticmethod
+    def _find_login_fields(window):
+        """Find Riot's credential controls without depending on label casing.
+
+        Riot has changed the accessible names and nesting of these controls
+        more than once. Prefer semantic password/name properties, then fall
+        back to the first two visible edit controls in form order.
+        """
+        snapshot = ClientLauncher._scan_login_controls(window)
+        return snapshot.get("username"), snapshot.get("password")
 
     @staticmethod
     def _field_text(field) -> str:
@@ -1442,42 +1772,44 @@ class ClientLauncher:
         that actually happen: nothing landing at all, and the value landing in
         the wrong field (the classic "password typed into the username box").
         """
-        for attempt in range(1, attempts + 1):
-            # ValuePattern writes directly to the control and normally works
-            # without activating Riot Client. This keeps a long batch scan in
-            # the background instead of stealing the user's keyboard focus.
+        # ValuePattern is synchronous in the normal Riot UIA provider. Try it
+        # more than once for transient provider failures, but do not tax every
+        # successful assignment with an arbitrary post-write sleep.
+        native_attempts = max(1, min(attempts, 2))
+        for attempt in range(1, native_attempts + 1):
             try:
                 value_pattern = field.GetValuePattern()
                 if value_pattern is not None and not getattr(value_pattern, "IsReadOnly", False):
                     value_pattern.SetValue(value)
-                    time.sleep(0.12)
                     got = cls._field_text(field)
                     ok = (len(got) == len(value)) if masked else (got == value)
                     if ok:
                         login_logger.info("%s: entered in background and verified (attempt %d)", label, attempt)
                         return True
             except Exception as e:
-                login_logger.debug("%s: background ValuePattern entry unavailable: %s", label, e)
+                login_logger.debug(
+                    "%s: background ValuePattern entry unavailable (%s)",
+                    label, type(e).__name__,
+                )
 
-            # Some Riot builds expose a read-only ValuePattern even though
-            # keyboard entry works. Keep the proven foreground path as a
-            # compatibility fallback.
+        if _LOGIN_CANCEL_EVENT.is_set():
+            return False
+
+        # Some Riot builds expose a read-only ValuePattern even though keyboard
+        # entry works. Keep one proven foreground attempt as compatibility
+        # fallback only after bounded native retries.
+        for attempt in range(1, max(1, attempts - native_attempts) + 1):
             try:
                 field.SetFocus()
             except Exception as e:
-                login_logger.warning("%s: could not focus the field: %s", label, e)
+                login_logger.warning("%s: could not focus the field (%s)", label, type(e).__name__)
                 return False
-            time.sleep(0.18)
 
             pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.05)
             pyautogui.press('backspace')
-            time.sleep(0.05)
 
             pyperclip.copy(value)
-            time.sleep(0.05)
             pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.25)
 
             got = cls._field_text(field)
             ok = (len(got) == len(value)) if masked else (got == value)
@@ -1486,45 +1818,64 @@ class ClientLauncher:
                 return True
 
             login_logger.warning(
-                "%s: did not land on attempt %d - field holds %d chars, expected %d",
-                label, attempt, len(got), len(value)
+                "%s: input did not verify on compatibility attempt %d",
+                label, attempt,
             )
-            time.sleep(0.3)
 
         login_logger.error("%s: gave up after %d attempts", label, attempts)
         return False
 
     @classmethod
-    def submit_login_form(cls, window, pass_field) -> bool:
+    def submit_login_form(cls, window, pass_field, submit_control=None,
+                          listener=None, timeout: float = 2.0) -> bool:
         """
         Submits the form from inside the password field, which is the only
         submission path the Riot Client handles reliably. Focus is re-asserted
         first, because ticking the checkbox moves it.
         """
-        # Invoke the form button through UIA first; this does not require the
-        # Riot window to become foreground. Names vary by build, so accept the
-        # normal sign-in labels and the otherwise unnamed submit button.
-        for control in _iter_uia_descendants(window):
-            control_type = _normalise_ui_text(getattr(control, "ControlTypeName", ""))
-            name = _normalise_ui_text(getattr(control, "Name", ""))
-            automation_id = _normalise_ui_text(getattr(control, "AutomationId", ""))
-            if "button" not in control_type or not (
-                    "sign in" in name or "login" in name or "submit" in automation_id):
-                continue
+        deadline = time.monotonic() + max(0.0, timeout)
+        control = submit_control
+        poll_interval = 0.04
+        while not _LOGIN_CANCEL_EVENT.is_set():
+            if control is None:
+                try:
+                    control = cls._scan_login_controls(window).get("submit")
+                except Exception:
+                    control = None
+            if control is None:
+                break
             try:
-                invoke = control.GetInvokePattern()
-                if invoke is not None:
+                enabled = bool(getattr(control, "IsEnabled", True))
+                invoke = control.GetInvokePattern() if enabled else None
+                if enabled and invoke is not None:
                     invoke.Invoke()
+                    _timing_mark("login_invoked")
                     return True
             except Exception:
-                continue
+                # The button may have been recreated; invalidate and reacquire.
+                control = None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            wait_for = min(remaining, poll_interval)
+            woke = (
+                listener.wait(wait_for, _LOGIN_CANCEL_EVENT)
+                if listener is not None else _LOGIN_CANCEL_EVENT.wait(wait_for)
+            )
+            poll_interval = 0.04 if woke else min(0.2, poll_interval * 1.6)
+            try:
+                control = cls._scan_login_controls(window).get("submit")
+            except Exception:
+                control = None
 
+        if _LOGIN_CANCEL_EVENT.is_set():
+            return False
         try:
             pass_field.SetFocus()
-            time.sleep(0.2)
         except Exception:
             pass
         pyautogui.press('enter')
+        _timing_mark("login_invoked_keyboard_fallback")
         return True
 
     @classmethod
@@ -1558,82 +1909,114 @@ class ClientLauncher:
 
             window, user_field, pass_field = form
             hwnd = cls.find_riot_window()
-
-            popup = cls.find_transient_login_popup(hwnd)
-            if popup is not None:
-                cls.click_transient_login_sign_out(hwnd)
-                cls.wait_for_transient_login_popup_gone(timeout=8.0)
-                cls.wait_for_signed_out(timeout=8.0)
-                continue
-
-            if attempt == 1:
-                # The sign-in page reliably re-mounts shortly after it first
-                # paints. Letting that happen before typing avoids most of the
-                # refills below, rather than racing it and cleaning up after.
-                time.sleep(1.4)
-                settled = cls.wait_for_login_form(timeout=8.0)
-                if settled is not None:
-                    window, user_field, pass_field = settled
-
-            if attempt > 1:
-                login_logger.info("[%s] refilling the form (attempt %d)", username, attempt)
-                _set_login_stage(
-                    "typing",
-                    f"The sign-in page reset - entering the credentials again (try {attempt})...",
-                    username
-                )
-
-            _set_login_stage("typing", "Entering username...", username)
-            if not cls.fill_field_verified(user_field, username, "username"):
-                continue
-
-            if cls.find_transient_login_popup(hwnd) is not None:
-                cls.click_transient_login_sign_out(hwnd)
-                cls.wait_for_transient_login_popup_gone(timeout=8.0)
-                cls.wait_for_signed_out(timeout=8.0)
-                continue
-            if _LOGIN_CANCEL_EVENT.is_set():
-                return False
-
-            _set_login_stage("typing", "Entering password...", username)
-            if not cls.fill_field_verified(pass_field, password, "password", masked=True):
-                continue
-
-            if cls.find_transient_login_popup(hwnd) is not None:
-                cls.click_transient_login_sign_out(hwnd)
-                cls.wait_for_transient_login_popup_gone(timeout=8.0)
-                cls.wait_for_signed_out(timeout=8.0)
-                continue
-            if _LOGIN_CANCEL_EVENT.is_set():
-                return False
-
-            # The reload check. Both fields are re-read now, together, so a
-            # page reset between the two entries is caught before anything is
-            # submitted rather than after Riot rejects a half-empty form.
-            time.sleep(0.25)
-            user_now = cls._field_text(user_field)
-            pass_now = cls._field_text(pass_field)
-            if user_now != username or len(pass_now) != len(password):
-                login_logger.warning(
-                    "[%s] the form reset before submitting - username=%r, password=%d chars",
-                    username, user_now, len(pass_now)
-                )
-                continue
-
-            if stay_signed_in:
-                _set_login_stage("typing", "Ticking \"Stay signed in\"...", username)
-                set_stay_signed_in(hwnd)
-                # Ticking it re-reads the form, so confirm one last time that
-                # nothing moved before committing.
-                if cls._field_text(user_field) != username:
-                    login_logger.warning("[%s] the form reset while ticking the checkbox", username)
+            with _ScopedUiChangeListener(hwnd) as listener:
+                # Re-read after registering the hook so a remount between the
+                # readiness check and subscription cannot leave stale fields.
+                refreshed, _ = cls._login_form_from_hwnd(hwnd) if hwnd else (None, "")
+                if refreshed is not None:
+                    window, user_field, pass_field = refreshed
+                try:
+                    snapshot = cls._scan_login_controls(window)
+                except Exception:
                     continue
 
-            _set_login_stage("typing", "Submitting the login...", username)
-            cls.submit_login_form(window, pass_field)
-            _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
-            login_logger.info("[%s] submitted on attempt %d", username, attempt)
-            return True
+                if snapshot.get("popup_sign_out") is not None:
+                    cls.click_transient_login_sign_out(
+                        hwnd, button=snapshot.get("popup_sign_out")
+                    )
+                    cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                    cls.wait_for_signed_out(timeout=8.0)
+                    continue
+
+                if attempt > 1:
+                    login_logger.info("refilling the form after a page reset (attempt %d)", attempt)
+                    _set_login_stage(
+                        "typing",
+                        f"The sign-in page reset - entering the credentials again (try {attempt})...",
+                        username
+                    )
+
+                _set_login_stage("typing", "Entering username...", username)
+                if not cls.fill_field_verified(user_field, username, "username"):
+                    continue
+                _timing_mark("username_assigned")
+
+                # Pump any structure/state notification raised during the
+                # synchronous write. Only rescan here when Riot actually
+                # changed the page; otherwise the mid-entry popup check is free.
+                if listener.poll(clear=True):
+                    try:
+                        snapshot = cls._scan_login_controls(window)
+                    except Exception:
+                        continue
+                    if snapshot.get("popup_sign_out") is not None:
+                        cls.click_transient_login_sign_out(
+                            hwnd, button=snapshot.get("popup_sign_out")
+                        )
+                        cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                        cls.wait_for_signed_out(timeout=8.0)
+                        continue
+                    user_field = snapshot.get("username") or user_field
+                    pass_field = snapshot.get("password") or pass_field
+                    if cls._field_text(user_field) != username:
+                        continue
+                if _LOGIN_CANCEL_EVENT.is_set():
+                    return False
+
+                _set_login_stage("typing", "Entering password...", username)
+                if not cls.fill_field_verified(pass_field, password, "password", masked=True):
+                    continue
+                _timing_mark("password_assigned")
+                if _LOGIN_CANCEL_EVENT.is_set():
+                    return False
+
+                # One fresh scoped traversal is both the final popup check and
+                # stale-control invalidation. It replaces three independent
+                # full-tree scans plus the fixed post-password delay.
+                try:
+                    snapshot = cls._scan_login_controls(window)
+                    user_field = snapshot.get("username")
+                    pass_field = snapshot.get("password")
+                except Exception:
+                    continue
+                if snapshot.get("popup_sign_out") is not None:
+                    cls.click_transient_login_sign_out(
+                        hwnd, button=snapshot.get("popup_sign_out")
+                    )
+                    cls.wait_for_transient_login_popup_gone(timeout=8.0)
+                    cls.wait_for_signed_out(timeout=8.0)
+                    continue
+                if user_field is None or pass_field is None:
+                    continue
+                if cls._field_text(user_field) != username or len(cls._field_text(pass_field)) != len(password):
+                    login_logger.warning("the form reset before submission; reacquiring controls")
+                    continue
+
+                if stay_signed_in:
+                    _set_login_stage("typing", "Ticking \"Stay signed in\"...", username)
+                    set_stay_signed_in(
+                        hwnd,
+                        window=window,
+                        checkbox=snapshot.get("stay_signed_in"),
+                        password_field=pass_field,
+                    )
+                    if _LOGIN_CANCEL_EVENT.is_set():
+                        return False
+                    if cls._field_text(user_field) != username:
+                        login_logger.warning("the form reset while setting stay-signed-in")
+                        continue
+
+                _set_login_stage("typing", "Submitting the login...", username)
+                if not cls.submit_login_form(
+                    window,
+                    pass_field,
+                    submit_control=snapshot.get("submit"),
+                    listener=listener,
+                ):
+                    return False
+                _set_login_stage("submitted", "Signing in... waiting for Riot to respond.", username)
+                login_logger.info("login form submitted on attempt %d", attempt)
+                return True
 
         login_logger.error("[%s] the form kept resetting - gave up after %d attempts", username, tries)
         return False
@@ -1664,23 +2047,17 @@ class ClientLauncher:
         That popup-specific retry does not change the form-reset/relaunch
         policy above.
         """
+        if getattr(_LOGIN_TIMING_LOCAL, "trace", None) is None:
+            _timing_begin()
         _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
         if _LOGIN_CANCEL_EVENT.is_set():
             return
-        hwnd = None
-        for _ in range(120):
-            hwnd = cls.find_riot_window()
-            if hwnd:
-                break
-            time.sleep(0.25)
-
-        if not hwnd:
-            _set_login_stage("error", "The Riot Client never opened.", username)
-            return
-
-        login_logger.info("[%s] Riot Client window is up", username)
+        hwnd = cls.find_riot_window()
+        if hwnd:
+            _timing_mark("riot_window_discovered")
+            login_logger.info("Riot Client window is up")
         runtime_audit.window_automation(
-            "UIA read + clipboard paste + SendInput keystrokes (credential fill)", "Riot Client"
+            "background UIA credential fill; foreground input only as fallback", "Riot Client"
         )
         _set_login_stage("waiting_window", "Waiting for the sign-in screen...", username)
 
@@ -1729,16 +2106,12 @@ class ClientLauncher:
         try:
             runtime_audit.process_launch(target_path, "restart Riot Client (sign-in page reset)")
             subprocess.Popen([target_path], shell=False)
+            _timing_mark("riot_process_started")
         except Exception as e:
             _set_login_stage("error", f"Couldn't restart the Riot Client: {e}", username)
             return
 
         _set_login_stage("waiting_window", "Waiting for the Riot Client to reopen...", username)
-        for _ in range(160):
-            if cls.find_riot_window():
-                break
-            time.sleep(0.25)
-
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3, form_timeout=60.0)
         if result is True:
             cls._monitor_login_result(username, password, stay_signed_in, client_path)
@@ -1932,6 +2305,7 @@ class ClientLauncher:
             def _retry_worker():
                 try:
                     _drop_stale_uia_client()
+                    _timing_begin()
                     cls.auto_fill_credentials(username, password, False, stay_signed_in, target_path)
                 except Exception as e:
                     login_logger.exception("[%s] retry worker crashed", username)
@@ -1958,6 +2332,7 @@ class ClientLauncher:
             def _warm_worker():
                 try:
                     _drop_stale_uia_client()
+                    _timing_begin()
 
                     if cls.is_valorant_running():
                         _set_login_stage("opening", "Closing VALORANT...", username)
@@ -1970,10 +2345,6 @@ class ClientLauncher:
                         cls.api_sign_out()
                         cls.wait_for_signed_out(timeout=8.0)
                         _set_login_stage("waiting_window", "Loading the sign-in page...", username)
-                        # Yield briefly for the teardown, then let the
-                        # credential-control wait be the readiness signal.
-                        # This replaced a fixed 1.5s tax on every warm swap.
-                        time.sleep(0.2)
                     else:
                         _set_login_stage("waiting_window", "Opening the sign-in page...", username)
 
@@ -2023,6 +2394,7 @@ class ClientLauncher:
         """
         try:
             _drop_stale_uia_client()
+            _timing_begin()
 
             # 1. VALORANT first - the Riot Client can't switch accounts under a
             #    running game, and confirm it's actually gone before moving on.
@@ -2062,6 +2434,7 @@ class ClientLauncher:
 
             runtime_audit.process_launch(target_path, "start Riot Client for login")
             subprocess.Popen([target_path], shell=False)
+            _timing_mark("riot_process_started")
             _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
             cls.auto_fill_credentials(username, password, True, stay_signed_in, target_path)
         except Exception as e:
@@ -2071,6 +2444,8 @@ class ClientLauncher:
     @staticmethod
     def force_kill_riot_client():
         """Force closes all Riot Client processes cleanly to reset rate limits and release session lock."""
+        ClientLauncher._last_riot_hwnd = None
+        ClientLauncher._last_riot_pid = None
         try:
             cmd = ["taskkill", "/F", "/T", "/IM", "RiotClientServices.exe", "/IM", "RiotClientUx.exe", "/IM", "RiotClientCrashHandler.exe"]
             runtime_audit.process_terminate("RiotClientServices.exe", "taskkill /F", "reset session lock / rate limits")

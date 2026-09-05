@@ -1,9 +1,9 @@
 ; Inno Setup script for Vortex | Valorant Account Manager.
-; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=5.5.44
+; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=5.5.45
 ; (AppVersion defaults below if not passed on the command line.)
 
 #ifndef AppVersion
-  #define AppVersion "5.5.44"
+  #define AppVersion "5.5.45"
 #endif
 
 #define AppName "Vortex"
@@ -53,15 +53,17 @@ Source: "{#BundleDir}\Vortex.exe"; DestDir: "{app}"; Flags: ignoreversion restar
 Source: "{#BundleDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"
+; Shortcuts point straight at the manifest-elevated executable so Windows
+; retains its native UAC/shield behavior. No launcher or fake shield artwork.
+Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 Name: "{group}\Uninstall Vortex"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 ; skipifsilent: during a silent auto-update the background updater script
 ; relaunches Vortex itself. Without this flag both would launch it, which is
 ; why the update showed its error dialog twice.
-Filename: "{app}\{#AppExeName}"; Description: "Launch Vortex"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Description: "Launch Vortex"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#AppExeName}"; Flags: runhidden; RunOnceId: "KillVortex"

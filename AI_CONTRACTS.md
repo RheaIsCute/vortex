@@ -54,6 +54,34 @@ batch checks can run without activating Riot Client. Foreground keyboard input
 is a compatibility fallback only. Login stage transitions notify event waiters;
 batch cancellation sets the shared cancellation event and closes Riot Client.
 
+Riot UI readiness uses an immediate check, a process-scoped native WinEvent
+listener, a post-subscription race check, and short adaptive polling fallback.
+Listeners must be removed on success, timeout, cancellation, exception, and
+window replacement. Dynamic UIA controls are resolved from one Riot-window
+tree traversal and invalidated/reacquired after structure changes or stale
+access; only the Riot executable path and a PID-bound top-level HWND are reused.
+`VORTEX_LOGIN_TIMING=1` enables milestone/duration logs that must never include
+account identifiers, credential values or lengths, tokens, or auth payloads.
+
+Sequential batch transitions wait for actual signed-out/process-gone state and
+retain a short rate-limit cooldown. They must not parallelize Riot logins or
+weaken Stop/cancellation, progress, or banned-account behavior.
+
+## Windows startup elevation
+
+Owners: `app.py`, `backend/elevation.py`, `vortex.manifest`, `build_exe.spec`
+
+Purpose: Ensure Vortex cannot initialize as an unelevated Windows application.
+
+The frozen onedir executable embeds `requireAdministrator` with
+`uiAccess="false"`; `build.bat` verifies the final PE resource before accepting
+the build. Source execution performs a `runas` handoff before importing
+FastAPI, pywebview, Riot automation, or optional integrations. The original
+process exits after a successful handoff, denial/relaunch failure exits without
+initialization, and a private sentinel prevents elevation loops. Installer
+shortcuts target `Vortex.exe` directly so native Windows UAC/shield behavior is
+preserved. The updater/onedir architecture must remain intact.
+
 ## Local VALORANT client integration
 
 Owner: `backend/valorant_client.py` (`ValorantLiveClient`)

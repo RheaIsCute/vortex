@@ -328,32 +328,35 @@
         <!-- ACCOUNT ROSTER — collapses out of the way while the dashboard is open -->
         <div class="accounts-view" id="accounts-view">
 
-        <!-- WORKSPACE STATUS STRIP — roster totals, and a one-click filter -->
-        <section class="status-strip" id="status-strip" aria-label="Account overview">
-            <button type="button" class="status-tile is-active" id="status-total" data-tag="ALL" title="Show every account">
-                <span class="status-tile__label">Total</span>
-                <span class="status-tile__value" id="stat-total">0</span>
-            </button>
-            <button type="button" class="status-tile" id="status-mains" data-tag="Main" title="Show main accounts">
-                <span class="status-tile__label">Mains</span>
-                <span class="status-tile__value" id="stat-mains">0</span>
-            </button>
-            <button type="button" class="status-tile" id="status-ranked" data-tag="Ranked" title="Show ranked accounts (level 20+)">
-                <span class="status-tile__label">Ranked</span>
-                <span class="status-tile__value" id="stat-ranked">0</span>
-            </button>
-            <button type="button" class="status-tile" id="status-unrated" data-tag="Unrated" title="Show unrated accounts (below level 20)">
-                <span class="status-tile__label">Unrated</span>
-                <span class="status-tile__value" id="stat-unrated">0</span>
-            </button>
-        </section>
-
-        <!-- ROSTER TOOLBAR — search, result count, filters, view switch -->
+        <!-- ROSTER TOOLBAR — search, roster totals (as one-click filters),
+             result count, filters, view switch. The totals live in this bar
+             rather than in a band of their own: they are a filter control, and
+             a separate full-width strip cost ~53px of the first screen for
+             four numbers. -->
         <section class="controls-bar" aria-label="Roster controls">
             <div class="search-wrapper">
                 <i class="fa-solid fa-magnifying-glass search-icon"></i>
                 <input type="text" id="search-input" placeholder="Search accounts, Riot IDs, notes..." autocomplete="off" spellcheck="false">
                 <button class="search-clear-btn" id="search-clear" title="Clear search"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="status-strip" id="status-strip" role="group" aria-label="Account overview">
+                <button type="button" class="status-tile is-active" id="status-total" data-tag="ALL" title="Show every account">
+                    <span class="status-tile__label">Total</span>
+                    <span class="status-tile__value" id="stat-total">0</span>
+                </button>
+                <button type="button" class="status-tile" id="status-mains" data-tag="Main" title="Show main accounts">
+                    <span class="status-tile__label">Mains</span>
+                    <span class="status-tile__value" id="stat-mains">0</span>
+                </button>
+                <button type="button" class="status-tile" id="status-ranked" data-tag="Ranked" title="Show ranked accounts (level 20+)">
+                    <span class="status-tile__label">Ranked</span>
+                    <span class="status-tile__value" id="stat-ranked">0</span>
+                </button>
+                <button type="button" class="status-tile" id="status-unrated" data-tag="Unrated" title="Show unrated accounts (below level 20)">
+                    <span class="status-tile__label">Unrated</span>
+                    <span class="status-tile__value" id="stat-unrated">0</span>
+                </button>
             </div>
 
             <div class="secondary-controls">
@@ -720,8 +723,7 @@
                 <section class="settings-section">
                     <h3 class="settings-section-title"><i class="fa-solid fa-palette"></i> Appearance</h3>
                 <div class="form-group">
-                    <label><i class="fa-solid fa-palette"></i> Accent Theme</label>
-                    <div class="theme-picker" id="theme-picker">
+                    <div class="theme-picker" id="theme-picker" aria-label="Accent theme">
                         <button type="button" class="theme-swatch" data-theme="purple" title="Violet">
                             <span class="theme-swatch-preview theme-preview-purple"></span>
                             <span class="theme-swatch-label">Violet</span>
@@ -754,7 +756,7 @@
                 <section class="settings-section">
                     <h3 class="settings-section-title"><i class="fa-solid fa-desktop"></i> General</h3>
                 <div class="form-group">
-                    <label for="settings-client-path"><i class="fa-solid fa-desktop"></i> Riot Client Path</label>
+                    <label for="settings-client-path">Riot Client Path</label>
                     <div class="input-with-action">
                         <input type="text" id="settings-client-path" placeholder="C:\Riot Games\Riot Client\RiotClientServices.exe" class="form-control">
                         <button type="button" class="btn btn-secondary" id="btn-auto-detect-client">
@@ -768,7 +770,6 @@
                 <section class="settings-section">
                     <h3 class="settings-section-title"><i class="fa-solid fa-arrows-rotate"></i> Updates</h3>
                 <div class="form-group">
-                    <label><i class="fa-solid fa-arrows-rotate"></i> App Version & Updates</label>
                     <div class="input-with-action">
                         <input type="text" id="settings-app-version" class="form-control" readonly>
                         <button type="button" class="btn btn-secondary" id="btn-check-update">
@@ -782,7 +783,6 @@
                 <section class="settings-section">
                     <h3 class="settings-section-title"><i class="fa-solid fa-satellite-dish"></i> Live Match</h3>
                 <div class="form-group">
-                    <label><i class="fa-solid fa-satellite-dish"></i> Live Match Features</label>
                     <p class="field-help">
                         Enables live match tracking and the in-game aim HUD. Turning it
                         off also closes the VAL Tracker / Overwolf integration and
@@ -802,9 +802,8 @@
                 </section>
 
                 <section class="settings-section">
-                    <h3 class="settings-section-title"><i class="fa-solid fa-window-restore"></i> Post-Game</h3>
+                    <h3 class="settings-section-title"><i class="fa-solid fa-window-restore"></i> Post-Game Actions</h3>
                 <div class="form-group">
-                    <label><i class="fa-solid fa-window-restore"></i> Post-Game Actions</label>
                     <p class="field-help">
                         Automatically start a chosen program the moment VALORANT exits.
                     </p>
@@ -824,10 +823,8 @@
                 </section>
 
                 <section class="settings-section">
-                    <h3 class="settings-section-title"><i class="fa-solid fa-right-to-bracket"></i> Launch &amp; Login</h3>
+                    <h3 class="settings-section-title"><i class="fa-solid fa-right-to-bracket"></i> Launch & Login</h3>
                 <div class="form-group">
-                    <label><i class="fa-solid fa-right-to-bracket"></i> Launch & Login</label>
-
                     <div class="switch-row">
                         <label class="switch">
                             <input type="checkbox" id="settings-stay-signed-in">

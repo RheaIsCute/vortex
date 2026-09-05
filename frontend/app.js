@@ -8,9 +8,32 @@
 // Game assets are mirrored locally at release time so rank/agent/weapon art
 // stays sharp and the dashboard does not depend on a tiny remote fallback.
 const LOCAL_GAME_ASSET_ROOT = "/static/assets/valorant-api/";
+
+// valorant-api currently serves identical artwork for a few retired/internal
+// map ids.  Keep the URLs working offline while shipping one local copy of
+// each identical file set instead of every byte-for-byte duplicate.
+const LOCAL_GAME_ASSET_ALIASES = {
+    "maps/4490f1d6-4818-bf5f-9b3a-9c9a8dbb52ed/listviewicon.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/listviewicon.png",
+    "maps/4490f1d6-4818-bf5f-9b3a-9c9a8dbb52ed/splash.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/splash.png",
+    "maps/a264de0f-4a04-9c78-c97a-a6b192ce6e86/listviewicon.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/listviewicon.png",
+    "maps/a264de0f-4a04-9c78-c97a-a6b192ce6e86/splash.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/splash.png",
+    "maps/a38a3f9a-4042-844c-8970-a3ac2f7ce93d/listviewicon.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/listviewicon.png",
+    "maps/a38a3f9a-4042-844c-8970-a3ac2f7ce93d/splash.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/splash.png",
+    "maps/a9009649-421f-d5d5-f80c-0cbe02c125bb/listviewicon.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/listviewicon.png",
+    "maps/a9009649-421f-d5d5-f80c-0cbe02c125bb/splash.png": "maps/1c7555fc-4bc6-3b98-9674-789d47ef6c50/splash.png",
+    "maps/1f10dab3-4294-3827-fa35-c2aa00213cf3/listviewicon.png": "maps/5914d1e0-40c4-cfdd-6b88-eba06347686c/listviewicon.png",
+    "maps/1f10dab3-4294-3827-fa35-c2aa00213cf3/splash.png": "maps/5914d1e0-40c4-cfdd-6b88-eba06347686c/splash.png"
+};
+
 function localGameAssetUrl(value) {
     if (typeof value !== "string") return value;
-    return value.replace(/^https:\/\/media\.valorant-api\.com\//i, LOCAL_GAME_ASSET_ROOT);
+    const localUrl = value.replace(/^https:\/\/media\.valorant-api\.com\//i, LOCAL_GAME_ASSET_ROOT);
+    if (!localUrl.startsWith(LOCAL_GAME_ASSET_ROOT)) return localUrl;
+
+    const relativePath = localUrl.slice(LOCAL_GAME_ASSET_ROOT.length);
+    return LOCAL_GAME_ASSET_ROOT + (
+        LOCAL_GAME_ASSET_ALIASES[relativePath.toLowerCase()] || relativePath
+    );
 }
 
 function localizeGameAssets(value) {
@@ -1960,6 +1983,13 @@ function buildAccountView(acc) {
         wrClass: winrate >= 55 ? "wr-high" : (winrate >= 45 ? "wr-mid" : "wr-low"),
         tierClass: `tier-${tier.toLowerCase()}`,
         statusBadge: getStatusBadge(acc.status),
+        // PLAYABLE is the resting state of almost every account, so the chip
+        // repeated down the roster carried no information while spending the
+        // strongest colour on the row. List views show a status chip only when
+        // the status is worth reacting to; the hero card keeps the full badge.
+        statusChip: ["", "PLAYABLE"].includes((acc.status || "").toUpperCase())
+            ? ""
+            : getStatusBadge(acc.status),
         displayName: acc.display_name || acc.username,
         lastLoginFormatted
     };
@@ -2233,7 +2263,7 @@ function renderGridView() {
                         ? '<span class="badge-region is-muted" title="Region not confirmed yet">--</span>'
                         : `<span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>`}
                     <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
-                    ${v.needsCheck ? '<span class="badge-unset" title="Log in once to verify these credentials and pull live account data"><span class="mini-spinner"></span> Unverified</span>' : v.statusBadge}
+                    ${v.needsCheck ? '<span class="badge-unset" title="Log in once to verify these credentials and pull live account data"><span class="mini-spinner"></span> Unverified</span>' : v.statusChip}
                 </div>
 
                 <div class="roster-wr" title="${v.needsCheck ? 'No match data yet' : v.winrate + '% across ' + v.gamesPlayed + ' matches'}">
@@ -2566,8 +2596,16 @@ function matchCardHtml(m, i, source) {
     `;
 }
 
+/**
+ * The shared match row carries its own "K / D / A", "KD" and "HS%" captions so
+ * it can stand alone in the dashboard column and the profile modal, where the
+ * grid drops columns responsively. In this full-width list the same three
+ * captions were repeating on every row; here they are stated once as a header
+ * and `.matches-list-headed` turns the per-row copies off.
+ */
 function renderMatchHistoryList(matches) {
     if (!matches || matches.length === 0) {
+        DOM.matchesListContainer.classList.remove("matches-list-headed");
         DOM.matchesListContainer.innerHTML = stateBlock({
             icon: "fa-shield-halved",
             title: "No recent match data for this account",
@@ -2576,7 +2614,20 @@ function renderMatchHistoryList(matches) {
         return;
     }
 
-    DOM.matchesListContainer.innerHTML = matches.map((m, i) => matchCardHtml(m, i, "account")).join("");
+    const head = `
+        <div class="match-list-head" aria-hidden="true">
+            <span>Agent</span>
+            <span>Map &amp; date</span>
+            <span>Result</span>
+            <span class="mh-head-stat">K / D / A</span>
+            <span class="mh-head-stat">KD</span>
+            <span class="mh-head-stat">HS%</span>
+            <span></span>
+        </div>`;
+
+    DOM.matchesListContainer.classList.add("matches-list-headed");
+    DOM.matchesListContainer.innerHTML =
+        head + matches.map((m, i) => matchCardHtml(m, i, "account")).join("");
 }
 
 // The "Recent Winrate" figure in the match modal should reflect the matches
@@ -4873,11 +4924,16 @@ function renderMatchHero(match, live) {
     // can't be placed in order, so they render muted rather than pretending.
     const history = p.history || [];
     DOM.dashRoundStrip.innerHTML = history.length
-        ? history.map(r => {
+        ? history.map((r, i) => {
             const label = r.known
                 ? `Round ${r.n}: ${r.won ? "won" : "lost"}${r.side ? ` on ${r.side.toLowerCase()}` : ""}`
                 : "Played before tracking started";
-            return `<span class="dash-pip ${r.won ? "is-won" : "is-lost"}${r.known ? "" : " is-unknown"}" title="${escapeHtml(label)}"></span>`;
+            // The strip was one undifferentiated run of dashes. Marking where
+            // the side flips gives it the halves the match actually has, so a
+            // glance reads "we lost attack, we're winning defence".
+            const prev = history[i - 1];
+            const sideBreak = prev && r.side && prev.side && prev.side !== r.side;
+            return `<span class="dash-pip ${r.won ? "is-won" : "is-lost"}${r.known ? "" : " is-unknown"}${sideBreak ? " is-side-break" : ""}" title="${escapeHtml(label)}"></span>`;
           }).join("")
         : `<span class="dash-strip-empty">Round 1 in progress</span>`;
 }
@@ -4902,6 +4958,17 @@ function renderDuoBanner(match) {
         enemyStacks,
         hasEnemy
     })) return;
+
+    // This panel exists to surface a finding. With no stack on either side it
+    // spent a full band of the dashboard saying "All Solo Queue / No Stacks
+    // Detected" - the common case - so it stays out of the way until there is
+    // something to report. One side being clean while the other stacks is
+    // itself the finding, so that still renders.
+    if (allyStacks.length === 0 && enemyStacks.length === 0) {
+        DOM.dashDuoBanner.style.display = "none";
+        DOM.dashDuoBanner.innerHTML = "";
+        return;
+    }
 
     const allyHtml = allyStacks.length > 0
         ? allyStacks.map(s => `

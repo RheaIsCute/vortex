@@ -1,21 +1,18 @@
 """
 Windows elevation helpers.
 
-Recent Riot Client builds run elevated (RiotClientServices.exe and the
-Riot Client.exe Electron host come up at high integrity). Windows UIPI then
-stops a medium-integrity process - Vortex, normally - from reading that
-window's controls or calling SetForegroundWindow/AttachThreadInput against
-it, which is exactly what the login automation needs. The symptom in
-login_debug.log is "credential fields not mounted yet" forever, plus
-"AttachThreadInput: Access is denied".
+Vortex's packaged executable advertises ``requireAdministrator`` in its
+manifest, so Windows elevates it before Python starts. Source-mode launches do
+not have that manifest; the helpers here perform the equivalent handoff before
+the backend, WebView, Riot discovery, or optional integrations are imported.
 
-The fix is to run Vortex at the same integrity level. This module detects the
-mismatch and relaunches Vortex elevated on request (one UAC prompt, only when
-a login actually hit the wall).
+The older Riot/Vortex integrity-mismatch helpers remain for API compatibility
+and diagnostics, but an initialized application is now always elevated.
 """
 
 import ctypes
 import os
+import subprocess
 import sys
 from ctypes import wintypes
 from typing import Optional
@@ -34,6 +31,7 @@ _TOKEN_ELEVATION = 20
 _TOKEN_QUERY = 0x0008
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _TH32CS_SNAPPROCESS = 0x00000002
+_ELEVATION_SENTINEL = "--vortex-elevation-requested"
 
 
 class _PROCESSENTRY32W(ctypes.Structure):
@@ -140,17 +138,32 @@ def riot_client_is_elevated() -> bool:
     return False
 
 
-def relaunch_command():
-    """(exe, params) to start another copy of Vortex, frozen build or source."""
-    if getattr(sys, "frozen", False):
-        return sys.executable, ""
-    argv0 = sys.argv[0] if sys.argv else ""
-    script = os.path.abspath(argv0) if argv0.endswith(".py") else ""
+def _source_script_path() -> str:
+    """Return the absolute source entry point without trusting malformed argv."""
+    argv0 = str(sys.argv[0]) if sys.argv and isinstance(sys.argv[0], str) else ""
+    script = os.path.abspath(argv0) if argv0.lower().endswith(".py") else ""
     if not script or not os.path.exists(script):
         script = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py"
         )
-    return sys.executable, f'"{script}"'
+    return script
+
+
+def relaunch_command():
+    """Return ``(executable, parameters)`` for a safe elevated handoff.
+
+    ``subprocess.list2cmdline`` applies Windows' native quoting rules, so source
+    paths and user arguments containing spaces or quotes survive ShellExecuteW.
+    Credentials are never accepted as command-line arguments by Vortex and this
+    command is deliberately not logged.
+    """
+    forwarded = [str(arg) for arg in sys.argv[1:] if isinstance(arg, str)]
+    if _ELEVATION_SENTINEL not in forwarded:
+        forwarded.append(_ELEVATION_SENTINEL)
+    if getattr(sys, "frozen", False):
+        return sys.executable, subprocess.list2cmdline(forwarded)
+    args = [_source_script_path(), *forwarded]
+    return sys.executable, subprocess.list2cmdline(args)
 
 
 def relaunch_elevated() -> bool:
@@ -159,17 +172,42 @@ def relaunch_elevated() -> bool:
     True if Windows accepted the request (the prompt was shown / consented);
     the caller then exits this instance so only the elevated one remains.
 
-    Vortex holds no single-instance lock and picks the next free port, so the
-    brief overlap while this process shuts down is harmless.
+    The caller must terminate immediately after a successful handoff. No Vortex
+    services or windows are initialized before this function is used at startup.
     """
     if os.name != "nt" or is_self_elevated():
         return False
     exe, params = relaunch_command()
     try:
-        workdir = os.path.dirname(exe) or None
+        workdir = (
+            os.path.dirname(sys.executable)
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(_source_script_path())
+        ) or None
         # ShellExecuteW returns >32 on success.
         runtime_audit.process_launch(exe, "relaunch Vortex elevated (UAC runas)")
         rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, workdir, 1)
         return int(rc) > 32
     except Exception:
         return False
+
+
+def startup_elevation_action() -> str:
+    """Return ``continue``, ``relaunched``, or ``failed`` for startup.
+
+    In an unelevated process this requests one UAC handoff. The original caller
+    must exit for both ``relaunched`` and ``failed``. The private sentinel
+    prevents a loop if Windows starts the child without a high token.
+    """
+    if os.name != "nt":
+        return "continue"
+    if is_self_elevated():
+        return "continue"
+    if _ELEVATION_SENTINEL in sys.argv[1:]:
+        return "failed"
+    return "relaunched" if relaunch_elevated() else "failed"
+
+
+def ensure_elevated_startup() -> bool:
+    """Compatibility boolean for callers that only need continue/exit."""
+    return startup_elevation_action() == "continue"

@@ -1215,11 +1215,13 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     color: var(--text-sub);
 }
 
+/* Region is reference data on every row, not a highlight - it reads as a quiet
+   mono label. The accent is reserved for state and intent. */
 .badge-region {
-    background: var(--tint-2);
-    border-color: var(--edge);
+    background: var(--surface-2);
+    border-color: var(--stroke-2);
     font-family: var(--font-mono);
-    color: var(--a-soft);
+    color: var(--text-muted);
 }
 
 .badge-tag.tag-main    { background: rgba(245, 158, 11, 0.14); color: #fbbf24; border-color: rgba(245, 158, 11, 0.32); }
@@ -1574,26 +1576,32 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 
 /* --- 1. Status strip ---------------------------------------------------- */
 
+/* Roster totals, as one segmented filter control inside the toolbar. Each
+   segment is sized by its own content, so the four numbers cost a strip of
+   ~40px shared with the search field instead of a full-width band of their
+   own. Label and value sit on one line - they are read together. */
 .status-strip {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--sp-3);
-    margin-bottom: var(--sp-5);
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
 }
 
 .status-tile {
-    display: flex;
+    display: inline-flex;
     align-items: baseline;
-    justify-content: space-between;
-    gap: var(--sp-4);
-    padding: var(--sp-4) var(--sp-6);
-    border: 1px solid var(--stroke-1);
-    border-left: 2px solid var(--stroke-2);
-    border-radius: var(--radius-sm);
-    background: rgba(9, 12, 20, 0.72);
-    color: var(--text-sub);
+    gap: var(--sp-2);
+    padding: 0 var(--sp-5);
+    height: 32px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    background: none;
+    color: var(--text-muted);
     cursor: pointer;
-    text-align: left;
+    white-space: nowrap;
     font-family: inherit;
     transition: background var(--dur-2) var(--ease-out),
                 border-color var(--dur-2) var(--ease-out),
@@ -1602,35 +1610,34 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 
 .status-tile:hover {
     background: var(--surface-2);
-    border-left-color: var(--a-soft);
     color: var(--text-main);
 }
 
 .status-tile.is-active {
     background: var(--tint-2);
     border-color: var(--edge);
-    border-left-color: var(--a);
     color: var(--text-main);
 }
 
 .status-tile__label {
-    font-size: var(--fs-2xs);
-    font-weight: 700;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: inherit;
 }
 
 .status-tile.is-active .status-tile__label { color: var(--a-soft); }
 
 .status-tile__value {
     font-family: var(--font-mono);
-    font-size: var(--fs-xl);
+    font-size: var(--fs-md);
     font-weight: 700;
     line-height: 1;
     color: var(--text-main);
     font-variant-numeric: tabular-nums;
 }
+
+.status-tile:not(.is-active) .status-tile__value { color: var(--text-sub); }
 
 /* --- 2. Roster rows ------------------------------------------------------ */
 
@@ -1643,21 +1650,31 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     gap: var(--sp-2);
 }
 
+/* Every track is either a fixed length or an `fr` of the same free space, so
+   the columns land on the same x in every row. Content-sized tracks
+   (`max-content` / `auto`) were measured per row - each row is its own grid -
+   which left the chip and action columns visibly ragged down the list. The two
+   flexible tracks split the slack so the chips sit near the name instead of
+   being pushed to the far edge by a single greedy 1fr identity column. */
 .account-card.roster-row {
     display: grid;
     grid-template-columns:
-        22px                /* pin */
-        40px                /* rank emblem */
-        minmax(190px, 1fr) /* identity */
-        minmax(150px, max-content) /* region + type + status */
-        66px                /* winrate */
-        minmax(96px, auto)  /* last checked */
-        minmax(232px, auto);/* actions */
+        22px               /* pin */
+        40px               /* rank emblem */
+        minmax(0, 1.35fr)  /* identity */
+        minmax(0, 1fr)     /* region + type + status */
+        64px               /* winrate */
+        96px               /* last checked */
+        232px;             /* actions */
     align-items: center;
     gap: var(--sp-5);
     padding: var(--sp-3) var(--sp-6);
     border-radius: var(--radius-sm);
     border: 1px solid var(--stroke-1);
+    /* The state rail is always 2px and only changes colour. When plain rows
+       had a 1px left border and flagged ones 2px, every flagged row's content
+       started 1px further right and the columns wobbled down the list. */
+    border-left: 2px solid var(--stroke-1);
     background: rgba(9, 12, 20, 0.72);
     box-shadow: none;
     transition: background var(--dur-2) var(--ease-out),
@@ -1676,16 +1693,16 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 .account-card.roster-row.is-favorite {
-    border-left: 2px solid rgba(var(--warn-rgb), 0.75);
+    border-left-color: rgba(var(--warn-rgb), 0.75);
 }
 
 .account-card.roster-row.is-active-session {
-    border-left: 2px solid var(--a);
+    border-left-color: var(--a);
     background: var(--tint-1);
 }
 
 .account-card.roster-row.needs-check {
-    border-left: 2px solid rgba(var(--info-rgb), 0.6);
+    border-left-color: rgba(var(--info-rgb), 0.6);
 }
 
 .account-card.roster-row.is-highlighted {
@@ -1864,6 +1881,10 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     gap: var(--sp-3);
 }
 
+/* LOGIN is the resting state of every row, so it stays neutral: twenty accent
+   buttons stacked down the page made a purple ladder that out-shouted the one
+   row that is actually different (the signed-in account's PLAY). The accent
+   arrives on hover/focus, where it marks intent rather than decorating. */
 .roster-act {
     display: inline-flex;
     align-items: center;
@@ -1873,9 +1894,9 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     height: 30px;
     padding: 0 var(--sp-5);
     border-radius: var(--radius-xs);
-    border: 1px solid var(--edge);
-    background: var(--tint-2);
-    color: var(--a-soft);
+    border: 1px solid var(--stroke-2);
+    background: var(--surface-2);
+    color: var(--text-sub);
     font-family: inherit;
     font-size: var(--fs-xs);
     font-weight: 700;
@@ -1887,11 +1908,19 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
                 color var(--dur-2) var(--ease-out);
 }
 
-.roster-act:hover {
+.roster-act:hover,
+.roster-act:focus-visible {
     background: var(--a);
     border-color: var(--a);
     color: #fff;
 }
+
+.roster-row:hover .roster-act {
+    border-color: var(--edge);
+    color: var(--text-main);
+}
+
+.roster-row:hover .roster-act:hover { color: #fff; }
 
 .roster-act.is-play {
     background: var(--grad-primary);
@@ -2019,19 +2048,31 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 
 /* --- 4. Responsive: fold the row down as the window narrows ------------- */
 
+/* Each breakpoint drops one cell, so each needs exactly as many tracks as the
+   cells that survive it - and they stay fixed or `fr` (never `max-content`) so
+   the columns keep landing on the same x in every row. */
 @media (max-width: 1320px) {
+    /* Last-checked is the first thing to go: it is also on the row's title.
+       Six cells left: pin, rank, identity, tags, winrate, actions. */
     .account-card.roster-row {
-        grid-template-columns: 22px 40px minmax(170px, 1fr) minmax(120px, max-content) 62px minmax(210px, max-content);
+        grid-template-columns:
+            22px 40px minmax(0, 1.3fr) minmax(0, 1fr) 62px 224px;
     }
-    /* Last-checked is the first thing to go: it is also on the row's title. */
     .roster-checked { display: none; }
 }
 
-@media (max-width: 1120px) {
-    .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-
+@media (max-width: 1180px) {
+    /* The chips go too, leaving five: pin, rank, identity, winrate, actions.
+       Declaring six tracks here squeezed the actions into the 88px track meant
+       for the already-hidden last-login cell, and the buttons spilled across
+       the winrate. */
     .account-card.roster-row {
-        grid-template-columns: 22px 40px minmax(150px, 1fr) 62px minmax(200px, auto);
+        grid-template-columns:
+            22px              /* pin */
+            40px              /* rank emblem */
+            minmax(0, 1fr)    /* identity */
+            72px              /* winrate - fits "62 played" without crowding */
+            216px;            /* actions */
     }
     .roster-tags { display: none; }
     .roster-meta-line .roster-note { display: none; }
@@ -2090,12 +2131,64 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
 }
 
 .accounts-table tbody tr:hover td {
-    background: var(--tint-1);
+    background-image: linear-gradient(var(--tint-1), var(--tint-1));
     color: var(--text-main);
 }
 
 .accounts-table tbody tr:last-child td {
     border-bottom: none;
+}
+
+/* Thirteen columns need ~1700px; the window is routinely 1180-1440, so the
+   table always scrolled - and the column that fell off the right edge was
+   Actions, the only one you have to reach. Pin it to the edge so LOGIN / PLAY,
+   history, edit and delete stay put while the data columns scroll under it. */
+.accounts-table th:last-child,
+.accounts-table td:last-child {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    background-color: var(--panel);
+    border-left: 1px solid var(--stroke-2);
+}
+
+.accounts-table th:last-child { z-index: 4; }
+
+/* Same restraint as the roster rows: LOGIN is every row's resting action, so
+   it stays neutral and takes the accent on hover. PLAY on the signed-in row
+   keeps its own colour and is the one filled button in the column. */
+.accounts-table .table-actions .btn-primary {
+    background: var(--surface-2);
+    border: 1px solid var(--stroke-2);
+    color: var(--text-sub);
+    box-shadow: none;
+}
+
+.accounts-table .table-actions .btn-primary:hover {
+    background: var(--a);
+    border-color: var(--a);
+    color: #fff;
+}
+
+.accounts-table tbody tr:hover .table-actions .btn-primary {
+    border-color: var(--edge);
+    color: var(--text-main);
+}
+
+.accounts-table tbody tr:hover .table-actions .btn-primary:hover { color: #fff; }
+
+/* The pinned column casts a soft edge so it reads as floating over the
+   scrolling data rather than as another cell. */
+.accounts-table th:last-child::before,
+.accounts-table td:last-child::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: 18px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.32));
 }
 
 .table-summoner {
@@ -2575,7 +2668,21 @@ select.form-control option {
     line-height: 1.4;
 }
 
-.field-help code,
+/* An earlier edit left `.field-help code` grouped with the checkbox rule, which
+   turned inline <code> into a flex container - a block-level box that forced a
+   line break either side of it and split one-line help text across three lines. */
+.field-help code {
+    display: inline;
+    padding: 1px 5px;
+    border-radius: var(--radius-2xs);
+    background: var(--surface-2);
+    border: 1px solid var(--stroke-1);
+    font-family: var(--font-mono);
+    font-size: 0.94em;
+    color: var(--text-sub);
+    white-space: nowrap;
+}
+
 /* --- Custom checkbox --- */
 .form-checkbox {
     display: flex;
@@ -2658,28 +2765,29 @@ select.form-control option {
 
 .justify-center { justify-content: center; }
 
-/* --- Theme picker --- */
+/* --- Theme picker ---
+   Six 245x105 tiles made accent colour the largest, first thing in Settings -
+   the most prominent control for the least consequential preference. The same
+   six choices now read as one row of swatches about a fifth of the height. */
 .theme-picker {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 9px;
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+    gap: var(--sp-2);
 }
 
 .theme-swatch {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 10px 8px;
+    gap: var(--sp-3);
+    padding: 0 var(--sp-5) 0 var(--sp-3);
+    height: 34px;
     background: var(--surface-1);
     border: 1px solid var(--stroke-1);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-full);
     cursor: pointer;
     outline: none;
     position: relative;
-    overflow: hidden;
-    transition: transform var(--dur-2) var(--ease-spring),
-                border-color var(--dur-2) ease,
+    transition: border-color var(--dur-2) ease,
                 background var(--dur-2) ease,
                 box-shadow var(--dur-2) ease;
 }
@@ -2687,39 +2795,28 @@ select.form-control option {
 .theme-swatch:hover {
     border-color: var(--stroke-3);
     background: var(--surface-2);
-    transform: translateY(-3px);
 }
 
 .theme-swatch.active {
     border-color: var(--edge-strong);
     background: var(--surface-3);
-    box-shadow: 0 0 22px -8px rgba(var(--a-rgb), 0.9);
-}
-
-/* Check mark on the selected theme. */
-.theme-swatch.active::after {
-    content: '\f00c';
-    font-family: 'Font Awesome 6 Free';
-    font-weight: 900;
-    position: absolute;
-    top: 6px;
-    right: 7px;
-    font-size: 9px;
-    color: #fff;
-    background: var(--a);
-    width: 15px;
-    height: 15px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    animation: badge-pop var(--dur-3) var(--ease-spring) backwards;
+    box-shadow: 0 0 18px -8px rgba(var(--a-rgb), 0.9);
 }
 
 .theme-swatch-preview {
-    width: 100%;
-    height: 28px;
-    border-radius: var(--radius-xs);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+/* The selected swatch is marked by a ring on its own dot, so the row keeps a
+   steady rhythm instead of one pill growing a floating badge. */
+.theme-swatch.active .theme-swatch-preview {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+                0 0 0 2px var(--panel),
+                0 0 0 3.5px var(--a);
 }
 
 .theme-preview-blue    { background: linear-gradient(135deg, #59b6ff 0%, #3b7bff 48%, #5457f6 100%); }
@@ -2730,8 +2827,9 @@ select.form-control option {
 .theme-preview-cyan    { background: linear-gradient(135deg, #67e8f9 0%, #06b6d4 50%, #0284c7 100%); }
 
 .theme-swatch-label {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     font-weight: 600;
+    line-height: 1;
     color: var(--text-muted);
     transition: color var(--dur-2) ease;
 }
@@ -3079,17 +3177,21 @@ select.form-control option {
 
 .mh-agent { display: flex; align-items: center; gap: 11px; }
 
+/* `overflow` has to stay visible - the role badge is deliberately hung off the
+   bottom-right corner - so the image is clipped by its own radius instead.
+   The plate used to be near-black under agent art that is itself dark, which
+   left every avatar in the list reading as an empty disc; a lighter plate plus
+   a lifted image separates the silhouette at 40px. */
 .mh-avatar {
     position: relative;
     flex: none;
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    overflow: hidden;
-    background: rgba(0, 0, 0, 0.55);
+    overflow: visible;
+    background: linear-gradient(165deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04));
     border: 2px solid rgba(255, 255, 255, 0.14);
     box-shadow: 0 3px 9px rgba(0, 0, 0, 0.4);
-    overflow: visible;
 }
 .mh-avatar > img:not(.mh-role) {
     width: 100%;
@@ -3097,6 +3199,7 @@ select.form-control option {
     object-fit: cover;
     display: block;
     border-radius: 50%;
+    filter: brightness(1.14) contrast(1.06) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
 }
 .mh-avatar.is-empty {
     display: grid;
@@ -3176,6 +3279,27 @@ select.form-control option {
     color: var(--text-sub);
     font-variant-numeric: tabular-nums;
 }
+
+/* Column captions, stated once above the list. Mirrors .match-card's grid so
+   the headings sit over their own columns; the card's 1px border plus 3px
+   status rail are added to the 16px inset so the two line up. */
+.match-list-head {
+    display: grid;
+    grid-template-columns:
+        minmax(132px, 1.2fr) minmax(178px, 1.5fr) minmax(78px, 0.6fr)
+        84px 52px 48px 16px;
+    column-gap: 14px;
+    padding: 2px 17px 7px 19px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.match-list-head .mh-head-stat { text-align: right; }
+
+.matches-list-headed .mh-stat-label { display: none; }
 
 .mh-stat {
     display: flex;
@@ -3974,16 +4098,24 @@ select.form-control option {
 
     .header-actions { gap: 6px; }
 
-    /* Action buttons collapse to icons to keep the row on one line. */
-    .header-actions .btn > span {
-        display: none;
+    /* Action buttons collapse to icons to keep the row on one line.
+       The leading `body` is load-bearing: the dashboard-mode collapse further
+       down the file declares `.header-actions .btn > span` with the same
+       specificity and, being later, was winning here - so below 1120px the
+       labels stayed on and clipped mid-word ("Che", "Add", "Imp", "Syn")
+       instead of collapsing. Matching that rule's technique also keeps the
+       width transition rather than snapping display on and off. */
+    body .header-actions .btn > span {
+        max-width: 0;
+        opacity: 0;
+        margin-left: -8px;
     }
 
-    .header-actions .btn-primary,
-    .header-actions .btn-secondary {
+    body .header-actions .btn:not(.btn-icon) {
         width: 38px;
         height: 38px;
-        padding: 0;
+        padding-left: 0;
+        padding-right: 0;
         gap: 0;
         justify-content: center;
     }
@@ -4120,8 +4252,8 @@ select.form-control option {
     grid-column: 1 / -1;
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    padding: 26px 32px;
+    gap: 14px;
+    padding: 16px 22px 18px;
     border-radius: 20px;
     border: 1px solid rgba(var(--a-rgb), 0.45);
     background:
@@ -4193,7 +4325,7 @@ select.form-control option {
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
-    padding-bottom: 14px;
+    padding-bottom: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -4258,7 +4390,15 @@ select.form-control option {
     align-items: center;
 }
 
+/* The three-column card survives well below the old 1280px breakpoint. Folding
+   the actions onto their own row costs ~80px of height, which on a short
+   window is most of a roster row, so it is held back until the columns really
+   cannot take it. */
 @media (max-width: 1280px) {
+    .hero-body { gap: 16px; }
+}
+
+@media (max-width: 1040px) {
     .hero-body {
         grid-template-columns: 1fr 1fr;
     }
@@ -4266,6 +4406,12 @@ select.form-control option {
         grid-column: 1 / -1;
         flex-direction: row !important;
         align-items: center;
+    }
+    /* Half the width means the trend and the credentials no longer fit side by
+       side; stack them again rather than crushing both. */
+    .hero-stats-col {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "stats" "graph" "creds" "notes";
     }
 }
 
@@ -4284,8 +4430,8 @@ select.form-control option {
 }
 
 .hero-emblem-wrap {
-    width: 96px;
-    height: 96px;
+    width: 80px;
+    height: 80px;
     border-radius: 50%;
     background:
         radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.14), transparent 65%),
@@ -4364,7 +4510,7 @@ select.form-control option {
 }
 
 .hero-summoner-name {
-    font-size: 24px;
+    font-size: 21px;
     font-weight: 800;
     letter-spacing: -0.3px;
     color: #fff;
@@ -4392,14 +4538,24 @@ select.form-control option {
     letter-spacing: 0.3px;
 }
 
+/* The centre column used to stack stats, trend and credentials as three full
+   width bands, which alone made the card ~166px tall and pushed the roster
+   below the fold. The trend and the credentials are both half-width things, so
+   they share a row. */
 .hero-stats-col {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+        "stats stats"
+        "graph creds"
+        "notes notes";
+    align-content: center;
+    gap: 8px 10px;
     min-width: 0;
 }
 
 .hero-stats-panel {
+    grid-area: stats;
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 8px;
@@ -4409,7 +4565,7 @@ select.form-control option {
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--radius-sm);
-    padding: 8px 10px;
+    padding: 6px 9px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -4442,8 +4598,10 @@ select.form-control option {
 
 /* Cumulative win-rate sparkline (replaces the flat meter). */
 .hero-winrate-graph {
+    grid-area: graph;
     width: 100%;
-    height: 46px;
+    min-height: 46px;
+    height: 100%;
     background: rgba(0, 0, 0, 0.5);
     border-radius: var(--radius-sm);
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
@@ -4487,16 +4645,19 @@ select.form-control option {
 .wr-graph.wr-high .wr-graph-line { filter: drop-shadow(0 0 4px rgba(var(--ok-rgb), 0.7)); }
 
 .hero-creds-box {
+    grid-area: creds;
     background: rgba(0, 0, 0, 0.35);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--radius-sm);
-    padding: 7px 10px;
+    padding: 6px 10px;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     gap: 4px;
 }
 
 .hero-notes {
+    grid-area: notes;
     font-size: 11.5px;
     color: var(--text-muted);
     font-style: italic;
@@ -4522,7 +4683,7 @@ select.form-control option {
     justify-content: center;
     text-align: center;
     gap: 10px;
-    padding: 14px 20px;
+    padding: 11px 18px;
     background: var(--grad-primary);
     border: 1px solid rgba(var(--a-soft-rgb), 0.45);
     border-radius: var(--radius-md);
@@ -4532,9 +4693,12 @@ select.form-control option {
     position: relative;
     overflow: hidden;
     isolation: isolate;
+    /* Softer halo: at full strength the launch button threw a purple glow
+       across the card and read as the loudest thing on the page rather than
+       simply the primary one. */
     box-shadow:
-        0 6px 20px -4px rgba(var(--a-rgb), 0.75),
-        inset 0 1px 0 rgba(255, 255, 255, 0.4);
+        0 5px 16px -6px rgba(var(--a-rgb), 0.55),
+        inset 0 1px 0 rgba(255, 255, 255, 0.32);
     transition: transform var(--dur-2) var(--ease-spring),
                 box-shadow var(--dur-2) ease,
                 filter var(--dur-2) ease;
@@ -4670,13 +4834,17 @@ select.form-control option {
     flex-shrink: 0;
 }
 
+/* Row tints are painted as background-images, not background-colors, so a cell
+   can carry an opaque background-color of its own underneath them. The pinned
+   Actions column depends on that: with a translucent colour it let the columns
+   it floats over show straight through. */
 tr.is-active-session > td {
-    background: rgba(var(--ok-rgb), 0.08) !important;
+    background-image: linear-gradient(rgba(var(--ok-rgb), 0.08), rgba(var(--ok-rgb), 0.08));
     font-weight: 600;
 }
 
 tr.is-active-session:hover > td {
-    background: rgba(var(--ok-rgb), 0.14) !important;
+    background-image: linear-gradient(rgba(var(--ok-rgb), 0.14), rgba(var(--ok-rgb), 0.14));
 }
 
 .account-card.is-highlighted,
@@ -5033,16 +5201,19 @@ body.dashboard-mode .header-actions .header-divider {
     inset: -2%;
     background-size: cover;
     background-position: center;
-    opacity: 0.4;
-    filter: saturate(0.9) contrast(1.06);
+    opacity: 0.52;
+    filter: saturate(0.95) contrast(1.06);
 }
 
+/* The map art was scrimmed almost to black - a full-bleed image download for
+   no visible payoff. Lifted just far enough that the map is recognisable while
+   the score and chips over it keep their contrast. */
 .dash-hero-scrim {
     position: absolute;
     inset: 0;
     background:
-        radial-gradient(120% 130% at 50% -10%, rgba(3, 5, 10, 0.25), rgba(3, 5, 10, 0.9) 72%),
-        linear-gradient(180deg, rgba(3, 5, 10, 0.35), rgba(3, 5, 10, 0.94));
+        radial-gradient(120% 130% at 50% -10%, rgba(3, 5, 10, 0.18), rgba(3, 5, 10, 0.84) 74%),
+        linear-gradient(180deg, rgba(3, 5, 10, 0.28), rgba(3, 5, 10, 0.9));
 }
 
 .dash-hero-body {
@@ -5229,12 +5400,26 @@ body.dashboard-mode .header-actions .header-divider {
 }
 
 .dash-pip {
-    width: 15px;
-    height: 6px;
+    position: relative;
+    width: 16px;
+    height: 8px;
     flex: none;
-    border-radius: 2px;
+    border-radius: 3px;
     background: var(--surface-4);
     transition: transform var(--dur-1) var(--ease-out);
+}
+
+/* Where the side flips, the strip splits into the halves the match has. */
+.dash-pip.is-side-break { margin-left: 13px; }
+
+.dash-pip.is-side-break::before {
+    content: '';
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    left: -8px;
+    width: 1px;
+    background: var(--stroke-3);
 }
 
 .dash-pip.is-won {
@@ -6160,7 +6345,19 @@ body.dashboard-mode .header-actions .header-divider {
 
 .btn-ranked-cta:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.07); }
 .btn-ranked-cta:active:not(:disabled) { transform: scale(0.98); }
-.btn-ranked-cta:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+/* Unavailable is not "dim primary". While a match is running this slot carries
+   a message ("You're in a match"), not an action, so it drops the accent and
+   reads as a notice instead of a faded button competing for the eye. */
+.btn-ranked-cta:disabled {
+    cursor: not-allowed;
+    background: var(--surface-2);
+    border: 1px solid var(--stroke-2);
+    color: var(--text-muted);
+    box-shadow: none;
+}
+
+.btn-ranked-cta:disabled .ranked-cta-text strong { color: var(--text-sub); }
+.btn-ranked-cta:disabled i { color: var(--text-dim); }
 
 .btn-ranked-cta i { font-size: 19px; flex: none; }
 
@@ -6517,15 +6714,19 @@ body.dashboard-mode .header-actions .header-divider {
 .dash-tab:hover { color: var(--text-sub); }
 .dash-tab.active { color: #fff; }
 
-/* Single pill that slides between tabs instead of three that fade. */
+/* Single pill that slides between tabs instead of three that fade. A full
+   accent gradient across a third of the panel competed with the primary CTA
+   and the Insta-Lock control; a tinted, raised pill marks the tab just as
+   clearly without claiming to be the page's main action. */
 .dash-tab-glide {
     position: absolute;
     top: 4px;
     left: 4px;
     height: calc(100% - 8px);
     border-radius: var(--radius-sm);
-    background: var(--grad-primary);
-    box-shadow: 0 4px 14px -6px rgba(var(--a-rgb), 0.9);
+    background: var(--tint-2);
+    border: 1px solid var(--edge);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     transition: transform var(--dur-3) var(--ease-spring),
                 width var(--dur-3) var(--ease-spring);
     pointer-events: none;
@@ -8236,8 +8437,8 @@ body.accent-anim *::after {
     top: calc(100% + 8px);
     right: 0;
     z-index: 60;
-    width: 320px;
-    max-width: min(320px, calc(100vw - 40px));
+    width: 344px;
+    max-width: min(344px, calc(100vw - 40px));
     background: var(--panel-raised);
     border: 1px solid var(--stroke-2);
     border-radius: var(--radius-md);
@@ -8257,7 +8458,7 @@ body.accent-anim *::after {
 }
 
 .filter-popover-scroll {
-    max-height: min(68vh, 520px);
+    max-height: min(72vh, 600px);
     overflow-y: auto;
     padding: 6px 14px 4px;
 }
@@ -8274,23 +8475,36 @@ body.accent-anim *::after {
     margin-bottom: 9px;
 }
 
+/* A wrapping flex row left every group ending in a short orphan line (5+2,
+   3+3+2, 3+3+1), so the popover read as three unfinished lists. A two-column
+   grid gives each option an equal cell and a steady left edge to scan; the
+   leading "All ..." option spans the row, which is also its meaning. */
 .filter-options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
 }
+
+/* Region codes are two to five characters, so they take three per row and the
+   group stays three rows tall; the longer type and sort labels need two. */
+.filter-options[data-filter="region"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.filter-options > .filter-chip:first-child { grid-column: 1 / -1; }
 
 .filter-chip {
     position: relative;
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 11px;
+    gap: 5px;
+    min-width: 0;
+    padding: 5px 9px;
     background: var(--surface-1);
     border: 1px solid var(--stroke-1);
     border-radius: var(--radius-full);
     color: var(--text-sub);
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 500;
     cursor: pointer;
     user-select: none;
@@ -8314,13 +8528,19 @@ body.accent-anim *::after {
     color: #fff;
 }
 
-.filter-chip.is-selected::before {
+/* The tick is drawn on every chip and only coloured in when selected, so
+   choosing an option no longer nudges its label sideways. */
+.filter-chip::before {
     content: '\f00c';
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
     font-size: 8.5px;
-    color: var(--a-soft);
+    flex: none;
+    color: transparent;
+    transition: color var(--dur-1) ease;
 }
+
+.filter-chip.is-selected::before { color: var(--a-soft); }
 
 .filter-chip:focus-within {
     box-shadow: var(--ring);
@@ -8399,7 +8619,7 @@ body.accent-anim *::after {
 .badge-legacy i { font-size: 9px; color: #fff; }
 
 .accounts-table tr.is-legacy-ranked td {
-    background: var(--wa-1);
+    background-image: linear-gradient(var(--wa-1), var(--wa-1));
 }
 .accounts-table tr.is-legacy-ranked td:first-child {
     box-shadow: inset 3px 0 0 var(--wa-4);

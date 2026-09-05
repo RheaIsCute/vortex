@@ -36,6 +36,15 @@ if not exist dist\Vortex\Vortex.exe (
     exit /b 1
 )
 
+REM The source manifest is not enough: fail the build unless the PE resource
+REM that Windows will actually read requests elevation.
+python tools\verify_executable_manifest.py dist\Vortex\Vortex.exe
+if errorlevel 1 (
+    echo.
+    echo Build FAILED - Vortex.exe does not contain the required elevation manifest.
+    exit /b 1
+)
+
 REM Vortex.exe existing is not proof the bundle is complete. A PyInstaller run
 REM that dies partway through COLLECT can still leave Vortex.exe plus a handful
 REM of _internal files - that is exactly how a ~44-file installer for 5.5.14 got

@@ -2,6 +2,103 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-05 — Claude — Density, accent discipline and layout-defect pass
+
+Frontend presentation only. No endpoint, contract, polling, filtering or
+Live-Match lifecycle behaviour changed; `buildAccountView()`'s filtering and
+eligibility logic is untouched.
+
+**Reclaiming the first screen.** At 1440x900 the header, a full-width status
+band, the toolbar and the hero card took 487px before the first account row —
+four of eleven rows were visible. The four status totals moved into the toolbar
+as one segmented filter control (they are a filter, and a band of their own cost
+~53px for four numbers), and the hero card's centre column now puts the win-rate
+trend and the credentials on one row instead of stacking three full-width bands.
+Hero 295px → 211px; first roster row 583px → 430px, so seven rows are visible.
+
+**Roster column alignment.** Each row is its own grid, so the
+`max-content`/`auto` tracks were measured per row and the chip, winrate and
+action columns were visibly ragged down the list. All tracks are now fixed
+lengths or `fr` of the same free space. The state rail is also always 2px and
+only changes colour — flagged rows used a 2px left border against 1px elsewhere,
+which shifted their whole content box 1px right.
+
+**Accent discipline.** LOGIN is every row's resting action; twenty accent
+buttons stacked down the page out-shouted the one row that is actually different
+(the signed-in account's PLAY). Row and table LOGIN buttons are now neutral and
+take the accent on hover/focus. Region chips are neutral mono. The dashboard tab
+pill and the hero launch button's halo were toned down, and the disabled
+"Start a Match" slot drops the accent entirely — while a match is running it
+carries a message, not an action.
+
+**Removed non-information.** The `PLAYABLE` chip is gone from roster rows (the
+default state of nearly every account, rendered in the strongest colour on the
+row); `buildAccountView()` exposes `statusChip` for list views while the hero
+card keeps the full `statusBadge`. The dashboard's premades panel now hides when
+neither team has a stack instead of spending a band on "All Solo Queue / No
+Stacks Detected". The match-history list states `K / D / A`, `KD` and `HS%` once
+in a header row (`.matches-list-headed`) rather than on each of ten rows; the
+shared row keeps its own captions for the dashboard and profile contexts, where
+the grid drops columns responsively.
+
+**Defects found while inspecting the rendered UI:**
+
+- `.field-help code` was left grouped with the checkbox rule by an earlier edit,
+  so inline `<code>` was a flex container — a block-level box that split
+  one-line help text across three lines. Given its own rule.
+- Below 1120px the header labels clipped mid-word ("Che", "Add", "Imp", "Syn"):
+  the dashboard-mode collapse declares `.header-actions .btn > span` with equal
+  specificity later in the file and was overriding the responsive
+  `display: none`. The media query now uses the same technique with a leading
+  `body` so it wins regardless of order.
+- The roster row's `max-width: 1180px` grid declared six tracks, but the
+  `max-width: 1320px` block already hides last-login, so only five cells
+  survive; the actions landed in the 88px track meant for the hidden cell and
+  the buttons spilled across the winrate. Each breakpoint now declares exactly
+  as many tracks as it has cells (verified at 1600/1440/1300/1200/1120/1024/900).
+- Table view needs ~1705px for thirteen columns, so at every realistic window it
+  scrolled and the column that fell off the right edge was Actions. It is now
+  pinned to the edge. That required row tints (`is-active-session`,
+  `is-legacy-ranked`, `tr:hover`) to move from translucent `background` to
+  `background-image`, so the pinned cell can keep an opaque `background-color`
+  underneath — otherwise the columns it floats over showed straight through it.
+  This also removed two `!important` declarations.
+- Agent avatars in match rows sat on a near-black plate under agent art that is
+  itself dark, so they read as empty discs; the plate is lighter and the image
+  lifted. Also dropped a dead `overflow: hidden` that a later `overflow: visible`
+  in the same rule already overrode.
+- Filter-popover chip groups each ended in a short orphan row (5+2, 3+3+2,
+  3+3+1). They are now a grid — three columns for region codes, two for the
+  longer labels — and the selection tick is drawn transparent on every chip so
+  choosing one no longer nudges its label sideways.
+- Settings repeated each section's icon and title on the field label directly
+  beneath it (six times). Removed, and the six 245x105 theme tiles became a row
+  of swatches; the modal's scroll height went 1431px → 1198px.
+
+**Settings section headings.** Removing the duplicated field labels dropped two
+strings `tests/test_settings_and_ui.py` asserts on (`Post-Game Actions`,
+`Launch & Login`). The section headings now carry those full names instead of
+the shortened `Post-Game` / `Launch &amp; Login`, which satisfies the contract
+and is the same intent — the name is stated once, on the heading, rather than
+twice.
+
+**Validation.** 121 tests pass (`python -m pytest -q`);
+`python -m compileall -q backend tests app.py` and `node --check
+frontend/app.js` are clean. Also verified by rendering the real frontend against
+a Node mock of the API (shapes taken from `backend/server.py` and
+`valorant_client.py`) in headless Chrome over CDP: roster, table, dashboard,
+match history, settings, filters, import, banned and add-account, at
+1600/1440/1300/1200/1120/1024/900px. Zero console errors and zero failed
+requests in every pass; roster rows stay single-line (70px) with cells == tracks
+and no horizontal page overflow at every width.
+
+**Checkout note.** This working copy was missing 2,233 tracked files — the
+`overwolf/vortex-telemetry/` companion, ten `tests/*.py` files and 2,218
+weapon-skin assets under `frontend/assets/valorant-api/`. The non-asset files
+were restored with `git restore` before testing (which is what raised the suite
+from 51 to 121 tests); the weapon-skin assets are still absent locally and were
+deliberately left out of this commit so they are not deleted from the repo.
+
 ## 2026-09-03 — Release v5.5.43
 
 Published the Account Manager workspace redesign (status strip + roster rows,
@@ -1087,3 +1184,182 @@ No version bump, build, tag, push, or release was created.
 - Built `dist/Vortex/Vortex.exe` and `dist_installer/VortexSetup.exe`.
 - Verified installer ProductVersion `5.5.44`; SHA-256:
   `1C8BAA5D9C4A60CA2008E00EDFA6125F4FADD893045E8A43BD7389BACB4BC4ED`.
+
+## 2026-09-05 - Codex - Offline packaged-asset deduplication
+
+Changed:
+
+- Replaced the broad `("frontend", "frontend")` PyInstaller data collection
+  entry with `frontend_datas()`. It retains every frontend file except an
+  explicit, audited exclusion list, preserving the existing onedir updater
+  behavior.
+- Omitted ten redundant cached map images from the frozen frontend. Four old
+  map ids duplicated the retained Drift splash/list-image pair exactly; a
+  second old id duplicated another retained splash/list-image pair exactly.
+  `localGameAssetUrl()` now aliases those exact media URLs to the retained
+  local files, so both normal and stale API responses remain offline-safe.
+- Omitted `frontend/assets/logo-source.png` from the frozen frontend. It has
+  no runtime reference; the required `logo.svg`, `logo.png`, and `logo.ico`
+  remain bundled.
+
+Measured static-asset footprint:
+
+- Before: 489 files, 143,381,031 bytes.
+- After (PyInstaller input): 478 files, 113,248,988 bytes.
+- Reduction: 11 files, 30,132,043 bytes (28.74 MiB, 21.02%). Map aliases
+  account for 29,845,450 bytes; the unused design-source image accounts for
+  286,593 bytes.
+
+Audit findings:
+
+- The full Valorant cache is 142,832,069 bytes: maps 98,638,431 bytes, agents
+  34,971,667 bytes, weapon-skin chromas 5,817,656 bytes, competitive tiers
+  3,114,619 bytes, and weapons 289,696 bytes.
+- Preserved all non-duplicate cached categories. `resolve_map()` can return
+  dynamic map art for live-session responses, `/api/live/agents` returns
+  dynamic agent art, tiers are used by account/history UI, and weapon/chroma
+  art can be returned by loadout metadata. Removing those categories would
+  introduce local 404s or a CDN fallback.
+- All declared Python dependencies have direct imports in the source or are
+  packaging/runtime dependencies; no safe dependency removal was found. The
+  existing hidden imports remain justified by frozen multiprocessing, UIA,
+  and pywebview startup requirements.
+- No backend responsibility extraction was made: the only candidate modules
+  overlap an active login/elevation task, and this change preserves every
+  FastAPI, SQLite, updater, and external-only contract.
+
+Validation:
+
+- Executed the alias function in Node against all ten URLs; each resolves to
+  its intended local retained path and its original/retained files have equal
+  SHA-256 hashes.
+- Confirmed every aliased source path is excluded by `build_exe.spec` and that
+  unaliased Valorant URLs and non-Valorant URLs are unchanged.
+- `node --check frontend/app.js`, `frontend/boot.js`, and
+  `frontend/live_overlay.js` passed.
+
+Environment limitations:
+
+- This supplied checkout has no `dist/`, `dist_installer/`, `tests/`,
+  `installer/`, or `.git` directory, and Python/PyInstaller are unavailable
+  on PATH. Therefore total before/after bundle size, installer size, pytest,
+  Python compile checks, `git diff --check`, frozen launch, and installer
+  validation could not be run. No release or version change was made.
+
+### Follow-up: weapon-media reference audit
+
+- Audited `frontend/assets/valorant-api/weapons/` (18 files, 289,696 bytes)
+  separately from `weaponskinchromas/` (71 files, 5,817,656 bytes).
+- `get_weapon_data()` retains weapon ids only for display names; it never
+  returns a cached weapon image URL. The Inventory markup renders `g.icon`,
+  which is a skin-chroma URL, plus its tier icon. No frontend or backend path
+  references the cached `weapons/` display or killstream images.
+- Added the proven-unused `assets/valorant-api/weapons/` prefix to the
+  PyInstaller frontend-data exclusions. Skin-chroma files remain packaged.
+- Additional packaged reduction: 18 files, 289,696 bytes (282.91 KiB).
+  Cumulative packaged static assets: 489 files / 143,381,031 bytes to 460
+  files / 112,959,292 bytes, saving 30,421,739 bytes (29.01 MiB, 21.22%).
+- Re-ran the Node asset contract: all ten map aliases still hash-match,
+  all 71 skin files remain included, and all 18 weapon files are excluded.
+
+## 2026-09-05 - Codex - Fast event-driven Riot login and mandatory elevation
+
+Changed:
+
+- Replaced the normal login path's fixed 1.4-second settle, two 120 ms
+  post-`ValuePattern` waits, 250 ms pre-submit wait, and redundant window/form
+  waits with immediate synchronous UIA writes and native button invocation.
+  `ValuePattern` gets two bounded attempts before the existing foreground
+  keyboard/clipboard compatibility path. Cancellation is checked before any
+  fallback.
+- Added a Riot-process-scoped WinEvent listener for create/show/hide/focus/state
+  changes. Readiness follows check -> subscribe -> recheck -> event/adaptive
+  40-250 ms fallback polling, with cleanup on every exit. Explicit 64-bit
+  ctypes signatures prevent hook-handle truncation and leaked listeners.
+- Cached only stable state: a validated Riot executable path and a PID-bound
+  top-level HWND. Normal window reuse avoids desktop enumeration; destroyed or
+  replaced windows invalidate the cache. Dynamic UIA objects remain per-mount.
+- Consolidated username, password, submit, Stay signed in, popup, and validation
+  discovery into one scoped Riot-window traversal. Popup plus validation result
+  monitoring now shares one scan. Structure events and stale-object failures
+  trigger fast reacquisition.
+- Submit invokes an already-enabled button immediately, otherwise waits on the
+  scoped listener with adaptive fallback for up to the existing bounded window.
+  The Enter-key path remains the final compatibility fallback. Mid-entry popup,
+  form-remount, progress, retry, and Stop behavior remain intact.
+- Batch startup/reset now waits for actual process exit. Account transitions
+  wait for the actual signed-out state, then retain a 250 ms rate-limit cooldown
+  instead of a blind two seconds. The warm-login 200 ms teardown sleep was
+  removed; login remains sequential. Banned/suspended and global-ban behavior
+  was not changed.
+- Added opt-in `VORTEX_LOGIN_TIMING=1` milestone diagnostics. They contain only
+  milestone names and durations, never account identifiers, credential values
+  or lengths, tokens, or payloads.
+- Changed the application manifest to `requireAdministrator`, `uiAccess=false`.
+  PyInstaller was initially observed overriding the XML back to `asInvoker`;
+  `uac_admin=True`/`uac_uiaccess=False` now enforce the same contract in the
+  spec. `tools/verify_executable_manifest.py` reads the final PE's RT_MANIFEST,
+  and `build.bat` refuses to accept/package a mismatched executable.
+- Source `app.py` now performs the elevation decision before DPI setup and
+  before importing FastAPI, pywebview, Riot automation, or other integrations.
+  A successful `runas` handoff exits the original process; denial/failure exits
+  with an error; a sentinel prevents loops. Windows-native argument quoting
+  preserves spaced paths/arguments and relaunch logging omits parameters.
+- Installer-created shortcuts and post-install launch now target the elevated
+  executable directly with `{app}` as working directory. The Vortex logo is
+  unchanged and the onedir/updater architecture is preserved.
+
+Measurements (deterministic fake UIA controls; no live credentials):
+
+- Controls ready -> Login invoked, before (5 runs): best 1891.9 ms, median
+  1892.0 ms, worst 1892.7 ms. After (9 runs): best 0.664 ms, median 0.843 ms,
+  worst 2.204 ms.
+- After breakdown: controls -> username 0.403/0.509/1.798 ms;
+  username -> password 0.083/0.126/0.177 ms; password -> invoke
+  0.162/0.224/0.276 ms (best/median/worst).
+- State-ready account N -> account N+1 Login call, after (7 sequential mocked
+  runs): 256.2/260.2/261.4 ms best/median/worst. The prior implementation had
+  an unconditional 2000 ms transition floor before its other work.
+- A live Riot process-start -> controls-ready measurement was not performed;
+  detection now wakes from the scoped event immediately with a 40 ms initial
+  polling fallback, while retaining the original generous overall timeout.
+
+Validation:
+
+- Present test suite: `python -m pytest tests -q` -> 51 passed, with two
+  pre-existing FastAPI deprecation warnings. Added coverage for ready/delayed
+  submit, check/subscription race, window recreation, popup during entry,
+  stale reacquisition, native retry/fallback, cancellation, listener cleanup,
+  PID-bound HWND reuse, sequential batch transitions, source handoff/denial,
+  loop prevention, quoted arguments, and manifest/spec contracts.
+- `python -m compileall -q app.py backend tests tools`, `node --check
+  frontend/app.js`, and task-scoped `git diff --check` passed.
+- `build.bat` produced the canonical 5.5.44 onedir bundle with 675 `_internal`
+  files and all required native spot checks. The embedded PE resource was
+  verified as `requireAdministrator`, `uiAccess=false`.
+- From a real medium-integrity shell, launching the fresh executable displayed
+  UAC and produced exactly one usable Vortex process. Its token was confirmed
+  elevated; no unelevated Vortex duplicate remained. The test process and its
+  WebView child tree were then closed.
+- Existing installed Start/Desktop shortcuts were inspected and target
+  `Vortex.exe` directly. Inno Setup was not installed, so a new installer and
+  newly generated shortcut could not be built/visually tested. Windows desktop
+  automation was unavailable, so Explorer's optional shield overlay was not
+  visually observed. The existing installed 5.5.44 executable remains the old
+  `asInvoker` build until a new installer is built/installed.
+- The updater was source-audited: the one-directory layout and direct executable
+  relaunch remain unchanged. No update was downloaded or installed. Eleven
+  tracked baseline test modules were absent from the supplied checkout, so only
+  the 51 locally present tests could be executed.
+
+Files changed by this task:
+
+- `app.py`, `backend/elevation.py`, `backend/client_launcher.py`,
+  `backend/server.py`
+- `vortex.manifest`, `build_exe.spec`, `build.bat`,
+  `installer/vortex_setup.iss`, `tools/verify_executable_manifest.py`
+- `tests/test_login_flow.py`, `tests/test_batch_account_check.py`,
+  `tests/test_elevation.py`
+- `AI_CONTRACTS.md`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+No public version bump, tag, push, installer publication, or release was made.

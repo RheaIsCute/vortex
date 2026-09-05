@@ -472,7 +472,11 @@ async def run_batch_account_check():
     # Clean start: close any previous stuck Riot Client / Valorant
     await asyncio.to_thread(launcher.kill_valorant)
     await asyncio.to_thread(launcher.force_kill_riot_client)
-    await asyncio.sleep(1.5)
+    await asyncio.to_thread(
+        launcher.wait_for_processes_gone,
+        client_launcher._RIOT_PROCS | client_launcher._VALORANT_PROCS,
+        10.0,
+    )
 
     # The whole scan runs under try/finally. An unhandled error in the login
     # automation or the scraper used to propagate out of this background task
@@ -574,14 +578,23 @@ async def run_batch_account_check():
                     "[%s] batch check raised; account retained", acc["username"]
                 )
 
-            # 4. Clean sign out & cooling delay to avoid Riot rate-limits
+            # 4. Wait for the real signed-out state before advancing. Keep a
+            # small deliberate cooldown between accounts for Riot's rate
+            # limits, but do not charge every transition a blind two seconds
+            # after the client is already ready.
             await asyncio.to_thread(launcher.api_sign_out)
-            await asyncio.sleep(2.0)
+            await asyncio.to_thread(launcher.wait_for_signed_out, 8.0)
+            if idx < len(to_check) and CHECK_PROGRESS["running"]:
+                await asyncio.sleep(0.25)
 
             # Reset Riot Client process every 4 accounts to clear UI cache & memory
             if idx % 4 == 0 and idx < len(to_check):
                 await asyncio.to_thread(launcher.force_kill_riot_client)
-                await asyncio.sleep(1.5)
+                await asyncio.to_thread(
+                    launcher.wait_for_processes_gone,
+                    client_launcher._RIOT_PROCS,
+                    8.0,
+                )
     finally:
         # 5. Always: force close Riot Client and clear the running flag so the
         # UI spinner stops no matter how the scan ended.

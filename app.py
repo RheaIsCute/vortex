@@ -9,6 +9,35 @@ import io
 import ctypes
 import traceback
 
+# Resolve the application root before importing any optional runtime. Frozen
+# builds are elevated by the embedded manifest before this code runs; source
+# launches perform the same handoff here, before FastAPI, WebView2, Riot
+# discovery, or any optional integration can initialize.
+if getattr(sys, "frozen", False):
+    BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, BASE_DIR)
+
+from backend import elevation as _elevation
+
+
+if __name__ == "__main__":
+    _elevation_action = _elevation.startup_elevation_action()
+    if _elevation_action != "continue":
+        if _elevation_action == "failed":
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    None,
+                    "Vortex requires Administrator privileges and cannot continue "
+                    "without them.",
+                    "Vortex",
+                    0x10,
+                )
+            except Exception:
+                pass
+        raise SystemExit(0 if _elevation_action == "relaunched" else 1)
+
 
 def _enable_per_monitor_dpi_awareness():
     """Render WebView2 at the native DPI of whichever monitor owns it.
@@ -71,14 +100,6 @@ from webview_diagnostics import (
     prepare_user_data_dir,
     show_webview2_error,
 )
-
-# When frozen by PyInstaller (onefile build), bundled data files live under
-# sys._MEIPASS (a temp extraction dir), not next to this script.
-if getattr(sys, "frozen", False):
-    BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, BASE_DIR)
 
 from backend.server import app, db, in_match_now
 from backend.client_launcher import is_valorant_foreground

@@ -20,9 +20,53 @@ variables. That is what makes one-click updating work for copies of Vortex
 that are already installed and still carry the old updater.
 """
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 block_cipher = None
+
+# `logo-source.png` is design-source artwork with no runtime reference.  The
+# map URLs below are served by the frontend alias table in app.js; each file
+# is byte-for-byte identical to its retained counterpart.  Keep source-cache
+# inputs intact for cache-maintenance tooling, but omit these unnecessary
+# copies from the packaged frontend.
+_EXCLUDED_FRONTEND_DATA = {
+    "assets/logo-source.png",
+    "assets/valorant-api/maps/4490f1d6-4818-bf5f-9b3a-9c9a8dbb52ed/listviewicon.png",
+    "assets/valorant-api/maps/4490f1d6-4818-bf5f-9b3a-9c9a8dbb52ed/splash.png",
+    "assets/valorant-api/maps/a264de0f-4a04-9c78-c97a-a6b192ce6e86/listviewicon.png",
+    "assets/valorant-api/maps/a264de0f-4a04-9c78-c97a-a6b192ce6e86/splash.png",
+    "assets/valorant-api/maps/a38a3f9a-4042-844c-8970-a3ac2f7ce93d/listviewicon.png",
+    "assets/valorant-api/maps/a38a3f9a-4042-844c-8970-a3ac2f7ce93d/splash.png",
+    "assets/valorant-api/maps/a9009649-421f-d5d5-f80c-0cbe02c125bb/listviewicon.png",
+    "assets/valorant-api/maps/a9009649-421f-d5d5-f80c-0cbe02c125bb/splash.png",
+    "assets/valorant-api/maps/1f10dab3-4294-3827-fa35-c2aa00213cf3/listviewicon.png",
+    "assets/valorant-api/maps/1f10dab3-4294-3827-fa35-c2aa00213cf3/splash.png",
+}
+
+# `get_weapon_data()` uses weapon ids only to resolve display names. The
+# Inventory UI renders equipped skin art and tier icons, never the cached
+# weapon display/killstream images. Excluding this whole media-only directory
+# therefore cannot remove an image URL produced by the application.
+_EXCLUDED_FRONTEND_PREFIXES = (
+    "assets/valorant-api/weapons/",
+)
+
+
+def frontend_datas():
+    """Return every static frontend file except proven local-URL aliases."""
+    root = Path("frontend")
+    datas = []
+    for source in root.rglob("*"):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(root).as_posix()
+        if (relative in _EXCLUDED_FRONTEND_DATA
+                or any(relative.startswith(prefix) for prefix in _EXCLUDED_FRONTEND_PREFIXES)):
+            continue
+        datas.append((str(source), str(Path("frontend") / source.relative_to(root).parent)))
+    return datas
 
 hidden_imports = [
     # multiprocessing's frozen bootstrap imports socket dynamically; keep
@@ -49,9 +93,7 @@ a = Analysis(
     ["app.py"],
     pathex=[],
     binaries=[],
-    datas=[
-        ("frontend", "frontend"),
-    ] + copy_metadata("pywebview") + copy_metadata("pythonnet") + copy_metadata("clr_loader"),
+    datas=frontend_datas() + copy_metadata("pywebview") + copy_metadata("pythonnet") + copy_metadata("clr_loader"),
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
@@ -81,6 +123,10 @@ exe = EXE(
     entitlements_file=None,
     icon="frontend/assets/logo.ico",
     manifest="vortex.manifest",
+    # PyInstaller rewrites requestedExecutionLevel from these flags even when
+    # a custom manifest is supplied. Keep this in sync with vortex.manifest.
+    uac_admin=True,
+    uac_uiaccess=False,
 )
 
 coll = COLLECT(

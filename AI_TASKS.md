@@ -11,6 +11,86 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Claude (density + accent discipline pass)
+
+Status: DONE
+
+Scope: Frontend presentation pass driven by inspection of the rendered UI —
+roster/hero density (first row 583px → 430px), true column alignment across
+roster rows, accent reserved for the primary action, removal of chrome that
+carries no information (row `PLAYABLE` chip, empty premades panel, per-row
+match-stat captions), and the layout defects that inspection turned up
+(`.field-help code` flex container, header labels clipping below 1120px,
+mismatched track/cell counts at the roster breakpoints, the table's Actions
+column scrolling off the right edge, unreadable match-row agent avatars,
+orphaned filter-chip rows, duplicated Settings labels).
+
+Files owned: `frontend/styles.css`, `frontend/index.html`, `frontend/app.js`
+(presentational only), `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Builds on the earlier design-system and workspace-roster
+redesigns. `buildAccountView()` filtering/eligibility, the shared
+`matchCardHtml` row, the Live Match lifecycle and all API contracts are
+untouched.
+
+Notes: Completed 2026-09-05. **Outstanding: `pytest -q` and `.\build.bat` were
+not run — Python is not installed on this machine.** `tests/` is also absent
+from this checkout. `buildAccountView()` gained a presentational `statusChip`
+field and `renderMatchHistoryList()` now emits a header row, so
+`tests/test_settings_and_ui.py` should be re-run before release; no existing
+asserted selector was removed. Verified by rendering the real frontend against
+a Node mock of the API in headless Chrome over CDP across
+1600/1440/1300/1200/1120/1024/900px — zero console errors, zero failed
+requests. See `AI_CHANGES.md`.
+
+### Codex
+
+Status: DONE
+
+Scope: Make Riot credential/window/state detection faster and more reliable,
+optimize single and sequential batch credential submission, and require
+Administrator elevation before all Vortex initialization.
+
+Files owned: `app.py`, `vortex.manifest`, `build_exe.spec`, `build.bat`,
+`installer/vortex_setup.iss`, `backend/elevation.py`,
+`backend/client_launcher.py`, `backend/server.py`, `backend/database.py`,
+`frontend/app.js`, `tests/test_login_flow.py`,
+`tests/test_batch_account_check.py`,
+`tests/test_account_import_and_eligibility.py`, elevation-related tests,
+`tools/verify_executable_manifest.py`, `AI_CHANGES.md`, `AI_TASKS.md`,
+`AI_CONTRACTS.md`
+
+Dependencies: Preserve the v5.5.44 background-first login, popup, cancellation,
+progress, banned-account, updater, installer, and compatibility contracts.
+Coordinate the overlapping `build_exe.spec`, backend, and shared-log files with
+the active cleanup task immediately below before editing them.
+
+Notes: Completed 2026-09-05. The ready-control credential path is event-driven
+and background-first, sequential batch dead time is state-aware, and both the
+frozen manifest and source bootstrap now enforce elevation. The canonical
+onedir build passed embedded-manifest and bundle-completeness checks; details
+and environment limitations are in `AI_CHANGES.md`.
+
+### Codex
+
+Status: DONE
+
+Scope: Backend/infrastructure cleanup and measured build-footprint reduction.
+
+Files owned: `backend/database.py`, `backend/server.py`, `backend/paths.py`,
+`build_exe.spec`, `requirements.txt`, `frontend/app.js`,
+`frontend/assets/valorant-api/maps/`, `tests/test_database.py`,
+`tests/test_resource_paths.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve all documented HTTP, SQLite, frozen-path, updater, and
+external-only contracts. Asset removal requires a reference audit first.
+
+Notes: Completed 2026-09-05. The focused audit excluded 18 unused weapon-only
+images (289,696 bytes) from the frozen bundle and retained 71 skin images used
+by the Inventory view. Total packaged static-asset savings are now 30,421,739
+bytes (21.22%). Frozen-build validation remains unavailable in this checkout;
+details are recorded in `AI_CHANGES.md`.
+
 ### Codex
 
 Status: DONE

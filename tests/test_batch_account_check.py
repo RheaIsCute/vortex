@@ -52,8 +52,10 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
              patch.object(server.db, "get_settings", return_value={}), \
              patch.object(server.launcher, "kill_valorant", return_value=True), \
              patch.object(server.launcher, "force_kill_riot_client", return_value=True), \
+             patch.object(server.launcher, "wait_for_processes_gone", return_value=True), \
              patch.object(server.launcher, "login_account", return_value={"success": True}), \
              patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.launcher, "wait_for_signed_out", return_value=True), \
              patch.object(server, "_wait_for_checked_account", new=AsyncMock(return_value=retryable)), \
              patch.object(server.asyncio, "sleep", new=AsyncMock()), \
              patch.object(server.db, "delete_account", new=MagicMock()) as delete_account:
@@ -90,14 +92,39 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
              patch.object(server, "account_needs_check", return_value=True), \
              patch.object(server.db, "get_settings", return_value={}), \
              patch.object(server.launcher, "force_kill_riot_client", return_value=True), \
+             patch.object(server.launcher, "wait_for_processes_gone", return_value=True), \
              patch.object(server.launcher, "kill_valorant", return_value=True), \
              patch.object(server.launcher, "login_account", return_value={"success": False, "message": "busy"}), \
              patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.launcher, "wait_for_signed_out", return_value=True), \
              patch.object(server.asyncio, "sleep", new=AsyncMock()):
             await server.run_batch_account_check()
 
         self.assertFalse(server.client_launcher.LOGIN_PROGRESS["active"])
         self.assertEqual(server.client_launcher.LOGIN_PROGRESS["stage"], "error")
+
+    @patch.object(server.db, "is_globally_banned", return_value=False)
+    async def test_sequential_transition_waits_for_state_then_uses_short_cooldown(self, _global_banned):
+        accounts = [
+            {"id": 7, "username": "first", "password": "saved", "tag": ""},
+            {"id": 8, "username": "second", "password": "saved", "tag": ""},
+        ]
+        sleep = AsyncMock()
+        with patch.object(server.db, "get_all_accounts", return_value=accounts), \
+             patch.object(server, "account_needs_check", return_value=True), \
+             patch.object(server.db, "get_settings", return_value={}), \
+             patch.object(server.launcher, "kill_valorant", return_value=True), \
+             patch.object(server.launcher, "force_kill_riot_client", return_value=True), \
+             patch.object(server.launcher, "wait_for_processes_gone", return_value=True) as process_wait, \
+             patch.object(server.launcher, "login_account", return_value={"success": False, "message": "busy"}), \
+             patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.launcher, "wait_for_signed_out", return_value=True) as signout_wait, \
+             patch.object(server.asyncio, "sleep", new=sleep):
+            await server.run_batch_account_check()
+
+        process_wait.assert_called_once()
+        self.assertEqual(signout_wait.call_count, 2)
+        sleep.assert_awaited_once_with(0.25)
 
     async def test_batch_skips_and_moves_globally_known_banned_username(self):
         account = {"id": 7, "username": "known-ban", "password": "saved", "tag": ""}
