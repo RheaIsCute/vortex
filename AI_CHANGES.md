@@ -2,6 +2,34 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-05 — Release v5.5.45
+
+Published the frontend density/accent pass below together with the
+elevated-login and credential-entry work that was already sitting uncommitted
+in the tree, as v5.5.45. `backend/version.py` and `installer/vortex_setup.iss`
+bumped 5.5.44 → 5.5.45 in commit `0802719`; `version.json` was deliberately
+held back to a separate commit.
+
+That ordering matters: `updater.check_for_update()` consults the GitHub release
+API *and* the `version.json` mirrors on `master` and takes whichever advertises
+the highest version, so pushing `version.json` at 5.5.45 before the release
+existed would have made every running client offer an update whose
+`download_url` 404s. The release was created as a draft, the asset uploaded, the
+draft published, `releases/latest/download/VortexSetup.exe` confirmed to resolve
+(HTTP 200), and only then was `version.json` bumped.
+
+Toolchain had to be installed first: this machine had no Python, Git or Inno
+Setup, and `winget` (v1.2.10691) crashes with an access violation, so Python
+3.12.10, Git 2.55.0 and Inno Setup 6.7.3 were installed from direct vendor
+downloads. 121 tests pass; `compileall` and `node --check frontend/app.js` clean.
+
+`build.bat` produced `dist/Vortex/` (3805 files under `_internal/`, elevation
+manifest verified) and a 240.8MB `VortexSetup.exe` — smaller than v5.5.44's
+275MB purely because of newer dependency wheels; the bundled asset counts were
+checked against the source tree and match exactly, allowing for the deliberate
+`assets/valorant-api/weapons/` prefix exclusion and the ten excluded map files
+in `build_exe.spec`.
+
 ## 2026-09-05 — Claude — Density, accent discipline and layout-defect pass
 
 Frontend presentation only. No endpoint, contract, polling, filtering or
