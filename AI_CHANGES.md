@@ -2,6 +2,18 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-05 — Release v5.5.45 (verified recovery build)
+
+Published the packaging recovery and frontend polish as v5.5.45 after explicit
+user approval. Repair commit `3d59918` was pushed while `version.json` still
+advertised 5.5.44. The release was created as a draft, the verified installer
+was uploaded once, then downloaded back through GitHub's asset API; its size
+(253,494,937 bytes) and SHA-256
+`A4AE80688E8B1123ED1FA94D47B5CF22A813E187465F4EB05BD626BEC700DB34`
+matched the local artifact exactly. Only then was the release published and
+`releases/latest/download/VortexSetup.exe` confirmed HTTP 200 with the same
+content length. `version.json` was advertised as 5.5.45 last.
+
 ## 2026-09-05 — Codex — v5.5.45 packaging recovery and release gates
 
 Repaired the unpublished v5.5.45 candidate without changing the live
@@ -42,8 +54,8 @@ warnings); `compileall`, `node --check frontend/app.js`, and `git diff --check`
 pass. The final clean build embedded the required elevation manifest, produced
 3,829 `_internal` files, passed three consecutive frozen API/UIA launches, and
 passed the exact installer payload integrity/extraction check. The installed
-5.5.44 process remained healthy with two accounts throughout. Nothing was
-published or installed.
+5.5.44 process remained healthy with two accounts throughout candidate
+validation. Nothing was installed locally; publication is recorded above.
 
 ## 2026-09-05 — Incident: two failed v5.5.45 publish attempts, rolled back
 

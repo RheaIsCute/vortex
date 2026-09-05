@@ -1,5 +1,5 @@
 {
-  "version": "5.5.44",
+  "version": "5.5.45",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.44: reliable multi-account verification with background-first credential entry, event-driven login waits, mid-flow popup recovery, a real Stop action, and a global banned-username registry that prevents redundant checks."
+  "changelog": "Vortex v5.5.45: repaired packaged-backend startup, complete UI Automation bundling, persistent startup diagnostics, verified frozen-app and installer release gates, plus the Account Manager density and visual polish update."
 }

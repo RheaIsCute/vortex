@@ -24,15 +24,16 @@ Files owned: `app.py`, `build_exe.spec`, `build.bat`, `requirements.txt`,
 `tools/`, packaging/startup tests under `tests/`, `AI_CHANGES.md`,
 `AI_TASKS.md`, `AI_CONTRACTS.md`
 
-Dependencies: Preserve the installed/published v5.5.44 rollback state and all
-account data. Build and validate a local v5.5.45 candidate only; do not publish
-or change `version.json` in this task.
+Dependencies: Preserve the installed 5.5.44 copy and all account data. Build
+and validate before publication; publishing and changing `version.json` require
+explicit user approval, which was received after candidate validation.
 
 Notes: Completed 2026-09-05 from rollback commit `d2e414c`. The final local
 candidate passes 126 tests, three consecutive frozen API/UIA launches, the
 elevation-manifest check, and the exact installer CRC/extraction gate. The
-installed 5.5.44 app and both accounts remained healthy; nothing was published
-or installed. See `AI_CHANGES.md` for the reproduced Proactor failure and fix.
+installed 5.5.44 app and both accounts remained healthy; nothing was installed
+locally. The verified artifact was subsequently published after explicit user
+approval. See `AI_CHANGES.md` for the reproduced Proactor failure and fix.
 
 ### Claude (density + accent discipline pass)
 
