@@ -11,6 +11,42 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Codex (v5.5.46 Account Manager update release)
+
+Status: DONE
+
+Scope: Package, validate, push, and publish the Account Manager Card View
+update as the next auto-update release.
+
+Files owned: `backend/version.py`, `version.json`, `installer/vortex_setup.iss`,
+`AI_CHANGES.md`, `AI_TASKS.md`, release artifact/tag
+
+Dependencies: Keep the validated UI changes intact and follow the existing
+frozen executable and installer release gates before publishing.
+
+Notes: Completed 2026-09-05. Version 5.5.46 passed 126 tests, frozen smoke
+checks, and the installer integrity gate; source, tag, and installer are ready
+for the GitHub release update.
+
+### Codex (small Account Manager card-view + toolbar pass)
+
+Status: DONE
+
+Scope: Replace the alternate Account Manager table surface with a compact visual
+card grid; move roster totals into the Filters popover; and tighten the header
+toolbar plus search/filter/view controls without changing account behavior.
+
+Files owned: `frontend/index.html`, `frontend/styles.css`, `frontend/app.js`,
+`AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve roster rows, all existing account handlers, filter
+semantics, credentials masking, and frontend/backend contracts.
+
+Notes: Completed 2026-09-05. The alternate table markup is replaced by a
+compact Card View; totals live in the Filters popover; the header and control
+bar are grouped and responsive. Validated by Playwright at desktop/1024px,
+credential reveal checks, `node --check`, and 8 settings/UI tests.
+
 ### Codex (v5.5.45 packaging recovery)
 
 Status: DONE

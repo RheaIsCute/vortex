@@ -2,6 +2,41 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-05 — Release v5.5.46 (Account Manager Card View)
+
+Prepared the Account Manager visual update for release: a compact Card View
+replaces the old alternate table, account totals live in Filters, and account
+actions plus search/filter/view controls are grouped into denser desktop
+toolbars. Roster Rows and all account/filter behavior remain unchanged.
+
+Validation completed before release: 126 tests passed, `node --check
+frontend/app.js` passed, and the Windows release build passed its embedded
+elevation-manifest check, three frozen app/API/UIA smoke passes, and the
+installer CRC/extraction integrity gate (3,829 bundled internal files).
+
+## 2026-09-05 — Codex — small Account Manager card-view + toolbar pass
+
+Replaced the Account Manager's alternate table surface with a compact visual
+card grid while keeping the existing view mode state, account actions,
+filtering, sorting, status data, and credential masking handlers intact. Cards
+show account identity, rank, level, region, win rate, category/status, peak
+and the existing launch/check/history/edit/delete actions; credentials remain
+hidden until the key action is explicitly used.
+
+The roster totals no longer occupy the top control bar. They now sit as compact
+quick-filter segments at the top of the Filters popover, retaining their
+existing one-click filter semantics. The header actions are grouped into batch
+checks, account management, and utilities, and the search/result/filter/view
+controls now form one compact control surface. The list/grid toggle is labelled
+as Card View; Roster Rows and backend behavior are unchanged.
+
+Validated with `node --check frontend/app.js`, all 8
+`tests/test_settings_and_ui.py` tests, and Playwright against the local app:
+card mode, controlled credential reveal, filter popover, and 1024px popover
+bounds all passed. Browser inspection was used to correct a short-window
+popover overflow by making the popover's options area scroll while its footer
+remains reachable.
+
 ## 2026-09-05 — Release v5.5.45 (verified recovery build)
 
 Published the packaging recovery and frontend polish as v5.5.45 after explicit

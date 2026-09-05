@@ -1,5 +1,5 @@
 {
-  "version": "5.5.45",
+  "version": "5.5.46",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.45: repaired packaged-backend startup, complete UI Automation bundling, persistent startup diagnostics, verified frozen-app and installer release gates, plus the Account Manager density and visual polish update."
+  "changelog": "Vortex v5.5.46: new compact Account Manager Card View, grouped account toolbar, unified search/filter/view controls, and account totals moved into Filters."
 }

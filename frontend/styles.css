@@ -8579,6 +8579,319 @@ body.accent-anim *::after {
 .btn-reset-filters:disabled { opacity: 0.35; cursor: default; }
 .btn-reset-filters:disabled:hover { background: none; color: var(--text-muted); }
 
+/* --------------------------------------------------------------------------
+   SMALL ACCOUNT MANAGER PASS — grouped toolbar + visual card alternate view
+   -------------------------------------------------------------------------- */
+
+/* The header actions are deliberately grouped by job: batch work, roster
+   changes, then quieter utilities. This keeps the strongest visual weight on
+   the only primary action instead of treating every button as a peer. */
+.header-actions {
+    gap: var(--sp-3);
+    align-items: center;
+}
+
+.header-action-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px;
+    background: rgba(0, 0, 0, 0.16);
+    border: 1px solid var(--stroke-1);
+    border-radius: calc(var(--radius-sm) + 2px);
+}
+
+.header-action-group .btn {
+    min-height: 34px;
+    padding: 7px 11px;
+    font-size: 12px;
+}
+
+.header-action-group .btn-icon {
+    width: 34px;
+    padding: 0;
+}
+
+.header-action-group--primary {
+    background: linear-gradient(90deg, var(--tint-1), rgba(0, 0, 0, 0.14));
+    border-color: rgba(var(--a-rgb), 0.22);
+}
+
+.header-action-group--utility { gap: 2px; }
+
+/* One calm control surface for find / narrow / switch view. */
+.controls-bar {
+    flex-wrap: nowrap;
+    gap: 10px;
+    padding: 9px 10px 9px 12px;
+    background: linear-gradient(90deg, rgba(10, 13, 22, 0.82), rgba(15, 17, 31, 0.64));
+}
+
+.search-wrapper {
+    min-width: 220px;
+    max-width: none;
+}
+
+.search-wrapper input { height: 38px; }
+
+.secondary-controls { margin-left: auto; }
+
+.control-cluster {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px;
+    background: var(--bg-input);
+    border: 1px solid var(--stroke-1);
+    border-radius: calc(var(--radius-sm) + 2px);
+}
+
+.control-cluster .result-count {
+    padding: 5px 8px;
+    border: none;
+    background: transparent;
+}
+
+.control-cluster .btn-filters {
+    height: 32px;
+    padding: 0 10px;
+    border-color: transparent;
+    background: transparent;
+}
+
+.control-cluster .btn-filters:hover,
+.control-cluster .btn-filters.is-open,
+.control-cluster .btn-filters.has-active {
+    background: var(--surface-2);
+    border-color: var(--stroke-2);
+}
+
+.view-switcher {
+    height: 38px;
+    padding: 3px;
+    background: var(--bg-input);
+}
+
+.view-btn { height: 30px; }
+
+.filter-popover {
+    width: 376px;
+    max-width: min(376px, calc(100vw - 28px));
+    max-height: calc(100vh - 212px);
+    display: flex;
+    flex-direction: column;
+}
+
+.filter-popover-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    padding: 8px 14px 4px;
+}
+
+.filter-overview {
+    padding: 8px;
+    margin: 2px 0 6px;
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--tint-1), rgba(0, 0, 0, 0.2));
+}
+
+.filter-overview__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 2px 7px;
+    color: var(--text-sub);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.filter-overview__hint { color: var(--a-soft); font-size: 9px; }
+
+.filter-overview .status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+    padding: 3px;
+    border-radius: var(--radius-xs);
+}
+
+.filter-overview .status-tile {
+    height: 36px;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 5px;
+}
+
+.filter-overview .status-tile__label { font-size: 9.5px; }
+.filter-overview .status-tile__value { font-size: 13px; }
+
+/* The old alternate table shell becomes a bounded visual grid, not a row of
+   card-shaped tables. Compact cards expose identity, rank, level, region,
+   state and actions without keeping credentials in the resting layout. */
+.accounts-table-wrapper {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.account-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+    gap: 10px;
+}
+
+.account-visual-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--stroke-1);
+    border-top-color: rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    background: linear-gradient(145deg, rgba(20, 23, 39, 0.92), rgba(9, 12, 20, 0.86));
+    box-shadow: var(--shadow-sm), var(--bevel);
+    animation: rise-in var(--dur-3) var(--ease-out) backwards;
+    animation-delay: calc(var(--i, 0) * 18ms);
+    transition: transform var(--dur-2) var(--ease-spring), border-color var(--dur-2) ease, background var(--dur-2) ease;
+}
+
+.account-visual-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--edge);
+    background: linear-gradient(145deg, var(--surface-2), rgba(9, 12, 20, 0.92));
+}
+
+.account-visual-card.is-favorite { border-color: rgba(var(--warn-rgb), 0.45); }
+.account-visual-card.is-active-session { border-color: var(--edge-strong); box-shadow: var(--shadow-sm), 0 0 22px -10px rgba(var(--a-rgb), 0.85), var(--bevel); }
+.account-visual-card.needs-check { border-left: 2px solid rgba(var(--info-rgb), 0.7); }
+
+.card-view-topline,
+.card-view-identity,
+.card-view-actions,
+.card-view-icon-actions,
+.card-view-state,
+.card-view-tags {
+    display: flex;
+    align-items: center;
+}
+
+.card-view-topline { justify-content: space-between; min-height: 24px; }
+.card-view-state { justify-content: flex-end; gap: 4px; min-width: 0; }
+.card-view-state .badge-status { max-width: 118px; overflow: hidden; text-overflow: ellipsis; }
+
+.card-view-identity { gap: 10px; margin: 6px 0 10px; min-width: 0; }
+
+.card-view-rank {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 35%, rgba(255,255,255,.08), transparent 65%), rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--stroke-1);
+}
+
+.card-view-rank img { width: 44px; height: 44px; object-fit: contain; filter: drop-shadow(0 3px 6px rgba(0,0,0,.7)); }
+.card-view-rank span {
+    position: absolute;
+    right: -8px;
+    bottom: -5px;
+    padding: 2px 5px;
+    border: 1px solid var(--stroke-2);
+    border-radius: var(--radius-full);
+    background: var(--bg-deep);
+    color: var(--text-sub);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.card-view-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.card-view-name strong { overflow: hidden; color: var(--text-main); font-size: 15px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.card-view-name span { overflow: hidden; color: var(--text-muted); font-family: var(--font-mono); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+.card-view-details {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) .7fr .8fr;
+    gap: 6px;
+    padding: 8px 0;
+    border-top: 1px solid var(--stroke-1);
+    border-bottom: 1px solid var(--stroke-1);
+}
+
+.card-view-details div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.card-view-details span { color: var(--text-dim); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.card-view-details strong { overflow: hidden; color: var(--text-sub); font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+.card-view-tags { min-height: 29px; gap: 5px; overflow: hidden; padding: 7px 0 5px; }
+.card-view-peak { overflow: hidden; color: var(--gold); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.card-view-peak i { font-size: 9px; }
+
+.card-view-actions { justify-content: space-between; gap: 8px; }
+.card-view-primary {
+    min-width: 92px;
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--stroke-2);
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--text-sub);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background var(--dur-2) ease, border-color var(--dur-2) ease, color var(--dur-2) ease;
+}
+.card-view-primary:hover { background: var(--a); border-color: var(--a); color: #fff; }
+.card-view-primary.is-play { background: var(--grad-primary); border-color: transparent; color: #fff; }
+.card-view-primary.is-check { background: rgba(var(--info-rgb), .12); border-color: rgba(var(--info-rgb), .4); color: var(--info); }
+.card-view-primary.is-check:hover { background: var(--info); color: var(--bg-deep); }
+.card-view-icon-actions { justify-content: flex-end; gap: 1px; }
+.card-view-icon-actions .roster-icon { width: 26px; height: 27px; }
+
+.card-view-creds[hidden] { display: none; }
+.card-view-creds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px 14px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--stroke-2);
+}
+.card-view-creds .cred-row { flex: 1 1 112px; justify-content: flex-start; gap: 8px; }
+.account-visual-card.is-creds-open { border-color: var(--edge); background: var(--surface-2); }
+
+@media (max-width: 1180px) {
+    .app-header { align-items: flex-start; }
+    .header-actions { margin-left: 0; }
+    .controls-bar { flex-wrap: wrap; }
+    .search-wrapper { flex: 1 1 100%; }
+    .secondary-controls { width: 100%; margin-left: 0; justify-content: flex-end; }
+}
+
+@media (max-width: 720px) {
+    .header-action-group { gap: 2px; }
+    .header-action-group .btn > span { display: none; }
+    .header-action-group .btn:not(.btn-icon) { width: 34px; padding: 0; }
+    .controls-bar { padding: 8px; }
+    .secondary-controls { justify-content: space-between; }
+    .filter-popover { right: auto; left: 0; transform-origin: top left; }
+    .filter-overview .status-tile { height: 34px; }
+    .filter-overview .status-tile__label { display: none; }
+    .account-card-grid { grid-template-columns: 1fr; }
+}
+
 /* --- 11.3 Legacy Ranked account treatment -------------------------------- */
 /* A quiet frost ring — reads as "special" without the old white bloom, and
    layers cleanly under the accent glow of an active / favourited card. */

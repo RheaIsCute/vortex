@@ -1900,7 +1900,7 @@ function renderAccounts(silent = false) {
         DOM.accountsGrid.style.display = "none";
         DOM.accountsGrid.innerHTML = "";
         DOM.accountsTableWrapper.style.display = "block";
-        renderTableView();
+        renderCardView();
         DOM.accountsTableBody.classList.toggle("animate-in", isNewSet);
     }
 }
@@ -2383,6 +2383,52 @@ function renderTableView() {
                     </div>
                 </td>
             </tr>
+        `;
+    }).join("");
+}
+
+function renderCardView() {
+    const activeAcc = state.activeAccountId ? state.accounts.find(a => a.id === state.activeAccountId) : null;
+    const sorted = activeAcc
+        ? [activeAcc, ...state.accounts.filter(a => a.id !== activeAcc.id)]
+        : state.accounts;
+
+    DOM.accountsTableBody.innerHTML = sorted.map((acc, i) => {
+        const v = buildAccountView(acc);
+        const primaryAction = v.isActive
+            ? `<button class="card-view-primary is-play" onclick="playAccount(${acc.id})" title="Launch VALORANT on this account"><i class="fa-solid fa-play"></i> Play</button>`
+            : v.needsCheck
+                ? `<button class="card-view-primary is-check" id="btn-check-${acc.id}" onclick="checkAccount(${acc.id})" title="Verify this account and pull live data"><i class="fa-solid fa-shield-halved"></i><span class="account-check-loader" aria-hidden="true"></span> Check</button>`
+                : `<button class="card-view-primary" onclick="launchAccount(${acc.id})" title="Auto-fill login into Riot Client"><i class="fa-solid fa-arrow-right-to-bracket"></i> Login</button>`;
+
+        return `
+            <article class="account-visual-card ${acc.favorite ? 'is-favorite' : ''} ${v.needsCheck ? 'needs-check' : ''} ${v.cardFlags}" data-id="${acc.id}" role="listitem" style="--i:${Math.min(i, 30)}">
+                <div class="card-view-topline">
+                    <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account" aria-label="Pin account"><i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i></button>
+                    <div class="card-view-state">${v.liveBadge}${v.legacyBadge}${v.needsCheck ? '<span class="badge-unset">Unverified</span>' : v.statusChip}</div>
+                </div>
+                <div class="card-view-identity">
+                    <div class="card-view-rank ${v.tierClass}"><img src="${v.rankIconSrc}" alt="${v.rankTitle}" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';"><span>LV ${v.needsCheck ? '?' : (acc.level || '-')}</span></div>
+                    <div class="card-view-name"><strong title="${escapeHtml(v.displayName)}">${escapeHtml(v.displayName)}</strong><span>${escapeHtml(acc.username)}</span></div>
+                </div>
+                <div class="card-view-details">
+                    <div><span>Rank</span><strong class="${v.needsCheck ? 'text-dim' : v.rankInfo.colorClass}">${v.needsCheck ? 'Unverified' : v.rankTitle}</strong></div>
+                    <div><span>Region</span><strong>${escapeHtml(acc.region || 'NA')}</strong></div>
+                    <div><span>Win rate</span><strong class="${v.wrClass}">${v.needsCheck ? '—' : `${v.winrate}%`}</strong></div>
+                </div>
+                <div class="card-view-tags"><span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>${acc.peak_rank_tier ? `<span class="card-view-peak" title="Peak rank"><i class="fa-solid fa-trophy"></i> ${escapeHtml(acc.peak_rank_tier)} ${escapeHtml(acc.peak_rank_division || '')}</span>` : ''}</div>
+                <div class="card-view-actions">
+                    ${primaryAction}
+                    <div class="card-view-icon-actions">
+                        <button class="roster-icon js-creds-toggle" onclick="toggleRosterCreds(${acc.id}, this)" title="Show credentials" aria-expanded="false" aria-controls="creds-${acc.id}"><i class="fa-solid fa-key"></i></button>
+                        ${v.isActive ? `<button class="roster-icon is-live" onclick="openDashboard()" title="Open live match dashboard"><i class="fa-solid fa-gauge-high"></i></button>` : ''}
+                        <button class="roster-icon" onclick="openMatchesModal(${acc.id})" title="View match history"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                        <button class="roster-icon" onclick="openEditModal(${acc.id})" title="Edit account"><i class="fa-solid fa-pen"></i></button>
+                        <button class="roster-icon is-danger" onclick="deleteAccount(${acc.id})" title="Delete account"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="card-view-creds" id="creds-${acc.id}" hidden>${credRows(acc)}</div>
+            </article>
         `;
     }).join("");
 }
@@ -3308,9 +3354,9 @@ async function toggleFavorite(id) {
                 }
             }
         } else if (state.viewMode === "table" && DOM.accountsTableBody) {
-            const rowEl = DOM.accountsTableBody.querySelector(`tr[data-id="${id}"]`);
+            const rowEl = DOM.accountsTableBody.querySelector(`.account-visual-card[data-id="${id}"]`);
             if (rowEl && newIndex !== -1) {
-                const existingRows = Array.from(DOM.accountsTableBody.querySelectorAll(`tr`));
+                const existingRows = Array.from(DOM.accountsTableBody.querySelectorAll(`.account-visual-card`));
                 const targetSibling = existingRows.filter(r => r !== rowEl)[newIndex];
                 if (targetSibling) {
                     DOM.accountsTableBody.insertBefore(rowEl, targetSibling);
@@ -3987,7 +4033,7 @@ function toggleRosterCreds(id, btn) {
     if (!box) return;
     const show = box.hidden;
     box.hidden = !show;
-    const row = box.closest(".roster-row");
+    const row = box.closest(".roster-row, .account-visual-card");
     if (row) row.classList.toggle("is-creds-open", show);
     if (btn) {
         btn.classList.toggle("is-on", show);

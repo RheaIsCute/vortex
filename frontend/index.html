@@ -75,40 +75,22 @@
                 </span>
             </div>
 
-            <!-- Header Action Buttons -->
+            <!-- Header action groups -->
             <div class="header-actions" id="header-actions">
-                <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status">
-                    <i class="fa-solid fa-list-check" id="check-all-icon"></i>
-                    <span>Check Accounts</span>
-                </button>
-                <button class="btn btn-secondary" id="btn-add-account" title="Add a single account">
-                    <i class="fa-solid fa-plus"></i>
-                    <span>Add Account</span>
-                </button>
-                <button class="btn btn-secondary" id="btn-import-combo" title="Import accounts — paste user:password lines or drop a .txt / .csv file">
-                    <i class="fa-solid fa-file-import"></i>
-                    <span>Import</span>
-                </button>
-                <button class="btn btn-secondary" id="btn-sync-all" title="Refresh Live Stats for All Accounts">
-                    <i class="fa-solid fa-arrows-rotate" id="sync-all-icon"></i>
-                    <span>Sync All</span>
-                </button>
-
-                <span class="header-divider"></span>
-
-                <button class="btn btn-icon is-danger" id="btn-kill-client" title="Force Close Riot Client">
-                    <i class="fa-solid fa-power-off"></i>
-                </button>
-                <button class="btn btn-icon btn-icon-badge" id="btn-open-banned" title="Banned Accounts">
-                    <i class="fa-solid fa-ban"></i>
-                    <span class="icon-badge" id="banned-count-badge" style="display:none;">0</span>
-                </button>
-                <button class="btn btn-icon" id="btn-backup-restore" title="Backup and Restore">
-                    <i class="fa-solid fa-database"></i>
-                </button>
-                <button class="btn btn-icon" id="btn-open-settings" title="Settings">
-                    <i class="fa-solid fa-gear"></i>
-                </button>
+                <div class="header-action-group header-action-group--primary" aria-label="Account checks">
+                    <button class="btn btn-primary" id="btn-check-all-accounts" title="Log into every account sequentially to sync all info and ban status"><i class="fa-solid fa-list-check" id="check-all-icon"></i><span>Check Accounts</span></button>
+                    <button class="btn btn-secondary" id="btn-sync-all" title="Refresh Live Stats for All Accounts"><i class="fa-solid fa-arrows-rotate" id="sync-all-icon"></i><span>Sync All</span></button>
+                </div>
+                <div class="header-action-group" aria-label="Account management">
+                    <button class="btn btn-secondary" id="btn-add-account" title="Add a single account"><i class="fa-solid fa-plus"></i><span>Add Account</span></button>
+                    <button class="btn btn-secondary" id="btn-import-combo" title="Import accounts — paste user:password lines or drop a .txt / .csv file"><i class="fa-solid fa-file-import"></i><span>Import</span></button>
+                </div>
+                <div class="header-action-group header-action-group--utility" aria-label="Utilities">
+                    <button class="btn btn-icon is-danger" id="btn-kill-client" title="Force Close Riot Client"><i class="fa-solid fa-power-off"></i></button>
+                    <button class="btn btn-icon btn-icon-badge" id="btn-open-banned" title="Banned Accounts"><i class="fa-solid fa-ban"></i><span class="icon-badge" id="banned-count-badge" style="display:none;">0</span></button>
+                    <button class="btn btn-icon" id="btn-backup-restore" title="Backup and Restore"><i class="fa-solid fa-database"></i></button>
+                    <button class="btn btn-icon" id="btn-open-settings" title="Settings"><i class="fa-solid fa-gear"></i></button>
+                </div>
             </div>
         </header>
 
@@ -328,11 +310,7 @@
         <!-- ACCOUNT ROSTER — collapses out of the way while the dashboard is open -->
         <div class="accounts-view" id="accounts-view">
 
-        <!-- ROSTER TOOLBAR — search, roster totals (as one-click filters),
-             result count, filters, view switch. The totals live in this bar
-             rather than in a band of their own: they are a filter control, and
-             a separate full-width strip cost ~53px of the first screen for
-             four numbers. -->
+        <!-- ROSTER TOOLBAR -->
         <section class="controls-bar" aria-label="Roster controls">
             <div class="search-wrapper">
                 <i class="fa-solid fa-magnifying-glass search-icon"></i>
@@ -340,27 +318,9 @@
                 <button class="search-clear-btn" id="search-clear" title="Clear search"><i class="fa-solid fa-xmark"></i></button>
             </div>
 
-            <div class="status-strip" id="status-strip" role="group" aria-label="Account overview">
-                <button type="button" class="status-tile is-active" id="status-total" data-tag="ALL" title="Show every account">
-                    <span class="status-tile__label">Total</span>
-                    <span class="status-tile__value" id="stat-total">0</span>
-                </button>
-                <button type="button" class="status-tile" id="status-mains" data-tag="Main" title="Show main accounts">
-                    <span class="status-tile__label">Mains</span>
-                    <span class="status-tile__value" id="stat-mains">0</span>
-                </button>
-                <button type="button" class="status-tile" id="status-ranked" data-tag="Ranked" title="Show ranked accounts (level 20+)">
-                    <span class="status-tile__label">Ranked</span>
-                    <span class="status-tile__value" id="stat-ranked">0</span>
-                </button>
-                <button type="button" class="status-tile" id="status-unrated" data-tag="Unrated" title="Show unrated accounts (below level 20)">
-                    <span class="status-tile__label">Unrated</span>
-                    <span class="status-tile__value" id="stat-unrated">0</span>
-                </button>
-            </div>
-
             <div class="secondary-controls">
-                <span class="result-count" id="result-count"><strong>0</strong> shown</span>
+                <div class="control-cluster">
+                    <span class="result-count" id="result-count"><strong>0</strong> shown</span>
 
                 <div class="filter-control" id="filter-control">
                     <button type="button" class="btn-filters" id="btn-filters" aria-haspopup="true" aria-expanded="false">
@@ -372,6 +332,15 @@
 
                     <div class="filter-popover" id="filter-popover" role="dialog" aria-label="Filter and sort accounts">
                         <div class="filter-popover-scroll">
+                            <div class="filter-overview">
+                                <div class="filter-overview__heading"><span>Account overview</span><span class="filter-overview__hint">Quick filters</span></div>
+                                <div class="status-strip" id="status-strip" role="group" aria-label="Account overview">
+                                    <button type="button" class="status-tile is-active" id="status-total" data-tag="ALL" title="Show every account"><span class="status-tile__label">Total</span><span class="status-tile__value" id="stat-total">0</span></button>
+                                    <button type="button" class="status-tile" id="status-mains" data-tag="Main" title="Show main accounts"><span class="status-tile__label">Mains</span><span class="status-tile__value" id="stat-mains">0</span></button>
+                                    <button type="button" class="status-tile" id="status-ranked" data-tag="Ranked" title="Show ranked accounts (level 20+)"><span class="status-tile__label">Ranked</span><span class="status-tile__value" id="stat-ranked">0</span></button>
+                                    <button type="button" class="status-tile" id="status-unrated" data-tag="Unrated" title="Show unrated accounts (below level 20)"><span class="status-tile__label">Unrated</span><span class="status-tile__value" id="stat-unrated">0</span></button>
+                                </div>
+                            </div>
                             <div class="filter-section">
                                 <div class="filter-section-title">Region</div>
                                 <div class="filter-options" data-filter="region">
@@ -421,12 +390,13 @@
                 </div>
 
                 <div class="view-switcher" id="view-switcher" data-view="grid">
-                    <button class="view-btn active" id="view-grid-btn" title="Roster rows">
+                    <button class="view-btn active" id="view-grid-btn" title="Roster rows" aria-label="Roster rows">
                         <i class="fa-solid fa-list-ul"></i>
                     </button>
-                    <button class="view-btn" id="view-table-btn" title="Table view">
-                        <i class="fa-solid fa-table-list"></i>
+                    <button class="view-btn" id="view-table-btn" title="Card view" aria-label="Card view">
+                        <i class="fa-solid fa-grip"></i>
                     </button>
+                </div>
                 </div>
             </div>
         </section>
@@ -446,28 +416,9 @@
             <!-- Grid View -->
             <div class="accounts-grid" id="accounts-grid" role="list" style="display: none;"></div>
 
-            <!-- Table View -->
+            <!-- Card View -->
             <div class="accounts-table-wrapper" id="accounts-table-wrapper" style="display: none;">
-                <table class="accounts-table">
-                    <thead>
-                        <tr>
-                            <th>Pin</th>
-                            <th>Status</th>
-                            <th>Riot ID</th>
-                            <th>Username</th>
-                            <th>Password</th>
-                            <th>Region</th>
-                            <th>Current Rank</th>
-                            <th>Peak Rank</th>
-                            <th>Level</th>
-                            <th>Winrate</th>
-                            <th>Category</th>
-                            <th>Last Login</th>
-                            <th class="text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="accounts-table-body"></tbody>
-                </table>
+                <div class="account-card-grid" id="accounts-table-body" role="list"></div>
             </div>
 
             <!-- Empty State -->
