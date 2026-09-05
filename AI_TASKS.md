@@ -11,6 +11,24 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Codex (v5.5.47 match-history recovery release)
+
+Status: DONE
+
+Scope: Package, validate, tag, and publish the persistent match-history and
+peak-rank recovery fix as the next auto-update release.
+
+Files owned: `backend/version.py`, `version.json`, `installer/vortex_setup.iss`,
+`AI_CHANGES.md`, `AI_TASKS.md`, release artifact/tag
+
+Dependencies: Preserve the validated rank/history recovery work and complete
+the frozen executable plus installer release gates before publication.
+
+Notes: Completed 2026-09-05. Version 5.5.47 passed 133 tests, three frozen
+application smoke runs, elevation-manifest verification, and the installer
+integrity extraction gate. Source, tag, GitHub release, and verified installer
+were published as the next auto-update release.
+
 ### Codex (persistent account history and peak-rank recovery)
 
 Status: DONE

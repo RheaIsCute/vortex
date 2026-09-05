@@ -1544,3 +1544,14 @@ Tests:
   deprecation warnings).
 - `python -m compileall -q app.py backend tests` and `node --check
   frontend/app.js` passed.
+# v5.5.47 release
+
+- Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
+  `5.5.47`.
+- Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).
+- Built `dist/Vortex/Vortex.exe`; the embedded manifest was verified as
+  `requireAdministrator`, `uiAccess=false`, with 3,829 files in `_internal`.
+  Its three isolated frozen startup/API/UIA smoke runs passed.
+- Built and integrity-verified `dist_installer/VortexSetup.exe`. Installer
+  ProductVersion: `5.5.47`; SHA-256:
+  `95F890E0F4D120A0388A53D70A18BB2FEA7F06E8AC8BDC3AFBE2411D21448326`.

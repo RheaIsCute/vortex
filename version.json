@@ -1,5 +1,5 @@
 {
-  "version": "5.5.46",
+  "version": "5.5.47",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.46: new compact Account Manager Card View, grouped account toolbar, unified search/filter/view controls, and account totals moved into Filters."
+  "changelog": "Vortex v5.5.47: reliable saved match history, recovery from the active VALORANT session, and restored all-time peak rank in every account view."
 }
