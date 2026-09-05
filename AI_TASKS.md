@@ -33,13 +33,22 @@ redesigns. `buildAccountView()` filtering/eligibility, the shared
 `matchCardHtml` row, the Live Match lifecycle and all API contracts are
 untouched.
 
-Notes: Completed 2026-09-05. **Outstanding: `pytest -q` and `.\build.bat` were
-not run — Python is not installed on this machine.** `tests/` is also absent
-from this checkout. `buildAccountView()` gained a presentational `statusChip`
-field and `renderMatchHistoryList()` now emits a header row, so
-`tests/test_settings_and_ui.py` should be re-run before release; no existing
-asserted selector was removed. Verified by rendering the real frontend against
-a Node mock of the API in headless Chrome over CDP across
+Notes: Completed 2026-09-05 and published as v5.5.45. Python/Git/Inno Setup were
+installed on this machine to finish validation: 121 tests pass, `compileall` and
+`node --check frontend/app.js` are clean, and `.\build.bat` produced the
+installer that ships in the release.
+
+`tests/test_settings_and_ui.py` initially failed — the Settings dedup removed
+`Post-Game Actions` and `Launch & Login`, two strings it asserts on. Fixed by
+moving those full names onto the section headings, which keeps the "state the
+name once" intent. `buildAccountView()` gained a presentational `statusChip`
+field and `renderMatchHistoryList()` now emits a header row; no existing
+asserted selector was removed.
+
+This checkout was also missing 2,233 tracked files (ten `tests/*.py`, the
+`overwolf/` companion, 2,218 weapon-skin assets); all were restored with
+`git restore` before testing and building. Also verified by rendering the
+frontend against a Node mock of the API in headless Chrome over CDP across
 1600/1440/1300/1200/1120/1024/900px — zero console errors, zero failed
 requests. See `AI_CHANGES.md`.
 
