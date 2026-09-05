@@ -54,6 +54,14 @@ def get_official_rank_icon(tier: str, division: str = "") -> str:
     return f"{TIER_BASE_URL}/{tier_idx}/largeicon.png"
 
 
+def split_rank_label(value: Any) -> tuple[str, str]:
+    """Convert either HenrikDev rank schema into Vortex's tier/division fields."""
+    if not isinstance(value, str):
+        return "", ""
+    parts = value.strip().split()
+    return (parts[0].upper(), parts[1] if len(parts) > 1 else "") if parts else ("", "")
+
+
 class StatScraper:
     def __init__(self, riot_api_key: Optional[str] = ""):
         # API keys are user-provided settings, never application defaults.
@@ -118,36 +126,55 @@ class StatScraper:
             except Exception:
                 pass
 
-            # 2. Fetch MMR & Peak Rank
+            # 2. Fetch MMR & Peak Rank.  HenrikDev v3 is the current schema;
+            # retain v2 as a compatibility fallback for existing user keys.
             try:
-                mmr_url = f"https://api.henrikdev.xyz/valorant/v2/mmr/{region_code}/{enc_name}/{enc_tag}"
-                async with session.get(mmr_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        mmr_data = data.get("data", {})
-                        if mmr_data:
-                            # Current rank
-                            curr_data = mmr_data.get("current_data", {})
-                            if curr_data:
-                                curr_tier_patched = curr_data.get("currenttierpatched", "Unranked")
-                                parts = curr_tier_patched.split()
-                                if parts:
-                                    result["rank_tier"] = parts[0].upper()
-                                    result["rank_division"] = parts[1] if len(parts) >= 2 else ""
-                                    result["lp"] = curr_data.get("ranking_in_tier", 0)
-                                    result["games_played"] = curr_data.get("games_needed_for_rating", 0)
+                mmr_urls = (
+                    f"https://api.henrikdev.xyz/valorant/v3/mmr/{region_code}/pc/{enc_name}/{enc_tag}",
+                    f"https://api.henrikdev.xyz/valorant/v2/mmr/{region_code}/{enc_name}/{enc_tag}",
+                )
+                for mmr_url in mmr_urls:
+                    async with session.get(mmr_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status != 200:
+                            continue
+                        mmr_data = (await resp.json()).get("data", {})
+                        if not mmr_data:
+                            continue
 
-                            # Peak rank
-                            peak_data = mmr_data.get("highest_rank", {})
-                            if peak_data:
-                                peak_patched = peak_data.get("patched_tier", "")
-                                if peak_patched:
-                                    p_parts = peak_patched.split()
-                                    if len(p_parts) >= 1:
-                                        result["peak_rank_tier"] = p_parts[0].upper()
-                                    if len(p_parts) >= 2:
-                                        result["peak_rank_division"] = p_parts[1]
-                                    result["peak_rank_season"] = peak_data.get("season", "")
+                        # v3: current.tier.name / current.rr and peak.tier.name.
+                        current = mmr_data.get("current") or {}
+                        current_tier = (current.get("tier") or {}).get("name", "")
+                        peak = mmr_data.get("peak") or {}
+                        peak_tier = (peak.get("tier") or {}).get("name", "")
+                        if current_tier or peak_tier:
+                            tier, division = split_rank_label(current_tier)
+                            if tier:
+                                result["rank_tier"] = tier
+                                result["rank_division"] = division
+                                result["lp"] = current.get("rr", 0)
+                            peak_tier_name, peak_division = split_rank_label(peak_tier)
+                            if peak_tier_name:
+                                result["peak_rank_tier"] = peak_tier_name
+                                result["peak_rank_division"] = peak_division
+                                result["peak_rank_season"] = (peak.get("season") or {}).get("short", "")
+                            break
+
+                        # v2 response retained for older API keys.
+                        curr_data = mmr_data.get("current_data", {})
+                        curr_tier, curr_division = split_rank_label(curr_data.get("currenttierpatched", ""))
+                        if curr_tier:
+                            result["rank_tier"] = curr_tier
+                            result["rank_division"] = curr_division
+                            result["lp"] = curr_data.get("ranking_in_tier", 0)
+                            result["games_played"] = curr_data.get("games_needed_for_rating", 0)
+
+                        peak_data = mmr_data.get("highest_rank", {})
+                        peak_tier_name, peak_division = split_rank_label(peak_data.get("patched_tier", ""))
+                        if peak_tier_name:
+                            result["peak_rank_tier"] = peak_tier_name
+                            result["peak_rank_division"] = peak_division
+                            result["peak_rank_season"] = peak_data.get("season", "")
+                        break
             except Exception:
                 pass
 

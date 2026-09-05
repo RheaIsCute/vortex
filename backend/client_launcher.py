@@ -925,13 +925,6 @@ class ClientLauncher:
             "username": "",
             "display_name": "",
             "region": "NA",
-            "rank_tier": "UNRANKED",
-            "rank_division": "",
-            "lp": 0,
-            "rank_icon_url": f"{TIER_BASE_URL}/0/largeicon.png",
-            "peak_rank_tier": "",
-            "peak_rank_division": "",
-            "peak_rank_icon_url": "",
             "status": "PLAYABLE",
             "puuid": "",
             # None is important: a client that is not in a usable party is
@@ -1078,30 +1071,53 @@ class ClientLauncher:
                     if r_mmr.status_code == 200:
                         mmr_data = r_mmr.json()
                         latest_update = mmr_data.get("LatestCompetitiveUpdate", {})
-                        curr_tier_num = latest_update.get("TierAfterUpdate", 0)
+                        try:
+                            curr_tier_num = int(latest_update.get("TierAfterUpdate", 0) or 0)
+                        except (TypeError, ValueError):
+                            curr_tier_num = 0
+                        # A successful MMR response is authoritative even for
+                        # an unranked account.  Crucially, these fields are not
+                        # present at all when the MMR request failed, so a
+                        # transient Riot error cannot erase a saved rank.
+                        result["rank_tier"] = "UNRANKED"
+                        result["rank_division"] = ""
                         result["lp"] = latest_update.get("RankedRatingAfterUpdate", 0)
+                        result["rank_icon_url"] = f"{TIER_BASE_URL}/0/largeicon.png"
 
-                        if curr_tier_num and curr_tier_num < len(TIER_NAMES):
+                        if 0 < curr_tier_num < len(TIER_NAMES):
                             full_name = TIER_NAMES[curr_tier_num]
                             parts = full_name.split()
                             result["rank_tier"] = parts[0]
-                            if len(parts) > 1: result["rank_division"] = parts[1]
+                            result["rank_division"] = parts[1] if len(parts) > 1 else ""
                             result["rank_icon_url"] = f"{TIER_BASE_URL}/{curr_tier_num}/largeicon.png"
 
                         # Calculate All-Time Peak Tier from seasonal history
                         queue_skills = mmr_data.get("QueueSkills", {}).get("competitive", {})
                         seasonal = queue_skills.get("SeasonalInfoBySeasonID") or {}
-                        peak_tier_num = 0
+                        peak_tier_num = curr_tier_num
                         for _, s_info in seasonal.items():
-                            t = s_info.get("CompetitiveTier", 0)
-                            if t > peak_tier_num:
-                                peak_tier_num = t
+                            if not isinstance(s_info, dict):
+                                continue
+                            # Riot's current payload can retain a peak in
+                            # Rank or WinsByTier after CompetitiveTier drops
+                            # to zero.  Looking only at CompetitiveTier made
+                            # established accounts appear to have no peak.
+                            candidates = (
+                                s_info.get("CompetitiveTier", 0),
+                                s_info.get("Rank", 0),
+                                *(s_info.get("WinsByTier") or {}).keys(),
+                            )
+                            for candidate in candidates:
+                                try:
+                                    peak_tier_num = max(peak_tier_num, int(candidate or 0))
+                                except (TypeError, ValueError):
+                                    continue
 
                         if peak_tier_num > 0 and peak_tier_num < len(TIER_NAMES):
                             p_name = TIER_NAMES[peak_tier_num]
                             p_parts = p_name.split()
                             result["peak_rank_tier"] = p_parts[0]
-                            if len(p_parts) > 1: result["peak_rank_division"] = p_parts[1]
+                            result["peak_rank_division"] = p_parts[1] if len(p_parts) > 1 else ""
                             result["peak_rank_icon_url"] = f"{TIER_BASE_URL}/{peak_tier_num}/largeicon.png"
         except Exception:
             pass
@@ -1629,10 +1645,18 @@ class ClientLauncher:
             _LOGIN_UI_SCAN_LOCAL.cached = (hwnd, time.monotonic(), snapshot)
             user_field = snapshot.get("username")
             pass_field = snapshot.get("password")
-            if user_field is None or pass_field is None:
+            # Riot's sign-in page may show only the username edit first and
+            # mount the password edit after the username is confirmed. The
+            # username field being present and enabled is the real "the client
+            # has finished opening" signal; the password field is resolved
+            # again at the password step. Requiring both here is what left the
+            # tab stuck on "Waiting for login window".
+            if user_field is None:
                 return None, "window up, credential fields not mounted yet"
             try:
-                enabled = bool(user_field.IsEnabled and pass_field.IsEnabled)
+                enabled = bool(user_field.IsEnabled)
+                if pass_field is not None:
+                    enabled = enabled and bool(pass_field.IsEnabled)
             except Exception:
                 return None, "credential controls became stale"
             if not enabled:
@@ -1687,6 +1711,23 @@ class ClientLauncher:
         if len(edits) >= 2:
             user_field = user_field or edits[0]
             pass_field = pass_field or next((field for field in edits if field is not user_field), None)
+        elif len(edits) == 1 and user_field is None and pass_field is None:
+            # Riot's current sign-in page mounts a single edit at a time: the
+            # username box first, and the password box only after the username
+            # is confirmed (Tab/Enter). A page showing one unclassified edit is
+            # therefore the username step - not a broken scan - so surface it as
+            # the username field and leave `password` None. The caller advances
+            # to the password step and rescans; requiring two coexisting edits
+            # here is what left the login stuck on "Waiting for login window".
+            only = edits[0]
+            try:
+                one_is_password = bool(getattr(only, "IsPassword", False))
+            except Exception:
+                one_is_password = False
+            if one_is_password:
+                pass_field = only
+            else:
+                user_field = only
 
         submit = None
         sign_out = None
@@ -1879,6 +1920,66 @@ class ClientLauncher:
         return True
 
     @classmethod
+    def _reveal_password_field(cls, window, user_field, username,
+                               listener, timeout: float = 6.0):
+        """
+        Advance Riot's single-edit sign-in page from the username step to the
+        password step and return the password edit once it mounts.
+
+        Riot's current login page shows one edit at a time: entering the
+        username and pressing Tab (or Enter) confirms it and swaps in the
+        password box. The username edit is already focused from the verified
+        fill, so a single Tab moves to the password field; Enter is the
+        keyboard fallback when the page consumes Tab. After each advance the
+        scoped UI-change listener is waited on and the tree rescanned, so the
+        password control is picked up as soon as it exists rather than on a
+        fixed sleep. Returns the password field, or None if it never appears.
+        """
+        _set_login_stage("typing", "Opening the password field...", username)
+        deadline = time.monotonic() + max(0.0, timeout)
+        used_enter_fallback = False
+        try:
+            user_field.SetFocus()
+        except Exception:
+            pass
+        pyautogui.press('tab')
+
+        while time.monotonic() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return None
+            remaining = deadline - time.monotonic()
+            if listener is not None:
+                listener.wait(min(0.25, max(0.0, remaining)), _LOGIN_CANCEL_EVENT)
+            else:
+                _LOGIN_CANCEL_EVENT.wait(min(0.25, max(0.0, remaining)))
+            try:
+                snapshot = cls._scan_login_controls(window)
+            except Exception:
+                continue
+            if snapshot.get("popup_sign_out") is not None:
+                # A sign-out popup here means the page changed under us; let the
+                # caller's popup handling take over by reporting no field.
+                return None
+            pass_field = snapshot.get("password")
+            if pass_field is not None:
+                try:
+                    if bool(pass_field.IsEnabled):
+                        return pass_field
+                except Exception:
+                    return pass_field
+            # Some builds need the username committed with Enter rather than
+            # Tab. Try that once, roughly halfway through the budget, before
+            # giving up.
+            if not used_enter_fallback and (deadline - time.monotonic()) < timeout / 2:
+                used_enter_fallback = True
+                try:
+                    user_field.SetFocus()
+                except Exception:
+                    pass
+                pyautogui.press('enter')
+        return None
+
+    @classmethod
     def _attempt_login_fill(cls, username: str, password: str, stay_signed_in: bool,
                             tries: int = 3, form_timeout: float = 35.0) -> Optional[bool]:
         """
@@ -1963,6 +2064,22 @@ class ClientLauncher:
                 if _LOGIN_CANCEL_EVENT.is_set():
                     return False
 
+                # On Riot's single-edit sign-in page the password box isn't
+                # mounted until the username step is confirmed. Advance to it
+                # (Tab from the username field) and wait for the password edit
+                # to appear before typing, instead of failing on a None field.
+                if pass_field is None:
+                    pass_field = cls._reveal_password_field(
+                        window, user_field, username, listener,
+                    )
+                    if pass_field is None:
+                        login_logger.warning(
+                            "password field never mounted after advancing from username"
+                        )
+                        continue
+                if _LOGIN_CANCEL_EVENT.is_set():
+                    return False
+
                 _set_login_stage("typing", "Entering password...", username)
                 if not cls.fill_field_verified(pass_field, password, "password", masked=True):
                     continue
@@ -1975,8 +2092,13 @@ class ClientLauncher:
                 # full-tree scans plus the fixed post-password delay.
                 try:
                     snapshot = cls._scan_login_controls(window)
-                    user_field = snapshot.get("username")
-                    pass_field = snapshot.get("password")
+                    rescanned_user = snapshot.get("username")
+                    pass_field = snapshot.get("password") or pass_field
+                    # On the single-edit page the username box is swapped out
+                    # once the password step is reached, so only adopt a
+                    # rescanned username field when the page still shows one.
+                    if rescanned_user is not None:
+                        user_field = rescanned_user
                 except Exception:
                     continue
                 if snapshot.get("popup_sign_out") is not None:
@@ -1986,9 +2108,15 @@ class ClientLauncher:
                     cls.wait_for_transient_login_popup_gone(timeout=8.0)
                     cls.wait_for_signed_out(timeout=8.0)
                     continue
-                if user_field is None or pass_field is None:
+                if pass_field is None:
                     continue
-                if cls._field_text(user_field) != username or len(cls._field_text(pass_field)) != len(password):
+                # Verify the username only while its edit is still on the page.
+                # A single-edit layout that has moved past it can't be re-read,
+                # and demanding it here would loop the fill forever.
+                if rescanned_user is not None and cls._field_text(user_field) != username:
+                    login_logger.warning("the form reset before submission; reacquiring controls")
+                    continue
+                if len(cls._field_text(pass_field)) != len(password):
                     login_logger.warning("the form reset before submission; reacquiring controls")
                     continue
 
@@ -2002,7 +2130,9 @@ class ClientLauncher:
                     )
                     if _LOGIN_CANCEL_EVENT.is_set():
                         return False
-                    if cls._field_text(user_field) != username:
+                    # Only re-verify the username while its edit is still shown;
+                    # the single-edit page no longer exposes it at this point.
+                    if rescanned_user is not None and cls._field_text(user_field) != username:
                         login_logger.warning("the form reset while setting stay-signed-in")
                         continue
 
@@ -2193,8 +2323,11 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.15)
 
+            # Tab confirms the username and, on Riot's single-edit page, swaps
+            # in the password box. Give that transition room to mount before
+            # pasting, or the password lands in the wrong field or nowhere.
             pyautogui.press('tab')
-            time.sleep(0.3)
+            time.sleep(0.5)
 
             pyautogui.hotkey('ctrl', 'a')
             time.sleep(0.04)

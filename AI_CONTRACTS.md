@@ -37,6 +37,11 @@ Output: JSON responses used by `frontend/app.js` and related UI files.
 
 Stability: Treat endpoint and response-field changes as compatibility changes. Update frontend and tests together.
 
+`GET /api/accounts/{account_id}/matches` retains its `matches` list and also
+returns a credential-free `account` summary (current/peak rank, RR, win rate,
+and saved history). It reconciles a matching authenticated Riot session before
+responding so the modal and roster can recover missing rank data safely.
+
 ## Riot sign-in automation
 
 Owner: `backend/client_launcher.py` (`ClientLauncher`)

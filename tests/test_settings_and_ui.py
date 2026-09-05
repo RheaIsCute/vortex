@@ -125,6 +125,10 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('matchCardHtml(m, i, "dashboard")', app_js)
         self.assertIn('matchCardHtml(m, i, "profile")', app_js)
 
+        # A failed refresh must not blank an already-saved account history.
+        self.assertIn("const cachedMatches = Array.isArray(acc.match_history)", app_js)
+        self.assertIn("if (!cachedMatches.length)", app_js)
+
         # 2. Every older per-entry-point match-row implementation is gone.
         for dead in ("stat-match", "detail-history-row", "detail-history-inner",
                      "detail-kda-stat", "detail-kdr-badge", "detail-outcome-pill",

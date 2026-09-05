@@ -263,7 +263,6 @@ async def background_scrape_account(account_id: int, display_name: str, region: 
         update_data = {k: v for k, v in info.items() if k not in ("found", "username")}
         update_data["last_updated"] = datetime.now().isoformat()
         apply_account_update(account_id, update_data)
-        return
 
     settings = db.get_settings()
     scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
@@ -1187,6 +1186,18 @@ async def get_account_matches(account_id: int):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    # An explicit history refresh is also the right chance to repair rank
+    # fields that were saved before the MMR-preservation fix. This only applies
+    # when the current Riot session is confirmed to be this same account.
+    active_info = await asyncio.to_thread(
+        launcher.get_active_riot_account, account["username"]
+    )
+    if active_info and active_info.get("found"):
+        update_data = {k: v for k, v in active_info.items() if k not in ("found", "username")}
+        update_data["last_updated"] = datetime.now().isoformat()
+        apply_account_update(account_id, update_data)
+        account = db.get_account_by_id(account_id) or account
+
     matches = account.get("match_history", [])
     needs_scoreboard_upgrade = any(
         (match.get("roster") and not match.get("teams"))
@@ -1197,11 +1208,39 @@ async def get_account_matches(account_id: int):
         for match in matches
     )
     if (not matches or needs_scoreboard_upgrade) and account["display_name"]:
+        # Prefer the authenticated local game client when it is available.
+        # It has no third-party API-key/rate-limit dependency and lets a
+        # recently logged-in account recover its history immediately.  The
+        # account PUUID check prevents a changing game session from ever
+        # attaching one account's matches to another account.
+        def local_match_history() -> list:
+            try:
+                client = valorant_client.ValorantLiveClient()
+                if not client.connect():
+                    return []
+                expected_puuid = (account.get("puuid") or "").strip()
+                if expected_puuid and client.puuid != expected_puuid:
+                    return []
+                return (valorant_client.build_player_stats(client).get("recent") or [])
+            except Exception:
+                return []
+
+        local_matches = await asyncio.to_thread(local_match_history)
+        if local_matches:
+            db.update_account(account_id, {"match_history": local_matches})
+            account = db.get_account_by_id(account_id) or account
+            matches = account.get("match_history", [])
+
+    if (not matches or needs_scoreboard_upgrade) and account["display_name"]:
         settings = db.get_settings()
         scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
         stats = await scraper.fetch_account_stats(account["display_name"], account["region"])
-        stats["last_updated"] = datetime.now().isoformat()
-        db.update_account(account_id, stats)
+        # Never replace cached history with a failed/empty third-party lookup.
+        # Database sticky fields protect the stored value as well, but keeping
+        # this request scoped avoids making a stale profile look freshly synced.
+        if stats.get("match_history"):
+            stats["last_updated"] = datetime.now().isoformat()
+            db.update_account(account_id, stats)
         account = db.get_account_by_id(account_id)
         matches = account.get("match_history", []) if account else []
 
@@ -1209,7 +1248,15 @@ async def get_account_matches(account_id: int):
         "success": True,
         "account_id": account_id,
         "display_name": account.get("display_name", "") if account else "",
-        "matches": matches
+        "matches": matches,
+        # The modal needs this post-reconciliation summary, never credentials.
+        "account": {
+            key: account.get(key) for key in (
+                "rank_tier", "rank_division", "rank_icon_url", "lp",
+                "peak_rank_tier", "peak_rank_division", "peak_rank_icon_url",
+                "peak_rank_season", "winrate", "match_history",
+            )
+        } if account else {},
     }
 
 

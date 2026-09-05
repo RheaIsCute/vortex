@@ -1519,3 +1519,28 @@ Files changed by this task:
 - `AI_CONTRACTS.md`, `AI_CHANGES.md`, `AI_TASKS.md`
 
 No public version bump, tag, push, installer publication, or release was made.
+# 2026-09-05 - Codex - Persistent match history and peak-rank recovery
+
+Changed:
+
+- Partial or failed local Riot MMR syncs no longer send placeholder Unranked
+  fields into the database. Last known rank data therefore remains intact until
+  Riot provides an authoritative MMR response.
+- Peak-rank parsing now checks `CompetitiveTier`, `Rank`, and `WinsByTier`,
+  which preserves historical peaks in Riot's current seasonal payload.
+- Updated the public MMR lookup to HenrikDev's supported v3 schema with its v2
+  shape retained as a compatibility fallback. Existing saved histories are
+  never replaced by an empty fetch result.
+- Account match history renders its saved copy immediately; when it is empty,
+  Vortex first attempts the authenticated local VALORANT-client profile before
+  using the public lookup. The roster shows a recovered peak badge even while
+  other account verification is pending. Opening the Match History panel also
+  reconciles the matching signed-in Riot session, then redraws the modal and
+  roster with the credential-free refreshed account summary.
+
+Tests:
+
+- `python -m pytest tests -q` -> 133 passed (two pre-existing FastAPI
+  deprecation warnings).
+- `python -m compileall -q app.py backend tests` and `node --check
+  frontend/app.js` passed.

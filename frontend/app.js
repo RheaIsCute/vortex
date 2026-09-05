@@ -2253,7 +2253,7 @@ function renderGridView() {
                         ${v.needsCheck
                             ? '<span class="roster-tier is-unset"><span class="mini-spinner"></span> No rank data</span>'
                             : `<span class="roster-tier ${v.rankInfo.colorClass}">${v.rankTitle}</span>`}
-                        ${v.needsCheck ? '' : peakBadge}
+                        ${peakBadge}
                         ${acc.notes ? `<span class="roster-note" title="${escapeHtml(acc.notes)}"><i class="fa-solid fa-note-sticky"></i> ${escapeHtml(acc.notes)}</span>` : ''}
                     </div>
                 </div>
@@ -2466,6 +2466,26 @@ function getTagBadgeClass(tag, level) {
 // MATCH HISTORY MODAL
 // ==========================================================================
 
+function syncMatchModalSummary(acc) {
+    const rankInfo = ValorantAssets.getRank(acc.rank_tier, acc.rank_division);
+    const peakInfo = ValorantAssets.getRank(acc.peak_rank_tier, acc.peak_rank_division);
+
+    DOM.matchModalRiotId.textContent = acc.display_name || acc.username;
+    DOM.matchModalRankImg.src = acc.rank_icon_url || rankInfo.icon;
+    DOM.matchMetaCurrent.textContent = formatRankTitle(acc);
+    DOM.matchMetaPeak.textContent = acc.peak_rank_tier ? `${acc.peak_rank_tier} ${acc.peak_rank_division || ''}` : 'None';
+    if (DOM.matchMetaPeakImg) {
+        if (acc.peak_rank_tier) {
+            DOM.matchMetaPeakImg.src = acc.peak_rank_icon_url || peakInfo.icon;
+            DOM.matchMetaPeakImg.style.display = "inline-block";
+        } else {
+            DOM.matchMetaPeakImg.removeAttribute("src");
+            DOM.matchMetaPeakImg.style.display = "none";
+        }
+    }
+    DOM.matchMetaWinrate.textContent = `${acc.winrate || 0}%`;
+}
+
 async function openMatchesModal(id) {
     state.activeMatchAccId = id;
     const acc = state.accounts.find(a => a.id === id);
@@ -2476,23 +2496,17 @@ async function openMatchesModal(id) {
     const controller = new AbortController();
     state._matchHistoryAbortController = controller;
 
-    const rankInfo = ValorantAssets.getRank(acc.rank_tier, acc.rank_division);
-    const peakInfo = ValorantAssets.getRank(acc.peak_rank_tier, acc.peak_rank_division);
+    syncMatchModalSummary(acc);
 
-    DOM.matchModalRiotId.textContent = acc.display_name || acc.username;
-    DOM.matchModalRankImg.src = acc.rank_icon_url || rankInfo.icon;
-    DOM.matchMetaCurrent.textContent = formatRankTitle(acc);
-    DOM.matchMetaPeak.textContent = acc.peak_rank_tier ? `${acc.peak_rank_tier} ${acc.peak_rank_division || ''}` : 'None';
-    
-    if (DOM.matchMetaPeakImg) {
-        DOM.matchMetaPeakImg.src = acc.peak_rank_icon_url || peakInfo.icon;
-        DOM.matchMetaPeakImg.style.display = "inline-block";
+    // Paint saved matches first. A refresh may fail or take a while, but that
+    // must not make an account with previously synced history look empty.
+    const cachedMatches = Array.isArray(acc.match_history) ? acc.match_history : [];
+    state.currentAccountMatches = cachedMatches;
+    if (cachedMatches.length) {
+        renderMatchHistoryList(cachedMatches);
+    } else {
+        DOM.matchesListContainer.innerHTML = stateBlock({ kind: "loading", hint: "Loading saved match history and checking for newer games…" });
     }
-
-    DOM.matchMetaWinrate.textContent = `${acc.winrate || 0}%`;
-
-    state.currentAccountMatches = [];
-    DOM.matchesListContainer.innerHTML = stateBlock({ kind: "loading", hint: "Loading match history from Riot servers…" });
     openModal(DOM.modalMatches);
 
     try {
@@ -2500,13 +2514,20 @@ async function openMatchesModal(id) {
         const data = await res.json();
         if (requestToken !== state._matchHistoryRequestToken ||
             state.activeMatchAccId !== id || !DOM.modalMatches.classList.contains("active")) return;
-        const matches = data.matches || [];
+        if (data.account) {
+            Object.assign(acc, data.account);
+            syncMatchModalSummary(acc);
+            renderAccounts(true);
+        }
+        const matches = Array.isArray(data.matches) && data.matches.length ? data.matches : cachedMatches;
         state.currentAccountMatches = matches;
         renderMatchHistoryList(matches);
         DOM.matchMetaWinrate.textContent = recentWinrateLabel(matches, acc.winrate);
     } catch (err) {
         if (err.name === "AbortError" || requestToken !== state._matchHistoryRequestToken) return;
-        DOM.matchesListContainer.innerHTML = stateBlock({ kind: "error", icon: "fa-triangle-exclamation", title: "Couldn't load match history", hint: "Check the connection and refresh." });
+        if (!cachedMatches.length) {
+            DOM.matchesListContainer.innerHTML = stateBlock({ kind: "error", icon: "fa-triangle-exclamation", title: "Couldn't load match history", hint: "Check the connection and refresh." });
+        }
     } finally {
         if (state._matchHistoryAbortController === controller) {
             state._matchHistoryAbortController = null;

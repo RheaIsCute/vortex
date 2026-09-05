@@ -11,6 +11,31 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Codex (persistent account history and peak-rank recovery)
+
+Status: DONE
+
+Scope: Preserve last known account rank data when a live Riot sync is partial,
+recover all-time peak rank from Riot's current seasonal schema, and make
+previously saved match history available before attempting an online refresh.
+
+Files owned: `backend/client_launcher.py`, `backend/server.py`,
+`backend/scraper.py`, `frontend/app.js`, `tests/test_scraper.py`,
+`tests/test_login_flow.py`, `tests/test_settings_and_ui.py`,
+`AI_CONTRACTS.md`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve existing account, login, and HTTP contracts; do not
+require a currently running VALORANT client to show already stored data.
+
+Notes: Completed 2026-09-05. A failed official-MMR call can no longer stamp a
+saved account as Unranked; all-time peak now considers Riot's `Rank` and
+`WinsByTier` history; the public scraper understands HenrikDev's v3 MMR schema;
+and match history shows the saved copy immediately, with an authenticated local
+VALORANT-client recovery path for empty histories. Opening the Match History
+panel also reconciles a matching active Riot session and redraws recovered rank
+data in the modal and roster. Validated by 133 tests plus Python and JavaScript
+syntax checks.
+
 ### Codex (v5.5.46 Account Manager update release)
 
 Status: DONE

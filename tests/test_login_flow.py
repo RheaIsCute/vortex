@@ -161,6 +161,54 @@ class CredentialInputTests(unittest.TestCase):
         self.assertIs(snapshot["stay_signed_in"], checkbox)
         self.assertIs(snapshot["popup_sign_out"], sign_out)
 
+    def test_single_edit_page_resolves_username_only(self):
+        # Riot's current sign-in page mounts one edit at a time: username
+        # first, password only after the username is confirmed. A page with a
+        # single unclassified edit is the username step, not a failed scan.
+        username = self.Control(name="", automation_id="")
+        root = self.Control(control_type="WindowControl", children=[username])
+
+        snapshot = cl.ClientLauncher._scan_login_controls(root)
+
+        self.assertIs(snapshot["username"], username)
+        self.assertIsNone(snapshot["password"])
+
+    def test_login_form_ready_with_username_only(self):
+        # The username field being present and enabled is the real "client is
+        # open" signal; the password field mounts later. Requiring both here is
+        # what left the tab stuck on "Waiting for login window".
+        username = self.Control(name="", automation_id="")
+        window = self.Control(control_type="WindowControl", children=[username])
+        auto = MagicMock()
+        auto.ControlFromHandle.return_value = window
+        with patch.object(cl, "_uia", return_value=auto):
+            form, state = cl.ClientLauncher._login_form_from_hwnd(123, auto)
+
+        self.assertIsNotNone(form)
+        self.assertEqual(state, "login form ready")
+        _window, user_field, pass_field = form
+        self.assertIs(user_field, username)
+        self.assertIsNone(pass_field)
+
+    def test_reveal_password_field_tabs_and_returns_mounted_field(self):
+        user_field = self.Control(name="", automation_id="")
+        password = self.Control(automation_id="password-input", is_password=True)
+        window = MagicMock()
+        listener = MagicMock()
+        listener.wait.return_value = True
+        # First scan after Tab still shows nothing; the second has the password.
+        with patch.object(cl.ClientLauncher, "_scan_login_controls", side_effect=[
+                 {"password": None, "popup_sign_out": None},
+                 {"password": password, "popup_sign_out": None},
+             ]), \
+             patch.object(cl.pyautogui, "press") as press:
+            result = cl.ClientLauncher._reveal_password_field(
+                window, user_field, "acc", listener, timeout=2,
+            )
+
+        self.assertIs(result, password)
+        press.assert_any_call("tab")
+
     def test_login_form_closes_check_subscription_race_and_listener(self):
         form = (object(), object(), object())
         listener = MagicMock()
@@ -508,6 +556,71 @@ class RiotTransientLoginPopupTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("Remove unsupported characters", cl.LOGIN_PROGRESS["message"])
         self.assertFalse(cl.LOGIN_PROGRESS["active"])
+
+
+class ActiveAccountRankTests(unittest.TestCase):
+    @staticmethod
+    def _response(status, payload):
+        response = MagicMock(status_code=status)
+        response.json.return_value = payload
+        return response
+
+    def test_peak_uses_rank_history_and_wins_by_tier(self):
+        def get(url, **_kwargs):
+            if "/userinfo" in url:
+                return self._response(200, {"userInfo": {
+                    "username": "account", "sub": "puuid-1",
+                    "acct": {"game_name": "Player", "tag_line": "NA1"},
+                }})
+            if "/entitlements/" in url:
+                return self._response(200, {
+                    "accessToken": "access", "token": "entitlements", "subject": "puuid-1",
+                })
+            if "/account-xp/" in url:
+                return self._response(200, {"Progress": {"Level": 100}})
+            if "/mmr/" in url:
+                return self._response(200, {
+                    "LatestCompetitiveUpdate": {"TierAfterUpdate": 12, "RankedRatingAfterUpdate": 45},
+                    "QueueSkills": {"competitive": {"SeasonalInfoBySeasonID": {
+                        "act": {"CompetitiveTier": 0, "Rank": 0, "WinsByTier": {"14": 3}},
+                    }}},
+                })
+            self.fail(f"Unexpected request: {url}")
+
+        with patch.object(cl.ClientLauncher, "get_lockfile_auth", return_value=(1234, "secret")), \
+             patch.object(cl.requests, "get", side_effect=get), \
+             patch("backend.valorant_client.ValorantLiveClient") as live_client:
+            live_client.return_value.connect.return_value = False
+            account = cl.ClientLauncher.get_active_riot_account("account")
+
+        self.assertEqual("GOLD", account["peak_rank_tier"])
+        self.assertEqual("3", account["peak_rank_division"])
+
+    def test_failed_mmr_request_does_not_claim_an_unranked_sync(self):
+        def get(url, **_kwargs):
+            if "/userinfo" in url:
+                return self._response(200, {"userInfo": {
+                    "username": "account", "sub": "puuid-1",
+                    "acct": {"game_name": "Player", "tag_line": "NA1"},
+                }})
+            if "/entitlements/" in url:
+                return self._response(200, {
+                    "accessToken": "access", "token": "entitlements", "subject": "puuid-1",
+                })
+            if "/account-xp/" in url:
+                return self._response(503, {})
+            if "/mmr/" in url:
+                return self._response(503, {})
+            self.fail(f"Unexpected request: {url}")
+
+        with patch.object(cl.ClientLauncher, "get_lockfile_auth", return_value=(1234, "secret")), \
+             patch.object(cl.requests, "get", side_effect=get), \
+             patch("backend.valorant_client.ValorantLiveClient") as live_client:
+            live_client.return_value.connect.return_value = False
+            account = cl.ClientLauncher.get_active_riot_account("account")
+
+        self.assertNotIn("rank_tier", account)
+        self.assertNotIn("peak_rank_tier", account)
 
 
 if __name__ == "__main__":
