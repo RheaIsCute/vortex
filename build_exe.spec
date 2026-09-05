@@ -22,9 +22,24 @@ that are already installed and still carry the old updater.
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 block_cipher = None
+
+_UIAUTOMATION_BINARIES = collect_dynamic_libs("uiautomation")
+_UIAUTOMATION_BIN_DIRS = sorted(
+    {str(Path(source).parent) for source, _destination in _UIAUTOMATION_BINARIES}
+)
+_UIAUTOMATION_DATA = [
+    item
+    for item in collect_data_files("uiautomation")
+    if not item[0].lower().endswith(".dll")
+]
 
 # `logo-source.png` is design-source artwork with no runtime reference.  The
 # map URLs below are served by the frontend alias table in app.js; each file
@@ -81,19 +96,28 @@ hidden_imports = [
     "uiautomation",
     "comtypes",
     "comtypes.stream",
-] + collect_submodules("comtypes.gen") + [
-    "uvicorn.logging",
-    "uvicorn.loops.auto",
-    "uvicorn.protocols.http.auto",
-    "uvicorn.protocols.websockets.auto",
-    "uvicorn.lifespan.on",
-] + collect_submodules("webview")
+] + collect_submodules("uiautomation") + collect_submodules("comtypes.gen") \
+    + collect_submodules("uvicorn") + collect_submodules("websockets") \
+    + collect_submodules("wsproto") + collect_submodules("webview")
 
 a = Analysis(
     ["app.py"],
-    pathex=[],
-    binaries=[],
-    datas=frontend_datas() + copy_metadata("pywebview") + copy_metadata("pythonnet") + copy_metadata("clr_loader"),
+    # Also expose the UIA bin directory to PyInstaller's ctypes scanner. The
+    # files are already explicit binaries above; this lets the scanner resolve
+    # their basename loads instead of emitting a false "not found" warning.
+    pathex=_UIAUTOMATION_BIN_DIRS,
+    binaries=_UIAUTOMATION_BINARIES,
+    datas=(
+        frontend_datas()
+        # PyInstaller sees uiautomation's Python imports but not its package
+        # data.  The two native helper DLLs live under uiautomation/bin and
+        # must be collected explicitly for a complete login-automation install.
+        + _UIAUTOMATION_DATA
+        + copy_metadata("uiautomation")
+        + copy_metadata("pywebview")
+        + copy_metadata("pythonnet")
+        + copy_metadata("clr_loader")
+    ),
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
@@ -129,8 +153,33 @@ exe = EXE(
     uac_uiaccess=False,
 )
 
+# A console/as-invoker twin built from the exact same Analysis and PYZ lets an
+# unattended build launch the frozen code without a UAC prompt. build.bat runs
+# it with --smoke-test and the installer deliberately does not ship this file.
+smoke_exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="VortexSmoke",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon="frontend/assets/logo.ico",
+    uac_admin=False,
+    uac_uiaccess=False,
+)
+
 coll = COLLECT(
     exe,
+    smoke_exe,
     a.binaries,
     a.zipfiles,
     a.datas,

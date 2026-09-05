@@ -19,10 +19,30 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, BASE_DIR)
 
+# A windowed PyInstaller executable has no console streams.  Keep them backed
+# by a real file before importing any third-party package so import failures and
+# background-thread tracebacks cannot disappear into an in-memory StringIO.
+STARTUP_LOG = os.environ.get("VORTEX_STARTUP_LOG") or os.path.join(
+    os.environ.get("TEMP") or BASE_DIR, "vortex_startup.log"
+)
+if sys.stdout is None or sys.stderr is None:
+    try:
+        _windowless_stream = open(
+            STARTUP_LOG, "a", encoding="utf-8", buffering=1
+        )
+    except OSError:
+        _windowless_stream = io.StringIO()
+    if sys.stdout is None:
+        sys.stdout = _windowless_stream
+    if sys.stderr is None:
+        sys.stderr = _windowless_stream
+
+_SMOKE_TEST = "--smoke-test" in sys.argv[1:]
+
 from backend import elevation as _elevation
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not _SMOKE_TEST:
     _elevation_action = _elevation.startup_elevation_action()
     if _elevation_action != "continue":
         if _elevation_action == "failed":
@@ -78,16 +98,13 @@ try:
 except Exception:
     pass
 
-# Ensure streams are valid under pythonw (windowless)
-if sys.stdout is None:
-    sys.stdout = io.StringIO()
-if sys.stderr is None:
-    sys.stderr = io.StringIO()
-
 import time
 import socket
 import threading
 import webbrowser
+import http.client
+import json
+import asyncio
 import uvicorn
 import webview
 import win32gui
@@ -102,7 +119,7 @@ from webview_diagnostics import (
 )
 
 from backend.server import app, db, in_match_now
-from backend.client_launcher import is_valorant_foreground
+from backend.client_launcher import is_valorant_foreground, _uia
 from backend.version import APP_VERSION
 
 ICON_PATH = os.path.join(BASE_DIR, "frontend", "assets", "logo.ico")
@@ -134,7 +151,6 @@ def find_available_port(default_port: int = 8765) -> int:
 PORT = find_available_port(8765)
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
-STARTUP_LOG = os.path.join(os.environ.get("TEMP") or BASE_DIR, "vortex_startup.log")
 WEBVIEW2_USER_DATA_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.dirname(os.path.abspath(__file__)),
     "Vortex",
@@ -152,17 +168,146 @@ def _startup_log(message):
         pass
 
 
-def start_server():
-    """Runs the Uvicorn ASGI server in a dedicated daemon thread."""
-    config = uvicorn.Config(
-        app=app,
-        host=HOST,
-        port=PORT,
-        log_config=None,
-        access_log=False
+def start_server(state):
+    """Run Uvicorn and preserve every outcome for the launch/readiness gate."""
+    try:
+        def _new_server_event_loop():
+            # Proactor intermittently fails localhost accept() with WinError
+            # 64 when Uvicorn runs in this background thread. Vortex needs no
+            # subprocess pipes in its ASGI loop, so Selector is the stable fit.
+            if sys.platform == "win32":
+                return asyncio.SelectorEventLoop()
+            return asyncio.new_event_loop()
+
+        _startup_log(
+            f"backend server initialization started on {URL}; "
+            f"loop={'SelectorEventLoop' if sys.platform == 'win32' else 'default'}"
+        )
+        config = uvicorn.Config(
+            app=app,
+            host=HOST,
+            port=PORT,
+            log_config=None,
+            access_log=False,
+            # A build smoke test must not run startup workers that inspect or
+            # stop optional external integrations on the build machine.
+            lifespan="off" if _SMOKE_TEST else "auto",
+        )
+        server = uvicorn.Server(config)
+        state["server"] = server
+        with asyncio.Runner(loop_factory=_new_server_event_loop) as runner:
+            runner.run(server.serve())
+        if not server.started and not state.get("error"):
+            state["error"] = "Uvicorn exited before reporting a successful bind."
+            _startup_log(state["error"])
+    except BaseException:
+        state["error"] = traceback.format_exc()
+        _startup_log("backend server failed:\n" + state["error"])
+
+
+def _wait_for_server(state, thread, timeout=15.0):
+    """Wait until the frozen backend answers its version endpoint."""
+    deadline = time.monotonic() + timeout
+    last_error = "backend did not answer"
+    while time.monotonic() < deadline:
+        if state.get("error"):
+            return False, state["error"]
+        if not thread.is_alive():
+            return False, "Backend server thread exited before becoming ready."
+        connection = http.client.HTTPConnection(HOST, PORT, timeout=1.0)
+        try:
+            connection.request("GET", "/api/app-version")
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            if response.status == 200 and payload.get("version") == APP_VERSION:
+                _startup_log(
+                    f"backend ready on {URL}; version={payload['version']}"
+                )
+                return True, ""
+            last_error = (
+                f"version probe returned HTTP {response.status}: {payload!r}"
+            )
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            last_error = str(exc)
+        finally:
+            connection.close()
+        time.sleep(0.1)
+    return False, f"Backend readiness timed out after {timeout:.1f}s: {last_error}"
+
+
+def _launch_server_and_wait(timeout=15.0):
+    state = {"server": None, "error": None}
+    thread = threading.Thread(
+        target=start_server, args=(state,), name="vortex-backend", daemon=True
     )
-    server = uvicorn.Server(config)
-    server.run()
+    thread.start()
+    ready, error = _wait_for_server(state, thread, timeout)
+    return state, thread, ready, error
+
+
+def _show_backend_startup_error(error):
+    _startup_log("desktop launch stopped because the backend is unavailable:\n" + error)
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "Vortex's local backend could not start. The app was not opened "
+            f"with stale data.\n\nDiagnostics: {STARTUP_LOG}",
+            "Vortex startup failed",
+            0x10,
+        )
+    except Exception:
+        pass
+
+
+def _verify_frozen_uiautomation():
+    """Exercise the UI Automation dependency used by Riot login."""
+    uia = _uia()
+    if uia is None:
+        raise RuntimeError("uiautomation could not be imported")
+
+    # Constructing the COM client forces comtypes to load/generate the
+    # UIAutomationCore typelib now instead of discovering a broken bundle only
+    # when a user next attempts a login.
+    client = uia.uiautomation._AutomationClient.instance()
+    if not getattr(client, "IUIAutomation", None):
+        raise RuntimeError("UIAutomationCore client initialization failed")
+
+    if getattr(sys, "frozen", False):
+        package_dir = os.path.join(BASE_DIR, "uiautomation", "bin")
+        expected = (
+            "UIAutomationClient_VC140_X64.dll",
+            "UIAutomationClient_VC140_X86.dll",
+        )
+        missing = [
+            name
+            for name in expected
+            if not os.path.isfile(os.path.join(package_dir, name))
+        ]
+        if missing:
+            raise RuntimeError("missing uiautomation package data: " + ", ".join(missing))
+
+
+def _run_packaged_smoke_test():
+    """Validate frozen imports, UIA, Uvicorn bind, and the version API."""
+    _startup_log("packaged smoke test started")
+    try:
+        _verify_frozen_uiautomation()
+    except Exception:
+        _startup_log("UI Automation smoke test failed:\n" + traceback.format_exc())
+        return 1
+
+    state, thread, ready, error = _launch_server_and_wait(timeout=20.0)
+    if not ready:
+        _startup_log("packaged smoke test failed:\n" + error)
+        return 1
+
+    _startup_log("packaged smoke test passed")
+    print(f"VORTEX_SMOKE_OK version={APP_VERSION} url={URL}", flush=True)
+    server = state.get("server")
+    if server is not None:
+        server.should_exit = True
+    thread.join(timeout=5.0)
+    return 0
 
 
 def apply_window_icon_loop():
@@ -382,6 +527,9 @@ def _make_live_hud_controller(hud_window):
 
 
 def main():
+    if _SMOKE_TEST:
+        return _run_packaged_smoke_test()
+
     _startup_log("main entered")
     log_system_diagnostics(
         BASE_DIR, sys.executable, WEBVIEW2_USER_DATA_DIR, APP_VERSION, _startup_log
@@ -398,10 +546,13 @@ def main():
             show_webview2_error(STARTUP_LOG)
             return
 
-    # Start server in background thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
-    server_thread.start()
-    _startup_log(f"server thread started on {URL}")
+    # Do not create WebView2 until the backend is proven reachable. Otherwise
+    # its persistent cache can render an old UI against a dead server and make
+    # intact local account data look empty.
+    _server_state, _server_thread, ready, error = _launch_server_and_wait()
+    if not ready:
+        _show_backend_startup_error(error)
+        return 1
 
     # Start taskbar icon applicator thread
     threading.Thread(target=apply_window_icon_loop, daemon=True).start()
@@ -501,7 +652,10 @@ def main():
     except Exception:
         _startup_log("desktop startup failed:\n" + traceback.format_exc())
         show_webview2_error(STARTUP_LOG)
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,12 +1,16 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pywebview>=5.0.0
-beautifulsoup4>=4.12.0
-aiohttp>=3.9.0
-requests>=2.31.0
-pydantic>=2.6.0
-pyautogui>=0.9.54
-pyperclip>=1.8.2
-pywin32>=306
-packaging>=23.2
-uiautomation>=2.0.18
+# Release builds are intentionally pinned.  Updating these versions is a
+# deliberate toolchain change and must be followed by the frozen smoke test in
+# build.bat; unconstrained upgrades previously produced an untested bundle.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pywebview==6.2.1
+beautifulsoup4==4.15.0
+aiohttp==3.14.3
+requests==2.34.2
+pydantic==2.13.5
+pyautogui==0.9.54
+pyperclip==1.11.0
+pywin32==312
+packaging==26.3
+uiautomation==2.0.29
+pyinstaller==6.22.2

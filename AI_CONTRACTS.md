@@ -82,6 +82,29 @@ initialization, and a private sentinel prevents elevation loops. Installer
 shortcuts target `Vortex.exe` directly so native Windows UAC/shield behavior is
 preserved. The updater/onedir architecture must remain intact.
 
+## Release artifact verification
+
+Owners: `app.py`, `build_exe.spec`, `build.bat`, `installer/vortex_setup.iss`
+
+Purpose: Prevent a frozen application or installer from reaching a release
+channel unless executable behavior—not only bundle inventory—has passed.
+
+The pinned Python 3.12 build emits `Vortex.exe` plus a console/as-invoker
+`VortexSmoke.exe` from the same PyInstaller Analysis/PYZ. `build.bat` must run
+the smoke twin three times with isolated `%LOCALAPPDATA%`; each run initializes
+UIAutomationCore, verifies the UIA package DLLs, binds the loopback backend, and
+requires the expected version from `GET /api/app-version`. `VortexSmoke.exe` is
+build-only and must not be included by the installer.
+
+The production launcher must not create WebView2 until the same version API is
+ready, and any import/server-thread failure must remain in the persistent
+startup log. The installer is compiled to a private output path, runs its
+side-effect-free `/VORTEXBUILDSMOKE` CRC/extraction mode, and is moved to
+`dist_installer` only after its extracted `_internal` count matches the frozen
+bundle. That mode must not kill processes, create shortcuts, or register an
+uninstaller. Publishing and changing `version.json` remain separate, explicit
+release operations.
+
 ## Local VALORANT client integration
 
 Owner: `backend/valorant_client.py` (`ValorantLiveClient`)

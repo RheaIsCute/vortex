@@ -11,6 +11,29 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Codex (v5.5.45 packaging recovery)
+
+Status: DONE
+
+Scope: Diagnose and repair the frozen v5.5.45 backend/UI Automation bundle,
+make startup failures persistently observable, and add release gates that
+launch the packaged executable, poll its version API, and reject a corrupt
+installer before publication.
+
+Files owned: `app.py`, `build_exe.spec`, `build.bat`, `requirements.txt`,
+`tools/`, packaging/startup tests under `tests/`, `AI_CHANGES.md`,
+`AI_TASKS.md`, `AI_CONTRACTS.md`
+
+Dependencies: Preserve the installed/published v5.5.44 rollback state and all
+account data. Build and validate a local v5.5.45 candidate only; do not publish
+or change `version.json` in this task.
+
+Notes: Completed 2026-09-05 from rollback commit `d2e414c`. The final local
+candidate passes 126 tests, three consecutive frozen API/UIA launches, the
+elevation-manifest check, and the exact installer CRC/extraction gate. The
+installed 5.5.44 app and both accounts remained healthy; nothing was published
+or installed. See `AI_CHANGES.md` for the reproduced Proactor failure and fix.
+
 ### Claude (density + accent discipline pass)
 
 Status: DONE
@@ -33,10 +56,10 @@ redesigns. `buildAccountView()` filtering/eligibility, the shared
 `matchCardHtml` row, the Live Match lifecycle and all API contracts are
 untouched.
 
-Notes: Completed 2026-09-05 and published as v5.5.45. Python/Git/Inno Setup were
-installed on this machine to finish validation: 121 tests pass, `compileall` and
-`node --check frontend/app.js` are clean, and `.\build.bat` produced the
-installer that ships in the release.
+Notes: Completed 2026-09-05. It was briefly published as v5.5.45, but that
+release was unpublished after two packaging incidents; the live update manifest
+remains on v5.5.44. The frontend work remains part of the repaired local
+v5.5.45 candidate.
 
 `tests/test_settings_and_ui.py` initially failed — the Settings dedup removed
 `Post-Game Actions` and `Launch & Login`, two strings it asserts on. Fixed by
@@ -45,9 +68,9 @@ name once" intent. `buildAccountView()` gained a presentational `statusChip`
 field and `renderMatchHistoryList()` now emits a header row; no existing
 asserted selector was removed.
 
-This checkout was also missing 2,233 tracked files (ten `tests/*.py`, the
-`overwolf/` companion, 2,218 weapon-skin assets); all were restored with
-`git restore` before testing and building. Also verified by rendering the
+Correction: those 2,233 absent paths were deliberate in-flight cleanup and
+build-footprint deletions, not a damaged checkout. Some were restored for the
+broader test/build run. Also verified by rendering the
 frontend against a Node mock of the API in headless Chrome over CDP across
 1600/1440/1300/1200/1120/1024/900px — zero console errors, zero failed
 requests. See `AI_CHANGES.md`.

@@ -39,6 +39,11 @@ CloseApplications=force
 CloseApplicationsFilter=*.exe
 RestartApplications=no
 AppMutex=Global\VortexAppMutex
+; The build launches this same final installer with /VORTEXBUILDSMOKE into a
+; scratch directory. In that mode it must validate/extract the payload without
+; touching the real uninstall entry or leaving an uninstaller behind.
+Uninstallable=not IsBuildSmoke
+CreateUninstallRegKey=not IsBuildSmoke
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -55,9 +60,9 @@ Source: "{#BundleDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignorever
 [Icons]
 ; Shortcuts point straight at the manifest-elevated executable so Windows
 ; retains its native UAC/shield behavior. No launcher or fake shield artwork.
-Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{group}\Uninstall Vortex"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Check: not IsBuildSmoke
+Name: "{group}\Uninstall Vortex"; Filename: "{uninstallexe}"; Check: not IsBuildSmoke
+Name: "{autodesktop}\Vortex"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; Check: not IsBuildSmoke
 
 [Run]
 ; skipifsilent: during a silent auto-update the background updater script
@@ -81,11 +86,32 @@ Type: filesandordirs; Name: "{app}\_internal\**\__pycache__"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function IsBuildSmoke: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/VORTEXBUILDSMOKE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
   I: Integer;
 begin
+  if IsBuildSmoke then
+  begin
+    Result := '';
+    Exit;
+  end;
+
   { Everything that can hold a file in _internal open. Vortex spawns
     msedgewebview2 children that outlive it, and Overwolf loads Vortex's
     VCRUNTIME140.dll via the process-directory DLL search - both lock files

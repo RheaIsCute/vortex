@@ -2,7 +2,50 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
-## 2026-09-05 — Incident: v5.5.45 shipped a corrupt installer, rolled back and re-shipped
+## 2026-09-05 — Codex — v5.5.45 packaging recovery and release gates
+
+Repaired the unpublished v5.5.45 candidate without changing the live
+`version.json` rollback (still 5.5.44) or the installed user database.
+
+**Diagnosis.** Comparing the PYZ archives disproved the exe-size theory: the
+9 MB candidate already contained all 14 Vortex backend modules, all FastAPI,
+Starlette, Pydantic and Uvicorn modules, plus the three `uiautomation` Python
+modules. Most of the ~8 MB in the known-good exe was unrelated packages from
+its build environment (pytest/Pygments/NumPy/Pillow/Rich/Trio). The genuine
+UIA packaging gap was its two `uiautomation/bin/UIAutomationClient_*.dll`
+files. More importantly, the new frozen gate reproduced the backend failure:
+Uvicorn opened its localhost socket, but the Windows Proactor loop's accept
+path failed with `WinError 64`, leaving every version probe timed out. A prior
+run had passed, confirming the failure was intermittent.
+
+**Runtime repair.** `app.py` now backs missing windowed stdout/stderr with the
+persistent startup log before third-party imports, catches/logs the complete
+server-thread traceback, and requires a successful `/api/app-version` response
+before creating WebView2. A failed backend therefore produces a native error
+instead of cached HTML showing empty state. The background Uvicorn server uses
+`SelectorEventLoop` on Windows, avoiding the reproduced Proactor accept
+failure. A frozen-only smoke path also initializes UIAutomationCore/comtypes
+and verifies both UIA helper DLLs.
+
+**Build/release repair.** Runtime and PyInstaller versions are exactly pinned;
+Uvicorn's standard protocol dependencies and dynamic modules are collected;
+UIA package data/binaries are explicit. The spec emits an unprivileged console
+`VortexSmoke.exe` from the exact same Analysis/PYZ as the elevated production
+exe; it is run three times against isolated app data and is not shipped. The
+final Inno artifact supports `/VORTEXBUILDSMOKE`, which CRC-checks/extracts the
+payload to scratch without killing Vortex, creating shortcuts, or registering
+an uninstaller. Inno now writes off-path; only a verified artifact is moved to
+`dist_installer`, preventing readers/uploaders from seeing a partial file.
+
+**Validation.** 126 tests pass (two existing FastAPI lifespan deprecation
+warnings); `compileall`, `node --check frontend/app.js`, and `git diff --check`
+pass. The final clean build embedded the required elevation manifest, produced
+3,829 `_internal` files, passed three consecutive frozen API/UIA launches, and
+passed the exact installer payload integrity/extraction check. The installed
+5.5.44 process remained healthy with two accounts throughout. Nothing was
+published or installed.
+
+## 2026-09-05 — Incident: two failed v5.5.45 publish attempts, rolled back
 
 The first `VortexSetup.exe` published for v5.5.45 failed Inno Setup's own
 integrity check — `SetupLdr` aborted in 1.3s with "The setup files are
@@ -28,18 +71,16 @@ first would have left `version.json` advertising 5.5.45 with a 404 download.
 jsdelivr was purged (`purge.jsdelivr.net`) because an edge node kept serving the
 stale 5.5.45 manifest for a few minutes after the push.
 
-**Re-ship.** Recompiled, integrity-probed the artifact (`/VERYSILENT
+**Second attempt.** Recompiled, integrity-probed the artifact (`/VERYSILENT
 /SUPPRESSMSGBOXES /DIR=<scratch> /LOG=<log>`; a written Setup log means SetupLdr
 validated the payload), replaced the release asset, downloaded the published
 asset back and confirmed `SHA256 A8EC9177…` matches the locally verified build,
-and only then re-published and re-advertised.
+and then re-published and re-advertised. That installer was structurally valid,
+but its packaged backend did not answer; v5.5.45 was unpublished again and the
+manifest returned to 5.5.44.
 
-**Recommended follow-up (not done here — `build.bat` is owned by the in-flight
-Codex task):** add an installer integrity gate to `build.bat` in the same spirit
-as its existing checks. Note that a naive test install has real side effects —
-the probe used here overwrote this machine's Vortex uninstall registry entry and
-its desktop/Start-Menu shortcuts (both repaired afterwards), because the AppId
-is shared with a real install.
+The durable startup, frozen-application, and side-effect-free installer gates
+are implemented in the packaging-recovery entry above.
 
 ## 2026-09-05 — Release v5.5.45
 
@@ -159,12 +200,10 @@ match history, settings, filters, import, banned and add-account, at
 requests in every pass; roster rows stay single-line (70px) with cells == tracks
 and no horizontal page overflow at every width.
 
-**Checkout note.** This working copy was missing 2,233 tracked files — the
-`overwolf/vortex-telemetry/` companion, ten `tests/*.py` files and 2,218
-weapon-skin assets under `frontend/assets/valorant-api/`. The non-asset files
-were restored with `git restore` before testing (which is what raised the suite
-from 51 to 121 tests); the weapon-skin assets are still absent locally and were
-deliberately left out of this commit so they are not deleted from the repo.
+**Checkout correction.** The 2,233 absent paths were deliberate in-flight
+cleanup/build-footprint deletions, not evidence of a damaged checkout. Restoring
+the ten tests and Overwolf companion was useful for validation, but describing
+all absent tracked files as accidental damage was incorrect.
 
 ## 2026-09-03 — Release v5.5.43
 
