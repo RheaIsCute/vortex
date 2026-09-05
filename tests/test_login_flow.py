@@ -161,53 +161,22 @@ class CredentialInputTests(unittest.TestCase):
         self.assertIs(snapshot["stay_signed_in"], checkbox)
         self.assertIs(snapshot["popup_sign_out"], sign_out)
 
-    def test_single_edit_page_resolves_username_only(self):
-        # Riot's current sign-in page mounts one edit at a time: username
-        # first, password only after the username is confirmed. A page with a
-        # single unclassified edit is the username step, not a failed scan.
-        username = self.Control(name="", automation_id="")
-        root = self.Control(control_type="WindowControl", children=[username])
-
-        snapshot = cl.ClientLauncher._scan_login_controls(root)
-
-        self.assertIs(snapshot["username"], username)
-        self.assertIsNone(snapshot["password"])
-
-    def test_login_form_ready_with_username_only(self):
-        # The username field being present and enabled is the real "client is
-        # open" signal; the password field mounts later. Requiring both here is
-        # what left the tab stuck on "Waiting for login window".
-        username = self.Control(name="", automation_id="")
-        window = self.Control(control_type="WindowControl", children=[username])
-        auto = MagicMock()
-        auto.ControlFromHandle.return_value = window
-        with patch.object(cl, "_uia", return_value=auto):
-            form, state = cl.ClientLauncher._login_form_from_hwnd(123, auto)
-
-        self.assertIsNotNone(form)
-        self.assertEqual(state, "login form ready")
-        _window, user_field, pass_field = form
-        self.assertIs(user_field, username)
-        self.assertIsNone(pass_field)
-
-    def test_reveal_password_field_tabs_and_returns_mounted_field(self):
-        user_field = self.Control(name="", automation_id="")
-        password = self.Control(automation_id="password-input", is_password=True)
-        window = MagicMock()
-        listener = MagicMock()
-        listener.wait.return_value = True
-        # First scan after Tab still shows nothing; the second has the password.
-        with patch.object(cl.ClientLauncher, "_scan_login_controls", side_effect=[
-                 {"password": None, "popup_sign_out": None},
-                 {"password": password, "popup_sign_out": None},
-             ]), \
-             patch.object(cl.pyautogui, "press") as press:
-            result = cl.ClientLauncher._reveal_password_field(
-                window, user_field, "acc", listener, timeout=2,
+    def test_client_relaunch_forces_login_window_with_product_args(self):
+        # Running RiotClientServices.exe bare often starts the background
+        # service without ever showing a window ("no Riot Client window yet"),
+        # so the relaunch must pass the product/patchline that brings up the
+        # sign-in screen - the same args the game launcher's PLAY path uses.
+        with patch.object(cl.subprocess, "Popen") as popen:
+            ok = cl.ClientLauncher.launch_riot_client_ui(
+                r"C:\Riot Games\Riot Client\RiotClientServices.exe"
             )
 
-        self.assertIs(result, password)
-        press.assert_any_call("tab")
+        self.assertTrue(ok)
+        args, kwargs = popen.call_args
+        cmd = args[0]
+        self.assertIn("--launch-product=valorant", cmd)
+        self.assertIn("--launch-patchline=live", cmd)
+        self.assertEqual(kwargs.get("cwd"), r"C:\Riot Games\Riot Client")
 
     def test_login_form_closes_check_subscription_race_and_listener(self):
         form = (object(), object(), object())

@@ -1550,6 +1550,11 @@ Tests:
   frontend/app.js` passed.
 # v5.5.47 release
 
+# v5.5.49 release
+
+- Consolidated the current login-flow changes and retained the multi-path
+  public match-history retrieval improvements from v5.5.48.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).

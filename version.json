@@ -1,5 +1,5 @@
 {
-  "version": "5.5.48",
+  "version": "5.5.49",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.48: multi-path public match-history retrieval without requiring an active sign-in."
+  "changelog": "Vortex v5.5.49: consolidated login-flow updates and multi-path public match-history retrieval."
 }

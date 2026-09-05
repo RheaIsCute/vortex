@@ -1645,18 +1645,10 @@ class ClientLauncher:
             _LOGIN_UI_SCAN_LOCAL.cached = (hwnd, time.monotonic(), snapshot)
             user_field = snapshot.get("username")
             pass_field = snapshot.get("password")
-            # Riot's sign-in page may show only the username edit first and
-            # mount the password edit after the username is confirmed. The
-            # username field being present and enabled is the real "the client
-            # has finished opening" signal; the password field is resolved
-            # again at the password step. Requiring both here is what left the
-            # tab stuck on "Waiting for login window".
-            if user_field is None:
+            if user_field is None or pass_field is None:
                 return None, "window up, credential fields not mounted yet"
             try:
-                enabled = bool(user_field.IsEnabled)
-                if pass_field is not None:
-                    enabled = enabled and bool(pass_field.IsEnabled)
+                enabled = bool(user_field.IsEnabled and pass_field.IsEnabled)
             except Exception:
                 return None, "credential controls became stale"
             if not enabled:
@@ -1711,23 +1703,6 @@ class ClientLauncher:
         if len(edits) >= 2:
             user_field = user_field or edits[0]
             pass_field = pass_field or next((field for field in edits if field is not user_field), None)
-        elif len(edits) == 1 and user_field is None and pass_field is None:
-            # Riot's current sign-in page mounts a single edit at a time: the
-            # username box first, and the password box only after the username
-            # is confirmed (Tab/Enter). A page showing one unclassified edit is
-            # therefore the username step - not a broken scan - so surface it as
-            # the username field and leave `password` None. The caller advances
-            # to the password step and rescans; requiring two coexisting edits
-            # here is what left the login stuck on "Waiting for login window".
-            only = edits[0]
-            try:
-                one_is_password = bool(getattr(only, "IsPassword", False))
-            except Exception:
-                one_is_password = False
-            if one_is_password:
-                pass_field = only
-            else:
-                user_field = only
 
         submit = None
         sign_out = None
@@ -1920,66 +1895,6 @@ class ClientLauncher:
         return True
 
     @classmethod
-    def _reveal_password_field(cls, window, user_field, username,
-                               listener, timeout: float = 6.0):
-        """
-        Advance Riot's single-edit sign-in page from the username step to the
-        password step and return the password edit once it mounts.
-
-        Riot's current login page shows one edit at a time: entering the
-        username and pressing Tab (or Enter) confirms it and swaps in the
-        password box. The username edit is already focused from the verified
-        fill, so a single Tab moves to the password field; Enter is the
-        keyboard fallback when the page consumes Tab. After each advance the
-        scoped UI-change listener is waited on and the tree rescanned, so the
-        password control is picked up as soon as it exists rather than on a
-        fixed sleep. Returns the password field, or None if it never appears.
-        """
-        _set_login_stage("typing", "Opening the password field...", username)
-        deadline = time.monotonic() + max(0.0, timeout)
-        used_enter_fallback = False
-        try:
-            user_field.SetFocus()
-        except Exception:
-            pass
-        pyautogui.press('tab')
-
-        while time.monotonic() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
-                return None
-            remaining = deadline - time.monotonic()
-            if listener is not None:
-                listener.wait(min(0.25, max(0.0, remaining)), _LOGIN_CANCEL_EVENT)
-            else:
-                _LOGIN_CANCEL_EVENT.wait(min(0.25, max(0.0, remaining)))
-            try:
-                snapshot = cls._scan_login_controls(window)
-            except Exception:
-                continue
-            if snapshot.get("popup_sign_out") is not None:
-                # A sign-out popup here means the page changed under us; let the
-                # caller's popup handling take over by reporting no field.
-                return None
-            pass_field = snapshot.get("password")
-            if pass_field is not None:
-                try:
-                    if bool(pass_field.IsEnabled):
-                        return pass_field
-                except Exception:
-                    return pass_field
-            # Some builds need the username committed with Enter rather than
-            # Tab. Try that once, roughly halfway through the budget, before
-            # giving up.
-            if not used_enter_fallback and (deadline - time.monotonic()) < timeout / 2:
-                used_enter_fallback = True
-                try:
-                    user_field.SetFocus()
-                except Exception:
-                    pass
-                pyautogui.press('enter')
-        return None
-
-    @classmethod
     def _attempt_login_fill(cls, username: str, password: str, stay_signed_in: bool,
                             tries: int = 3, form_timeout: float = 35.0) -> Optional[bool]:
         """
@@ -2064,22 +1979,6 @@ class ClientLauncher:
                 if _LOGIN_CANCEL_EVENT.is_set():
                     return False
 
-                # On Riot's single-edit sign-in page the password box isn't
-                # mounted until the username step is confirmed. Advance to it
-                # (Tab from the username field) and wait for the password edit
-                # to appear before typing, instead of failing on a None field.
-                if pass_field is None:
-                    pass_field = cls._reveal_password_field(
-                        window, user_field, username, listener,
-                    )
-                    if pass_field is None:
-                        login_logger.warning(
-                            "password field never mounted after advancing from username"
-                        )
-                        continue
-                if _LOGIN_CANCEL_EVENT.is_set():
-                    return False
-
                 _set_login_stage("typing", "Entering password...", username)
                 if not cls.fill_field_verified(pass_field, password, "password", masked=True):
                     continue
@@ -2092,13 +1991,8 @@ class ClientLauncher:
                 # full-tree scans plus the fixed post-password delay.
                 try:
                     snapshot = cls._scan_login_controls(window)
-                    rescanned_user = snapshot.get("username")
-                    pass_field = snapshot.get("password") or pass_field
-                    # On the single-edit page the username box is swapped out
-                    # once the password step is reached, so only adopt a
-                    # rescanned username field when the page still shows one.
-                    if rescanned_user is not None:
-                        user_field = rescanned_user
+                    user_field = snapshot.get("username")
+                    pass_field = snapshot.get("password")
                 except Exception:
                     continue
                 if snapshot.get("popup_sign_out") is not None:
@@ -2108,15 +2002,9 @@ class ClientLauncher:
                     cls.wait_for_transient_login_popup_gone(timeout=8.0)
                     cls.wait_for_signed_out(timeout=8.0)
                     continue
-                if pass_field is None:
+                if user_field is None or pass_field is None:
                     continue
-                # Verify the username only while its edit is still on the page.
-                # A single-edit layout that has moved past it can't be re-read,
-                # and demanding it here would loop the fill forever.
-                if rescanned_user is not None and cls._field_text(user_field) != username:
-                    login_logger.warning("the form reset before submission; reacquiring controls")
-                    continue
-                if len(cls._field_text(pass_field)) != len(password):
+                if cls._field_text(user_field) != username or len(cls._field_text(pass_field)) != len(password):
                     login_logger.warning("the form reset before submission; reacquiring controls")
                     continue
 
@@ -2130,9 +2018,7 @@ class ClientLauncher:
                     )
                     if _LOGIN_CANCEL_EVENT.is_set():
                         return False
-                    # Only re-verify the username while its edit is still shown;
-                    # the single-edit page no longer exposes it at this point.
-                    if rescanned_user is not None and cls._field_text(user_field) != username:
+                    if cls._field_text(user_field) != username:
                         login_logger.warning("the form reset while setting stay-signed-in")
                         continue
 
@@ -2233,13 +2119,11 @@ class ClientLauncher:
         cls.wait_for_processes_gone(_RIOT_PROCS, timeout=10.0)
         time.sleep(1.2)
 
-        try:
-            runtime_audit.process_launch(target_path, "restart Riot Client (sign-in page reset)")
-            subprocess.Popen([target_path], shell=False)
-            _timing_mark("riot_process_started")
-        except Exception as e:
-            _set_login_stage("error", f"Couldn't restart the Riot Client: {e}", username)
+        runtime_audit.process_launch(target_path, "restart Riot Client (sign-in page reset)")
+        if not cls.launch_riot_client_ui(target_path):
+            _set_login_stage("error", "Couldn't restart the Riot Client.", username)
             return
+        _timing_mark("riot_process_started")
 
         _set_login_stage("waiting_window", "Waiting for the Riot Client to reopen...", username)
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3, form_timeout=60.0)
@@ -2323,11 +2207,8 @@ class ClientLauncher:
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.15)
 
-            # Tab confirms the username and, on Riot's single-edit page, swaps
-            # in the password box. Give that transition room to mount before
-            # pasting, or the password lands in the wrong field or nowhere.
             pyautogui.press('tab')
-            time.sleep(0.5)
+            time.sleep(0.3)
 
             pyautogui.hotkey('ctrl', 'a')
             time.sleep(0.04)
@@ -2566,13 +2447,48 @@ class ClientLauncher:
             time.sleep(0.7)
 
             runtime_audit.process_launch(target_path, "start Riot Client for login")
-            subprocess.Popen([target_path], shell=False)
+            if not cls.launch_riot_client_ui(target_path):
+                _set_login_stage("error", "Couldn't start the Riot Client.", username)
+                return
             _timing_mark("riot_process_started")
             _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
             cls.auto_fill_credentials(username, password, True, stay_signed_in, target_path)
         except Exception as e:
             login_logger.exception("[%s] restart-login worker crashed", username)
             _set_login_stage("error", f"Login automation crashed: {e}", username)
+
+    @staticmethod
+    def launch_riot_client_ui(target_path: str) -> bool:
+        """
+        Start the Riot Client so its sign-in window actually appears.
+
+        Running ``RiotClientServices.exe`` bare launches the background service
+        without reliably showing any window - it often sits silently in the
+        tray, which is why a relaunched client left the login "Waiting for the
+        login window" until it timed out with "no Riot Client window yet". The
+        client only dependably paints its UI when told which product to launch,
+        so pass the same product/patchline the game launcher's PLAY path uses;
+        this brings up the sign-in screen when nothing is signed in. Detached,
+        with the client's own directory as the working dir, matching the
+        launcher in valorant_client.
+        """
+        try:
+            creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            )
+            subprocess.Popen(
+                [target_path, "--launch-product=valorant", "--launch-patchline=live"],
+                cwd=os.path.dirname(target_path),
+                shell=False,
+                creationflags=creationflags,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+            return True
+        except Exception as e:
+            login_logger.exception("could not launch the Riot Client UI: %s", e)
+            return False
 
     @staticmethod
     def force_kill_riot_client():
