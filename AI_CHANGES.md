@@ -1537,6 +1537,10 @@ Changed:
   other account verification is pending. Opening the Match History panel also
   reconciles the matching signed-in Riot session, then redraws the modal and
   roster with the credential-free refreshed account summary.
+- Public match retrieval now cascades across five paths (name/tag v3, PUUID v3,
+  name/tag v4, PUUID v4, and HenrikDev stored matches), recording the source
+  used and preserving any earlier successful result when a later path is
+  unavailable.
 
 Tests:
 

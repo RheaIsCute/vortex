@@ -115,6 +115,12 @@ class StatScraper:
                             acc_level = acc_data.get("account_level")
                             if isinstance(acc_level, int) and acc_level > 0:
                                 result["level"] = acc_level
+                            # Keep the stable PUUID when the provider returns it;
+                            # it lets us use the less ambiguous by-PUUID history
+                            # endpoints on subsequent attempts.
+                            account_puuid = acc_data.get("puuid") or acc_data.get("player_uuid")
+                            if isinstance(account_puuid, str) and account_puuid.strip():
+                                result["puuid"] = account_puuid.strip()
                             detected_reg = (acc_data.get("region") or "").upper()
                             if detected_reg in REGION_MAP:
                                 result["region"] = detected_reg
@@ -178,19 +184,41 @@ class StatScraper:
             except Exception:
                 pass
 
-            # 3. Fetch Recent Match History (up to 10 matches)
+            # 3. Fetch Recent Match History (up to 10 matches).  Try several
+            # credential-free lookup paths in order: name/tag v3, PUUID v3,
+            # name/tag v4, PUUID v4, then HenrikDev's stored-match archive.
+            # A provider outage or an empty response from one path must never
+            # erase useful data returned by another path.
             try:
-                matches_url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region_code}/{enc_name}/{enc_tag}?size=10"
-                async with session.get(matches_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        raw_matches = data.get("data", [])
-                        parsed_matches = self._parse_matches(raw_matches, name, tag)
-                        if parsed_matches:
-                            result["match_history"] = parsed_matches
-                            wins = sum(1 for m in parsed_matches if m.get("outcome") == "VICTORY")
-                            result["winrate"] = round((wins / len(parsed_matches)) * 100, 1)
-                            result["games_played"] = len(parsed_matches)
+                match_urls = [
+                    (f"https://api.henrikdev.xyz/valorant/v3/matches/{region_code}/{enc_name}/{enc_tag}?size=10", "name-v3"),
+                    (f"https://api.henrikdev.xyz/valorant/v4/matches/{region_code}/pc/{enc_name}/{enc_tag}?size=10", "name-v4"),
+                    (f"https://api.henrikdev.xyz/valorant/v1/stored-matches/{region_code}/{enc_name}/{enc_tag}", "stored-name"),
+                ]
+                puuid = result.get("puuid", "")
+                if puuid:
+                    enc_puuid = urllib.parse.quote(puuid)
+                    match_urls[1:1] = [
+                        (f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region_code}/{enc_puuid}?size=10", "puuid-v3"),
+                        (f"https://api.henrikdev.xyz/valorant/v4/by-puuid/matches/{region_code}/pc/{enc_puuid}?size=10", "puuid-v4"),
+                    ]
+                for matches_url, source in match_urls:
+                    try:
+                        async with session.get(matches_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                            raw_matches = data.get("data", [])
+                            parsed_matches = self._parse_matches(raw_matches, name, tag)
+                            if parsed_matches:
+                                result["match_history"] = parsed_matches
+                                result["match_history_source"] = source
+                                wins = sum(1 for m in parsed_matches if m.get("outcome") == "VICTORY")
+                                result["winrate"] = round((wins / len(parsed_matches)) * 100, 1)
+                                result["games_played"] = len(parsed_matches)
+                                break
+                    except Exception:
+                        continue
             except Exception:
                 pass
 

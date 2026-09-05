@@ -1,5 +1,5 @@
 {
-  "version": "5.5.47",
+  "version": "5.5.48",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.47: reliable saved match history, recovery from the active VALORANT session, and restored all-time peak rank in every account view."
+  "changelog": "Vortex v5.5.48: multi-path public match-history retrieval without requiring an active sign-in."
 }

@@ -402,6 +402,9 @@ Notes:
 
 ## Backlog
 
+- 2026-09-05 â€” Completed: credential-free public match-history fallback
+  cascade across name/tag, PUUID, v4, and stored-match endpoints.
+
 - Split oversized `backend/server.py`, `backend/valorant_client.py`, `frontend/app.js`, and `frontend/styles.css` only through planned, contract-preserving feature extractions.
 - Decide whether cached Valorant API assets should have a documented refresh process.
 
