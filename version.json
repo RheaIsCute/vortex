@@ -1,5 +1,5 @@
 {
-  "version": "5.5.44",
+  "version": "5.5.45",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.44: reliable multi-account verification with background-first credential entry, event-driven login waits, mid-flow popup recovery, a real Stop action, and a global banned-username registry that prevents redundant checks."
+  "changelog": "Vortex v5.5.45: the account roster fits seven rows on screen instead of four and its columns line up across every row, LOGIN is quiet so the signed-in account's PLAY stands out, table view keeps the Actions column pinned, match history states its stat headings once, Settings is shorter, and the live dashboard hides the premades panel when there is nothing to report. Also faster Riot credential/window/state detection, improved batch credential submission, and Administrator elevation at startup."
 }

@@ -2,6 +2,45 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-05 — Incident: v5.5.45 shipped a corrupt installer, rolled back and re-shipped
+
+The first `VortexSetup.exe` published for v5.5.45 failed Inno Setup's own
+integrity check — `SetupLdr` aborted in 1.3s with "The setup files are
+corrupted. Please obtain a new copy of the program." before Setup ever started.
+
+**Cause.** Not a packaging fault: ISCC reported a successful compile and packed
+all 3806 files, and `dist\Vortex` was verified complete. The output file was
+corrupted in place — a recompile from the identical staged bundle produced a
+byte-identical *length* (252,542,690) that passes the integrity check, so the
+first compile's bytes were bad while its size was right. Defender real-time
+protection is off on this machine and there were no detections, and the file had
+no alternate data streams, so AV was not involved.
+
+**Why it reached users.** The release process bumped `version.json`, published
+the release and uploaded the asset without ever running the installer. Nothing
+in `build.bat`'s (otherwise thorough) gauntlet — file counts, C-extension spot
+checks, elevation-manifest verification — validates the *compiled installer*,
+only the PyInstaller bundle that goes into it.
+
+**Rollback.** `version.json` was pointed back at 5.5.44 and pushed first, then
+the v5.5.45 release was set back to draft — that order matters, because drafting
+first would have left `version.json` advertising 5.5.45 with a 404 download.
+jsdelivr was purged (`purge.jsdelivr.net`) because an edge node kept serving the
+stale 5.5.45 manifest for a few minutes after the push.
+
+**Re-ship.** Recompiled, integrity-probed the artifact (`/VERYSILENT
+/SUPPRESSMSGBOXES /DIR=<scratch> /LOG=<log>`; a written Setup log means SetupLdr
+validated the payload), replaced the release asset, downloaded the published
+asset back and confirmed `SHA256 A8EC9177…` matches the locally verified build,
+and only then re-published and re-advertised.
+
+**Recommended follow-up (not done here — `build.bat` is owned by the in-flight
+Codex task):** add an installer integrity gate to `build.bat` in the same spirit
+as its existing checks. Note that a naive test install has real side effects —
+the probe used here overwrote this machine's Vortex uninstall registry entry and
+its desktop/Start-Menu shortcuts (both repaired afterwards), because the AppId
+is shared with a real install.
+
 ## 2026-09-05 — Release v5.5.45
 
 Published the frontend density/accent pass below together with the
