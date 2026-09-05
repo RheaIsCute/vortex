@@ -25,8 +25,8 @@ Dependencies: Keep the validated UI changes intact and follow the existing
 frozen executable and installer release gates before publishing.
 
 Notes: Completed 2026-09-05. Version 5.5.46 passed 126 tests, frozen smoke
-checks, and the installer integrity gate; source, tag, and installer are ready
-for the GitHub release update.
+checks, and the installer integrity gate; source was pushed, tag `v5.5.46`
+was published, and the GitHub release now serves the verified installer.
 
 ### Codex (small Account Manager card-view + toolbar pass)
 

@@ -4,7 +4,7 @@ Append a new section for each completed task. Keep entries factual and concise.
 
 ## 2026-09-05 — Release v5.5.46 (Account Manager Card View)
 
-Prepared the Account Manager visual update for release: a compact Card View
+Published the Account Manager visual update as v5.5.46: a compact Card View
 replaces the old alternate table, account totals live in Filters, and account
 actions plus search/filter/view controls are grouped into denser desktop
 toolbars. Roster Rows and all account/filter behavior remain unchanged.
@@ -13,6 +13,9 @@ Validation completed before release: 126 tests passed, `node --check
 frontend/app.js` passed, and the Windows release build passed its embedded
 elevation-manifest check, three frozen app/API/UIA smoke passes, and the
 installer CRC/extraction integrity gate (3,829 bundled internal files).
+The GitHub release tag and latest-release API point to the uploaded
+`VortexSetup.exe` (253,495,287 bytes), and the live `version.json` manifest
+now advertises 5.5.46.
 
 ## 2026-09-05 — Codex — small Account Manager card-view + toolbar pass
 
