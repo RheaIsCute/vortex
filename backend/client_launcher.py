@@ -136,7 +136,7 @@ def _running_process_ids(targets: set) -> set:
 
 
 _VALORANT_PROCS = {"valorant.exe", "valorant-win64-shipping.exe"}
-_RIOT_PROCS = {"riotclientservices.exe", "riotclientux.exe",
+_RIOT_PROCS = {"riot client.exe", "riotclientservices.exe", "riotclientux.exe",
                "riotclientuxrender.exe", "riotclientcrashhandler.exe"}
 
 # Riot can briefly show an authenticated-looking error modal after a submit.

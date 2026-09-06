@@ -336,6 +336,11 @@ class CredentialInputTests(unittest.TestCase):
             cl.ClientLauncher._last_riot_hwnd = previous_hwnd
             cl.ClientLauncher._last_riot_pid = previous_pid
 
+    def test_current_riot_client_executable_is_a_window_owner(self):
+        # Current Riot builds host the visible sign-in window in this spaced
+        # executable name instead of RiotClientUx.exe.
+        self.assertIn("riot client.exe", cl._RIOT_PROCS)
+
     def test_cancellation_during_listener_wait_cleans_listener(self):
         listener = MagicMock()
 

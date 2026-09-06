@@ -1563,6 +1563,12 @@ Tests:
 - Retained the product/patchline launch arguments that reliably open the Riot
   Client sign-in UI after a restart.
 
+# v5.5.51 release
+
+- Added the current `Riot Client.exe` process name to window ownership checks.
+  The visible sign-in window was previously rejected despite having the exact
+  `Riot Client` title, leaving automation stuck at waiting for the screen.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).

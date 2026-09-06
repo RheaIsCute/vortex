@@ -1,5 +1,5 @@
 {
-  "version": "5.5.50",
+  "version": "5.5.51",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.50: fixes credential entry on Riot's staged username/password sign-in screen."
+  "changelog": "Vortex v5.5.51: recognizes the current Riot Client executable so sign-in screen detection no longer stalls."
 }
