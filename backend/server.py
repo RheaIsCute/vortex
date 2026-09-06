@@ -1163,7 +1163,10 @@ async def refresh_account_stats(account_id: int):
             if moved:
                 return {"success": True, "moved_to_banned": True,
                         "message": f"{account['username']} is banned/suspended - moved to Banned Accounts."}
-            return {"success": True, "account": db.get_account_by_id(account_id)}
+            # Do not return here: the local Riot session can expose identity
+            # without MMR/peak data. Continue to the public scraper so a
+            # successful HenrikDev response can fill the rank fields too.
+            account = db.get_account_by_id(account_id) or account
 
     if not account["display_name"]:
         return {"success": False, "message": "No Riot ID found. Log in to this account to auto-sync stats."}
@@ -1207,6 +1210,12 @@ async def get_account_matches(account_id: int):
         )
         for match in matches
     )
+    settings = db.get_settings()
+    profile_needs_refresh = (
+        bool(settings.get("riot_api_key")) and
+        ((account.get("rank_tier") or "").upper() == "UNRANKED"
+         or not account.get("peak_rank_tier"))
+    )
     if (not matches or needs_scoreboard_upgrade) and account["display_name"]:
         # Prefer the authenticated local game client when it is available.
         # It has no third-party API-key/rate-limit dependency and lets a
@@ -1231,8 +1240,7 @@ async def get_account_matches(account_id: int):
             account = db.get_account_by_id(account_id) or account
             matches = account.get("match_history", [])
 
-    if (not matches or needs_scoreboard_upgrade) and account["display_name"]:
-        settings = db.get_settings()
+    if (not matches or needs_scoreboard_upgrade or profile_needs_refresh) and account["display_name"]:
         scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
         stats = await scraper.fetch_account_stats(account["display_name"], account["region"])
         # Never replace cached history with a failed/empty third-party lookup.

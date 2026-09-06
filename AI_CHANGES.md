@@ -1569,6 +1569,13 @@ Tests:
   The visible sign-in window was previously rejected despite having the exact
   `Riot Client` title, leaving automation stuck at waiting for the screen.
 
+# v5.5.52 release
+
+- Match-history requests now continue to the configured public MMR lookup when
+  cached matches exist but current or peak rank is missing.
+- Account refresh no longer returns early after a partial local Riot-session
+  snapshot, allowing public rank data to repair it.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).
