@@ -812,6 +812,13 @@ class Database:
             for key, val in updates.items():
                 if key in ("id", "created_at"):
                     continue
+                # Optional API fields use None to mean "this request did not
+                # return a value". It must never be interpreted as an
+                # instruction to erase a previously verified rank/RR/icon (or
+                # any other saved profile field). Callers use explicit empty
+                # strings when clearing an editable value is intentional.
+                if val is None:
+                    continue
                 if key in self.STICKY_NON_EMPTY_FIELDS and not val:
                     # Don't blank out a previously-synced value with an
                     # empty result from a failed/partial fetch.

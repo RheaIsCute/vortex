@@ -12,6 +12,30 @@ def test_blank_update_cannot_erase_password(tmp_path):
     assert db.get_account_by_id(account_id)["password"] == "secret"
 
 
+def test_unavailable_profile_values_cannot_erase_verified_rank(tmp_path):
+    db = Database(str(tmp_path / "data.sqlite"))
+    account_id = db.add_account({
+        "username": "player",
+        "rank_tier": "DIAMOND",
+        "rank_division": "2",
+        "lp": 37,
+        "rank_icon_url": "https://example.test/diamond.png",
+    })
+
+    db.update_account(account_id, {
+        "rank_tier": None,
+        "rank_division": None,
+        "lp": None,
+        "rank_icon_url": None,
+    })
+
+    account = db.get_account_by_id(account_id)
+    assert account["rank_tier"] == "DIAMOND"
+    assert account["rank_division"] == "2"
+    assert account["lp"] == 37
+    assert account["rank_icon_url"] == "https://example.test/diamond.png"
+
+
 def test_complete_backup_round_trip_and_repairs_blank_password(tmp_path):
     source = Database(str(tmp_path / "source.sqlite"))
     source.add_account({"username": "active", "password": "one"})

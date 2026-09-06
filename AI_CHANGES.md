@@ -1582,6 +1582,13 @@ Tests:
   including current rank, RR, peak rank, rank icons, and detected region.
   These paths previously discarded everything except match history.
 
+# v5.5.54 release
+
+- Continuous active-session sync now enriches partial local identity data with
+  the configured public profile before marking the five-minute sync complete.
+- Database updates ignore `None` as "unavailable" so partial local responses
+  cannot erase a verified current rank, RR, icon, or peak rank.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).

@@ -1,5 +1,5 @@
 {
-  "version": "5.5.53",
+  "version": "5.5.54",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.53: saves rank, RR, peak rank, icons, and region after login and account checks."
+  "changelog": "Vortex v5.5.54: active-session sync fetches public rank data and partial responses can no longer erase saved ranks."
 }

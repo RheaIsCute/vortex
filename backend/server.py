@@ -1354,8 +1354,6 @@ async def sync_active_account():
     info = await asyncio.to_thread(launcher.get_active_riot_account)
     if not info or not info.get("found"):
         return {"success": True, "synced": False, "message": "Riot session is still settling."}
-    _ACTIVE_SYNC_CACHE.update({"identity": identity, "full_at": time.monotonic()})
-
     accounts = db.get_all_accounts()
     act_user = (info.get("username") or "").lower()
 
@@ -1371,16 +1369,40 @@ async def sync_active_account():
         if _mark_session_login(matched_acc["id"], matched_acc.get("last_login")):
             update_data["last_login"] = datetime.now().isoformat()
         moved = apply_account_update(matched_acc["id"], update_data)
+
+        # The local Riot session frequently resolves identity/level while its
+        # MMR call is empty. Enrich this periodic sync with the configured
+        # public profile before caching it as complete, otherwise an account
+        # can remain visibly Unranked for the entire five-minute cache window.
+        display_name = info.get("display_name") or matched_acc.get("display_name")
+        if display_name and not moved:
+            settings = db.get_settings()
+            scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
+            public_stats = await scraper.fetch_account_stats(
+                display_name, info.get("region") or matched_acc.get("region") or "NA"
+            )
+            if public_stats:
+                public_stats["last_updated"] = datetime.now().isoformat()
+                apply_account_update(matched_acc["id"], public_stats)
+
+        _ACTIVE_SYNC_CACHE.update({"identity": identity, "full_at": time.monotonic()})
+        refreshed = db.get_account_by_id(matched_acc["id"]) or matched_acc
         return {
             "success": True,
             "synced": True,
             "moved_to_banned": moved,
             "account_id": matched_acc["id"],
-            "display_name": info.get("display_name"),
-            "region": info.get("region"),
-            "level": info.get("level"),
+            "display_name": refreshed.get("display_name"),
+            "region": refreshed.get("region"),
+            "level": refreshed.get("level"),
+            "rank_tier": refreshed.get("rank_tier"),
+            "rank_division": refreshed.get("rank_division"),
+            "peak_rank_tier": refreshed.get("peak_rank_tier"),
+            "peak_rank_division": refreshed.get("peak_rank_division"),
             "status": info.get("status")
         }
+
+    _ACTIVE_SYNC_CACHE.update({"identity": identity, "full_at": time.monotonic()})
 
     # Check if this active account is in banned_accounts
     banned_accs = db.get_banned_accounts()
