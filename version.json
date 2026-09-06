@@ -1,5 +1,5 @@
 {
-  "version": "5.5.52",
+  "version": "5.5.53",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.52: refreshes rank and peak data even when match history is already cached."
+  "changelog": "Vortex v5.5.53: saves rank, RR, peak rank, icons, and region after login and account checks."
 }

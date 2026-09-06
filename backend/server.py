@@ -338,8 +338,9 @@ async def background_auto_detect_and_link(account_id: int):
                 settings = db.get_settings()
                 scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
                 stats = await scraper.fetch_account_stats(detected_id, detected_region)
-                if stats.get("match_history"):
-                    db.update_account(account_id, {"match_history": stats["match_history"]})
+                if stats:
+                    stats["last_updated"] = datetime.now().isoformat()
+                    apply_account_update(account_id, stats)
             break
 
     # If we typed the credentials but Riot never confirmed a signed-in
@@ -542,12 +543,15 @@ async def run_batch_account_check():
                         apply_account_update(acc["id"], update_payload)
                         CHECK_PROGRESS["verified"] += 1
 
-                        # Scrape match history if display_name found
+                        # Enrich the partial local Riot snapshot with the full
+                        # public profile. Previously this saved match_history
+                        # only and silently discarded rank/RR/peak/region.
                         if detected_info.get("display_name"):
                             scraper = StatScraper(riot_api_key=settings.get("riot_api_key"))
                             stats = await scraper.fetch_account_stats(detected_info["display_name"], detected_info.get("region", "NA"))
-                            if stats.get("match_history"):
-                                db.update_account(acc["id"], {"match_history": stats["match_history"]})
+                            if stats:
+                                stats["last_updated"] = datetime.now().isoformat()
+                                apply_account_update(acc["id"], stats)
                 else:
                     # A failed check is never permission to destroy saved
                     # credentials. Even Riot-confirmed invalid credentials may

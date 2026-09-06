@@ -1576,6 +1576,12 @@ Tests:
 - Account refresh no longer returns early after a partial local Riot-session
   snapshot, allowing public rank data to repair it.
 
+# v5.5.53 release
+
+- Post-login and batch account checks now persist the entire public profile,
+  including current rank, RR, peak rank, rank icons, and detected region.
+  These paths previously discarded everything except match history.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).
