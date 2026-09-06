@@ -1,5 +1,5 @@
 {
-  "version": "5.5.49",
+  "version": "5.5.50",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.49: consolidated login-flow updates and multi-path public match-history retrieval."
+  "changelog": "Vortex v5.5.50: fixes credential entry on Riot's staged username/password sign-in screen."
 }

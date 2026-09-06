@@ -1645,10 +1645,15 @@ class ClientLauncher:
             _LOGIN_UI_SCAN_LOCAL.cached = (hwnd, time.monotonic(), snapshot)
             user_field = snapshot.get("username")
             pass_field = snapshot.get("password")
-            if user_field is None or pass_field is None:
+            # Riot may mount only the username edit first. The password edit
+            # appears after the username is confirmed, so username readiness
+            # is enough to begin automation.
+            if user_field is None:
                 return None, "window up, credential fields not mounted yet"
             try:
-                enabled = bool(user_field.IsEnabled and pass_field.IsEnabled)
+                enabled = bool(user_field.IsEnabled)
+                if pass_field is not None:
+                    enabled = enabled and bool(pass_field.IsEnabled)
             except Exception:
                 return None, "credential controls became stale"
             if not enabled:
@@ -1703,6 +1708,19 @@ class ClientLauncher:
         if len(edits) >= 2:
             user_field = user_field or edits[0]
             pass_field = pass_field or next((field for field in edits if field is not user_field), None)
+        elif len(edits) == 1 and user_field is None and pass_field is None:
+            # Riot's current page uses one edit at a time. Distinguish the
+            # password step when UI Automation exposes IsPassword; otherwise
+            # the lone edit is the initial username field.
+            only = edits[0]
+            try:
+                one_is_password = bool(getattr(only, "IsPassword", False))
+            except Exception:
+                one_is_password = False
+            if one_is_password:
+                pass_field = only
+            else:
+                user_field = only
 
         submit = None
         sign_out = None
@@ -1895,6 +1913,49 @@ class ClientLauncher:
         return True
 
     @classmethod
+    def _reveal_password_field(cls, window, user_field, username,
+                               listener, timeout: float = 6.0):
+        """Advance Riot's staged username page and return its password edit."""
+        _set_login_stage("typing", "Opening the password field...", username)
+        deadline = time.monotonic() + max(0.0, timeout)
+        used_enter_fallback = False
+        try:
+            user_field.SetFocus()
+        except Exception:
+            pass
+        pyautogui.press('tab')
+
+        while time.monotonic() < deadline:
+            if _LOGIN_CANCEL_EVENT.is_set():
+                return None
+            remaining = deadline - time.monotonic()
+            if listener is not None:
+                listener.wait(min(0.25, max(0.0, remaining)), _LOGIN_CANCEL_EVENT)
+            else:
+                _LOGIN_CANCEL_EVENT.wait(min(0.25, max(0.0, remaining)))
+            try:
+                snapshot = cls._scan_login_controls(window)
+            except Exception:
+                continue
+            if snapshot.get("popup_sign_out") is not None:
+                return None
+            pass_field = snapshot.get("password")
+            if pass_field is not None:
+                try:
+                    if bool(pass_field.IsEnabled):
+                        return pass_field
+                except Exception:
+                    return pass_field
+            if not used_enter_fallback and (deadline - time.monotonic()) < timeout / 2:
+                used_enter_fallback = True
+                try:
+                    user_field.SetFocus()
+                except Exception:
+                    pass
+                pyautogui.press('enter')
+        return None
+
+    @classmethod
     def _attempt_login_fill(cls, username: str, password: str, stay_signed_in: bool,
                             tries: int = 3, form_timeout: float = 35.0) -> Optional[bool]:
         """
@@ -1979,6 +2040,18 @@ class ClientLauncher:
                 if _LOGIN_CANCEL_EVENT.is_set():
                     return False
 
+                if pass_field is None:
+                    pass_field = cls._reveal_password_field(
+                        window, user_field, username, listener,
+                    )
+                    if pass_field is None:
+                        login_logger.warning(
+                            "password field never mounted after advancing from username"
+                        )
+                        continue
+                if _LOGIN_CANCEL_EVENT.is_set():
+                    return False
+
                 _set_login_stage("typing", "Entering password...", username)
                 if not cls.fill_field_verified(pass_field, password, "password", masked=True):
                     continue
@@ -1991,8 +2064,10 @@ class ClientLauncher:
                 # full-tree scans plus the fixed post-password delay.
                 try:
                     snapshot = cls._scan_login_controls(window)
-                    user_field = snapshot.get("username")
-                    pass_field = snapshot.get("password")
+                    rescanned_user = snapshot.get("username")
+                    pass_field = snapshot.get("password") or pass_field
+                    if rescanned_user is not None:
+                        user_field = rescanned_user
                 except Exception:
                     continue
                 if snapshot.get("popup_sign_out") is not None:
@@ -2002,9 +2077,12 @@ class ClientLauncher:
                     cls.wait_for_transient_login_popup_gone(timeout=8.0)
                     cls.wait_for_signed_out(timeout=8.0)
                     continue
-                if user_field is None or pass_field is None:
+                if pass_field is None:
                     continue
-                if cls._field_text(user_field) != username or len(cls._field_text(pass_field)) != len(password):
+                if rescanned_user is not None and cls._field_text(user_field) != username:
+                    login_logger.warning("the form reset before submission; reacquiring controls")
+                    continue
+                if len(cls._field_text(pass_field)) != len(password):
                     login_logger.warning("the form reset before submission; reacquiring controls")
                     continue
 
@@ -2018,7 +2096,7 @@ class ClientLauncher:
                     )
                     if _LOGIN_CANCEL_EVENT.is_set():
                         return False
-                    if cls._field_text(user_field) != username:
+                    if rescanned_user is not None and cls._field_text(user_field) != username:
                         login_logger.warning("the form reset while setting stay-signed-in")
                         continue
 

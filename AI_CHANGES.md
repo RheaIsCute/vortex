@@ -1555,6 +1555,14 @@ Tests:
 - Consolidated the current login-flow changes and retained the multi-path
   public match-history retrieval improvements from v5.5.48.
 
+# v5.5.50 release
+
+- Restored Riot's staged sign-in handling: automation can begin when only the
+  username edit is mounted, advances the form, waits for the password edit,
+  and verifies whichever credential fields remain visible before submission.
+- Retained the product/patchline launch arguments that reliably open the Riot
+  Client sign-in UI after a restart.
+
 - Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
   `5.5.47`.
 - Full suite: 133 passed (two pre-existing FastAPI deprecation warnings).

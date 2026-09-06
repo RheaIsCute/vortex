@@ -161,6 +161,46 @@ class CredentialInputTests(unittest.TestCase):
         self.assertIs(snapshot["stay_signed_in"], checkbox)
         self.assertIs(snapshot["popup_sign_out"], sign_out)
 
+    def test_single_edit_page_resolves_username_only(self):
+        username = self.Control(name="", automation_id="")
+        root = self.Control(control_type="WindowControl", children=[username])
+
+        snapshot = cl.ClientLauncher._scan_login_controls(root)
+
+        self.assertIs(snapshot["username"], username)
+        self.assertIsNone(snapshot["password"])
+
+    def test_login_form_ready_with_username_only(self):
+        username = self.Control(name="", automation_id="")
+        window = self.Control(control_type="WindowControl", children=[username])
+        auto = MagicMock()
+        auto.ControlFromHandle.return_value = window
+        with patch.object(cl, "_uia", return_value=auto):
+            form, state = cl.ClientLauncher._login_form_from_hwnd(123, auto)
+
+        self.assertIsNotNone(form)
+        self.assertEqual(state, "login form ready")
+        _window, user_field, pass_field = form
+        self.assertIs(user_field, username)
+        self.assertIsNone(pass_field)
+
+    def test_reveal_password_field_tabs_and_returns_mounted_field(self):
+        user_field = self.Control(name="", automation_id="")
+        password = self.Control(automation_id="password-input", is_password=True)
+        window = MagicMock()
+        listener = MagicMock()
+        listener.wait.return_value = True
+        with patch.object(cl.ClientLauncher, "_scan_login_controls", side_effect=[
+                 {"password": None, "popup_sign_out": None},
+                 {"password": password, "popup_sign_out": None},
+             ]), patch.object(cl.pyautogui, "press") as press:
+            result = cl.ClientLauncher._reveal_password_field(
+                window, user_field, "acc", listener, timeout=2,
+            )
+
+        self.assertIs(result, password)
+        press.assert_any_call("tab")
+
     def test_client_relaunch_forces_login_window_with_product_args(self):
         # Running RiotClientServices.exe bare often starts the background
         # service without ever showing a window ("no Riot Client window yet"),
