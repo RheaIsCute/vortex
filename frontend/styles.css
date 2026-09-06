@@ -2668,6 +2668,23 @@ select.form-control option {
     line-height: 1.4;
 }
 
+/* Warning text styling for risky settings */
+.warning-text {
+    color: var(--danger) !important;
+    font-weight: 600;
+}
+
+.memory-reading-warning {
+    background: rgba(var(--danger-rgb), 0.05);
+    border: 1px solid rgba(var(--danger-rgb), 0.2);
+    border-radius: var(--radius-sm);
+    padding: var(--sp-5);
+}
+
+.memory-reading-warning .switch-row-text strong {
+    color: var(--danger);
+}
+
 /* An earlier edit left `.field-help code` grouped with the checkbox rule, which
    turned inline <code> into a flex container - a block-level box that forced a
    line break either side of it and split one-line help text across three lines. */

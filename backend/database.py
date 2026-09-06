@@ -324,6 +324,10 @@ class Database:
                 # named ldr.novgk.exe on the current user's Desktop\Private.
                 ("post_valorant_launch_enabled", "0"),
                 ("post_valorant_launch_path", ""),
+                # RISKY: Enable in-game memory reading to access hidden player
+                # usernames and tags. May violate Terms of Service. Off by default.
+                ("memory_reading_enabled", "0"),
+                ("memory_reading_mode", "external"),  # "external" or "internal"
             ]
             for k, v in defaults:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

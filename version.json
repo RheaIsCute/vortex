@@ -1,5 +1,5 @@
 {
-  "version": "5.5.54",
+  "version": "5.6.0",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.5.54: active-session sync fetches public rank data and partial responses can no longer erase saved ranks."
+  "changelog": "Vortex v5.6.0: Added in-game memory reading feature with two modes - External (ReadProcessMemory with offsets) and Internal (DLL injection without offsets). Includes warning indicators and comprehensive documentation. WARNING: May violate Terms of Service."
 }

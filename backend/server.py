@@ -48,6 +48,7 @@ from backend.live_combat import LiveCombatTracker
 from backend.version import APP_VERSION
 from backend import updater
 from backend import runtime_audit
+from backend import memory_reader
 
 app = FastAPI(title="Vortex Valorant Account Manager API", version=APP_VERSION)
 app.add_middleware(
@@ -1564,6 +1565,14 @@ async def update_settings(req: SettingsUpdate):
         overwolf.enable_live_match_integration()
         restoration = await asyncio.to_thread(_restore_live_match_startup)
 
+    # Handle memory reading enable/disable based on settings change
+    memory_was_enabled = previous.get("memory_reading_enabled", "0") == "1"
+    memory_is_enabled = current.get("memory_reading_enabled", "0") == "1"
+    
+    if memory_was_enabled and not memory_is_enabled:
+        # User disabled memory reading
+        await asyncio.to_thread(memory_reader.disable_memory_reading)
+    
     response = {"success": True, "settings": db.get_settings()}
     if cleanup is not None:
         response["live_match_cleanup"] = cleanup
@@ -1626,6 +1635,60 @@ async def open_login_log():
 async def app_version():
     """Returns the running app's version, for display in Settings/About."""
     return {"version": APP_VERSION}
+
+
+@app.post("/api/memory-reading/enable")
+async def enable_memory_reading_endpoint():
+    """
+    Enable in-game memory reading for accessing hidden player information.
+    WARNING: This may violate Terms of Service.
+    """
+    settings = db.get_settings()
+    if settings.get("memory_reading_enabled", "0") != "1":
+        return {
+            "success": False,
+            "message": "Memory reading is disabled in settings. Enable it first in Settings > Advanced."
+        }
+    
+    # Get mode from settings (default to external, which is safer)
+    mode = settings.get("memory_reading_mode", "external")
+    
+    result = await asyncio.to_thread(memory_reader.enable_memory_reading, mode)
+    return result
+
+
+@app.post("/api/memory-reading/disable")
+async def disable_memory_reading():
+    """Disable in-game memory reading"""
+    await asyncio.to_thread(memory_reader.disable_memory_reading)
+    return {"success": True, "message": "Memory reading disabled"}
+
+
+@app.get("/api/memory-reading/status")
+async def memory_reading_status():
+    """Check if memory reading is currently active"""
+    enabled = await asyncio.to_thread(memory_reader.is_memory_reading_enabled)
+    settings_enabled = db.get_settings().get("memory_reading_enabled", "0") == "1"
+    return {
+        "enabled": enabled,
+        "settings_enabled": settings_enabled,
+        "message": "Memory reading is active" if enabled else "Memory reading is inactive"
+    }
+
+
+@app.get("/api/memory-reading/players")
+async def get_memory_players():
+    """Get player list from game memory"""
+    settings = db.get_settings()
+    if settings.get("memory_reading_enabled", "0") != "1":
+        return {
+            "success": False,
+            "message": "Memory reading is disabled in settings",
+            "players": []
+        }
+    
+    result = await asyncio.to_thread(memory_reader.get_memory_players)
+    return result
 
 
 @app.get("/api/check-update")

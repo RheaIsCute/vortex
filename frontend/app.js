@@ -437,6 +437,8 @@ const DOM = {
     settingsLiveMatchEnabled: document.getElementById("settings-live-match-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
+    settingsMemoryReading: document.getElementById("settings-memory-reading"),
+    settingsMemoryReadingMode: document.getElementById("settings-memory-reading-mode"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -3725,6 +3727,8 @@ function openSettingsModal() {
     loadLoginLogPath();
     if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = (state.settings.stay_signed_in || "1") !== "0";
     if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = state.settings.auto_launch_after_login === "1";
+    if (DOM.settingsMemoryReading) DOM.settingsMemoryReading.checked = (state.settings.memory_reading_enabled || "0") === "1";
+    if (DOM.settingsMemoryReadingMode) DOM.settingsMemoryReadingMode.value = state.settings.memory_reading_mode || "external";
     openModal(DOM.modalSettings);
 }
 
@@ -3761,7 +3765,9 @@ async function saveSettings() {
             stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
             auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
-            post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim()
+            post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim(),
+            memory_reading_enabled: DOM.settingsMemoryReading?.checked ? "1" : "0",
+            memory_reading_mode: DOM.settingsMemoryReadingMode?.value || "external"
         }
     };
 
