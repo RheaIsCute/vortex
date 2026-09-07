@@ -2574,7 +2574,11 @@ class ClientLauncher:
         ClientLauncher._last_riot_hwnd = None
         ClientLauncher._last_riot_pid = None
         try:
-            cmd = ["taskkill", "/F", "/T", "/IM", "RiotClientServices.exe", "/IM", "RiotClientUx.exe", "/IM", "RiotClientCrashHandler.exe"]
+            # Current Riot builds host the visible client in ``Riot Client.exe``.
+            # If it is left running, the relaunch below is swallowed by the
+            # single-instance guard and the previous authenticated session
+            # stays on screen.
+            cmd = ["taskkill", "/F", "/T", "/IM", "Riot Client.exe", "/IM", "RiotClientServices.exe", "/IM", "RiotClientUx.exe", "/IM", "RiotClientCrashHandler.exe"]
             runtime_audit.process_terminate("RiotClientServices.exe", "taskkill /F", "reset session lock / rate limits")
             runtime_audit.child_command(cmd)
             subprocess.run(

@@ -96,6 +96,13 @@ class LoginThreadingTests(unittest.TestCase):
             self.assertTrue(res["success"])
             self.assertTrue(done.wait(5))
 
+    def test_force_kill_includes_current_riot_client_executable(self):
+        with patch.object(cl.subprocess, "run") as run:
+            cl.ClientLauncher.force_kill_riot_client()
+
+        command = run.call_args.args[0]
+        self.assertIn("Riot Client.exe", command)
+
 
 class CredentialInputTests(unittest.TestCase):
     class Control:

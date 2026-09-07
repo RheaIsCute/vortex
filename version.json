@@ -1,5 +1,5 @@
 {
-  "version": "5.6.1",
+  "version": "5.6.2",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.1: Memory reading toggle moved to main settings for better visibility. Fixed UI placement issue."
+  "changelog": "Vortex v5.6.2: Fixed account switching so logging in while Riot Client is already signed in closes the current client session first."
 }
