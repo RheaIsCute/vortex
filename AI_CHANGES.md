@@ -1785,3 +1785,24 @@ Measured in Chrome against the real stylesheet, 20 rows in a 520px shell:
 before, rows crushed to 22px with 20/20 clipped; after, 62px with 0 clipped and
 the list scrolling. Fix lands on the shared row component, so the Account
 Manager modal, Dashboard and player-profile lookup all benefit.
+
+## v5.6.4 build & release record
+
+- Bumped `backend/version.py`, `version.json`, and the Inno Setup fallback to
+  `5.6.4`.
+- Full suite: 155 passed, 1 pre-existing environmental failure
+  (`test_startup_port` binds a port a running Vortex instance already held;
+  `app.py` untouched by this change).
+- Built `dist/Vortex/Vortex.exe`: 3,888 files in `_internal`, elevation
+  manifest verified, three frozen startup/API/UIA smoke passes.
+- Built and integrity-verified `dist_installer/VortexSetup.exe`. Installer
+  ProductVersion: `5.6.4`; SHA-256:
+  `1D3B541286495E2F1B5AE623BC44AA94F4235282B5C07B52ABBEF12F6E955DBA`.
+- Tagged `v5.6.4` at 5da70dd and published the GitHub release with the
+  installer attached (263,132,314 bytes, byte-for-byte the local artifact).
+
+Note for future releases: push the release BEFORE (or with) the `version.json`
+bump. The updater takes whichever source advertises the highest version, and
+`version.json`'s `download_url` points at `releases/latest/download/...`. A
+bumped manifest with no matching release therefore offers users a new version
+and hands them the previous installer, which loops on every check.
