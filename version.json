@@ -1,5 +1,5 @@
 {
-  "version": "5.6.4",
+  "version": "5.6.5",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.4: Mouse and keyboard are locked while Vortex types into the Riot Client so a stray click can't derail a login (hold ESC to unlock); the Inventory tab now lists every skin the account owns with artwork; and long match histories no longer squash their rows."
+  "changelog": "Vortex v5.6.5: Fixes v5.6.4's login regression - the input lock no longer swallows Vortex's own keystrokes, so logins submit again. The lock now suppresses only real mouse and keyboard input; tap ESC to unlock."
 }

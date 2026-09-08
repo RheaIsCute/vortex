@@ -1806,3 +1806,44 @@ bump. The updater takes whichever source advertises the highest version, and
 `version.json`'s `download_url` points at `releases/latest/download/...`. A
 bumped manifest with no matching release therefore offers users a new version
 and hands them the previous installer, which loops on every check.
+
+# v5.6.5 release - fixes the v5.6.4 login regression
+
+v5.6.4's input lock used Win32 `BlockInput`, which broke automated login.
+
+Root cause: `BlockInput`'s contract says that while a block is held, "the thread
+that is blocking input can affect [key state] by calling SendInput. **No other
+thread can do this.**" v5.6.4 held the block on a dedicated thread (the only way
+to keep a timeout, since only the blocking thread may unblock), so Vortex's own
+synthetic input was suppressed along with the user's. Field entry still worked -
+it goes through UI Automation `SetValue`, an API call `BlockInput` cannot touch -
+so the form filled correctly and then could never submit. The login log showed
+"login form submitted" because `submit_login_form` returns True after its
+`pyautogui.press('enter')` fallback, which was being swallowed.
+
+Fix: replaced `BlockInput` with `WH_KEYBOARD_LL` / `WH_MOUSE_LL` low-level hooks.
+Every event carries an injected flag (`LLKHF_INJECTED` / `LLMHF_INJECTED`), so
+real input is suppressed while Vortex's own synthetic input passes through
+untouched. The hooks also belong to the thread that installed them, so the
+holder can pump messages and enforce its own ceiling with no cross-thread
+restriction.
+
+Behaviour changes:
+- Mouse *movement* now passes through. It cannot steal focus or type, and a
+  frozen cursor is indistinguishable from a hung machine. Buttons, wheel and all
+  keys are still suppressed.
+- ESC is now a tap rather than a hold, detected in the hook instead of by
+  polling `GetAsyncKeyState`. An *injected* ESC does not release the lock.
+- Windows drops a low-level hook whose thread stops responding, adding a
+  failure mode that fails open.
+
+Diagnosability: `vortex.input_lock` now logs into `login_debug.log` alongside
+`vortex.login`. The regression was hard to pin down precisely because a failed
+login gave no indication of whether input was locked at the time. Release also
+records how many real events it suppressed.
+
+Tests: `tests/test_input_lock.py` grown to 20 cases. The load-bearing ones assert
+injected keystrokes, an injected Enter, and injected clicks all pass through.
+Verified by mutation: reintroducing the v5.6.4 behaviour fails 3 tests, including
+`test_injected_enter_passes_through`. Suite: 163 passed, 1 pre-existing
+environmental failure (`test_startup_port`, a port held by a running Vortex).

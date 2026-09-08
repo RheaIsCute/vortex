@@ -64,6 +64,15 @@ if not login_logger.handlers:
     login_logger.addHandler(_handler)
     login_logger.propagate = False
 
+    # The input lock is part of a login's story, so its events belong in the
+    # same file. Without this a failed login gives no sign of whether input was
+    # locked at the time - which is exactly what made the v5.6.4 regression
+    # hard to pin down.
+    _input_lock_logger = logging.getLogger("vortex.input_lock")
+    _input_lock_logger.setLevel(logging.DEBUG)
+    _input_lock_logger.addHandler(_handler)
+    _input_lock_logger.propagate = False
+
 class _PROCESSENTRY32W(ctypes.Structure):
     _fields_ = [
         ('dwSize', ctypes.c_uint32),

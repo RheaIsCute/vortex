@@ -16,13 +16,24 @@ Files owned: `backend/input_lock.py`, `backend/client_launcher.py`,
 `frontend/styles.css`, `tests/test_input_lock.py`, `backend/version.py`,
 `version.json`, `installer/vortex_setup.iss`, `AI_CHANGES.md`, `AI_TASKS.md`
 
-Notes: Completed 2026-09-08, released as v5.6.4. The input lock has five
-independent release paths (owning-thread `finally`, hard timeout, ESC hold,
-Ctrl+Alt+Del, `atexit`) because a lock that fails to lift makes the desktop
-unusable - do not remove any of them. Release is attempt-scoped so a superseded
-worker cannot unlock the attempt that replaced it. Gated by the
-`lock_input_during_login` setting, default on. Tests fake `_user32` and must
-never call the real `BlockInput`.
+Notes: Completed 2026-09-08. Shipped in v5.6.4, regressed logins, fixed in
+v5.6.5.
+
+**Do not reimplement this with `BlockInput`.** While a `BlockInput` hold is
+active only the blocking thread may call SendInput, and only that same thread
+may unblock. Those two rules cannot both be satisfied: keeping a timeout
+requires a dedicated holder thread, which then suppresses Vortex's own
+synthetic keystrokes. That is exactly what v5.6.4 did - UI Automation filled
+the login form, then the submit keystroke was swallowed and no login ever
+completed.
+
+The lock uses `WH_KEYBOARD_LL` / `WH_MOUSE_LL` and suppresses an event only
+when its injected flag is clear, so Vortex's own input always passes. Release
+is attempt-scoped so a superseded worker cannot unlock the attempt that
+replaced it. Independent release paths (owning-thread `finally`, hard timeout,
+ESC, Ctrl+Alt+Del, Windows' own hook timeout, `atexit`) all matter - do not
+remove any. Gated by `lock_input_during_login`, default on. Tests fake
+`_user32`/`_kernel32` and must never install a real hook.
 
 ### Claude (dashboard skin collection)
 
