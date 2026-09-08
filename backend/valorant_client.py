@@ -2615,25 +2615,35 @@ def _inventory(client: "ValorantLiveClient") -> Dict[str, Any]:
     owned_skins = {levels.get(lvl) for lvl in owned_levels if levels.get(lvl)}
     value = sum(prices.get(lvl, 0) for lvl in owned_levels)
 
-    # The owned collection, flattened to one card per skin. Base/default skins
-    # (no content tier) are dropped so the grid only shows real cosmetics.
+    # The owned collection, flattened to one card per skin. Riot never grants
+    # entitlements for a weapon's base skin, but a few owned skins carry no
+    # content tier at all - those still belong in the grid, under "Standard",
+    # rather than being dropped for lacking a rarity.
     weapon_order = {name.lower(): i for i, name in enumerate(LOADOUT_ORDER)}
     collection: List[Dict[str, Any]] = []
     tier_counts: Dict[str, int] = {}
+    premium_owned = 0
     for sid in owned_skins:
         skin = skins.get(sid or "")
-        if not skin or not skin.get("tier_icon"):
+        if not skin or not skin.get("name"):
             continue
+        name = skin["name"]
+        weapon_name = skin.get("weapon", "")
+        if name.lower().startswith("standard") or name.lower() == weapon_name.lower():
+            continue
+        tier = skin["tier"] or "Standard"
+        if skin.get("tier_icon"):
+            premium_owned += 1
         collection.append({
-            "weapon": skin["weapon"],
-            "skin": skin["name"],
+            "weapon": weapon_name,
+            "skin": name,
             "icon": skin["icon"],
-            "tier": skin["tier"],
+            "tier": tier,
             "tier_color": skin["tier_color"],
             "tier_icon": skin["tier_icon"],
             "tier_rank": skin.get("tier_rank", 0),
         })
-        tier_counts[skin["tier"]] = tier_counts.get(skin["tier"], 0) + 1
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
     collection.sort(key=lambda c: (
         -c["tier_rank"],
         weapon_order.get(c["weapon"].lower(), 99),
@@ -2667,9 +2677,9 @@ def _inventory(client: "ValorantLiveClient") -> Dict[str, Any]:
     equipped.sort(key=lambda e: weapon_order.get(e["weapon"].lower(), 99))
 
     return {
-        # Premium (content-tier) skins only, so it lines up with skins_total
-        # and with the collection grid below.
-        "skins_owned": len(collection),
+        # Premium (content-tier) skins only, so the "% of total" tile compares
+        # like with like - skins_total counts tiered skins as well.
+        "skins_owned": premium_owned,
         "skins_total": meta["premium_total"],
         "value_vp": value,
         "agents_owned": len(client.entitlements(ITEM_AGENT)),

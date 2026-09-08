@@ -41,6 +41,7 @@ from backend.scraper import StatScraper
 from backend.client_launcher import ClientLauncher
 from backend import client_launcher
 from backend import elevation
+from backend import input_lock
 from backend import valorant_client
 from backend import game_config
 from backend import overwolf
@@ -191,6 +192,21 @@ def _stay_signed_in_pref() -> bool:
 def _auto_launch_pref() -> bool:
     """Whether a plain Login should start VALORANT once it lands."""
     return db.get_settings().get("auto_launch_after_login", "0") == "1"
+
+
+def _sync_input_lock_pref(settings: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Push the ``lock_input_during_login`` preference into the input lock.
+
+    The lock defaults to on: an automated login that a stray click can derail
+    is the problem this exists to solve. Kept in sync here rather than read
+    inside the lock so client_launcher keeps no database dependency. Callers
+    that already hold a settings snapshot pass it in rather than re-reading.
+    """
+    values = settings if settings is not None else db.get_settings()
+    enabled = values.get("lock_input_during_login", "1") != "0"
+    input_lock.set_enabled(enabled)
+    return enabled
 
 
 _LIVE_MATCH_SETTING = "live_hud_enabled"
@@ -1122,6 +1138,10 @@ def _post_valorant_watch_loop() -> None:
 async def _start_background_workers():
     global _auto_refresh_task
     game_config.remove_legacy_profile_data()
+    try:
+        _sync_input_lock_pref()
+    except Exception:
+        client_launcher.login_logger.exception("input lock preference sync failed")
     # The merged toggle is authoritative across Vortex restarts. A disabled
     # launch gets one cleanup pass here so manually-started providers cannot
     # linger into a session that opted out of Live Match Features.
@@ -1602,6 +1622,7 @@ async def update_settings(req: SettingsUpdate):
     previous = db.get_settings()
     db.update_settings(_normalize_live_match_settings(req.settings))
     current = db.get_settings()
+    _sync_input_lock_pref(current)
     was_enabled = _live_match_features_enabled(previous)
     is_enabled = _live_match_features_enabled(current)
     cleanup = None

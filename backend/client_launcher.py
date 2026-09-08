@@ -30,6 +30,7 @@ from ctypes import wintypes
 from typing import Optional, Dict, Any, Tuple
 
 from backend import elevation
+from backend import input_lock
 from backend import runtime_audit
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -315,10 +316,19 @@ def _run_login_worker(attempt: int, cancel_event: threading.Event, target, *args
     """Run one automation worker with an attempt-scoped cancellation token."""
     _LOGIN_CANCEL_LOCAL.attempt = attempt
     _LOGIN_CANCEL_LOCAL.event = cancel_event
+    # Physical input is blocked for the whole attempt so a stray click cannot
+    # steal focus from the sign-in window mid-type. The ceiling sits just past
+    # the login watchdog's own hard limit, so the lock outlives a stuck login
+    # only long enough for the watchdog to force it to an error.
+    input_lock.arm(f"login attempt {attempt}", timeout=_LOGIN_HARD_LIMIT + 30.0)
     try:
         target(*args)
     finally:
         _LOGIN_CANCEL_LOCAL.__dict__.clear()
+        # A superseded worker finishing late must never lift the lock out from
+        # under the newer attempt that replaced it.
+        if LOGIN_PROGRESS.get("attempt") == attempt:
+            input_lock.release(f"login attempt {attempt} finished")
 
 
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
@@ -355,6 +365,10 @@ def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -
         LOGIN_PROGRESS.get("username", ""), stage, elapsed, message,
     )
     if terminal:
+        # Give input back the moment the attempt is over rather than waiting
+        # for the worker thread to unwind. A stale worker cannot reach here -
+        # the attempt guard above already returned for superseded attempts.
+        input_lock.release(f"login reached {stage}")
         login_logger.info("[%s] login cleanup complete; state reset and next attempt allowed",
                           LOGIN_PROGRESS.get("username", ""))
         if stage == "done":

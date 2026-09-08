@@ -1,5 +1,5 @@
 {
-  "version": "5.6.3",
+  "version": "5.6.4",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.3: A manual LOGIN now supersedes any older account login, and playable/banned status is confirmed immediately after Riot signs in."
+  "changelog": "Vortex v5.6.4: Mouse and keyboard are locked while Vortex types into the Riot Client so a stray click can't derail a login (hold ESC to unlock); the Inventory tab now lists every skin the account owns with artwork; and long match histories no longer squash their rows."
 }

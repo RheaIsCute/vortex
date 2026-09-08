@@ -1727,3 +1727,61 @@ collection grouped by rarity with tier legend chips, skin art images, and a
 live weapon/name text filter. New CSS under section 10.14. Existing counts and
 equipped-loadout strip unchanged; empty/fallback inventory gains
 `collection: []`, `tiers: []`. Tests: test_valorant_client.py 25 passed.
+
+Follow-up: owned skins with no content tier are no longer dropped from the
+grid - they group under "Standard" instead, since Riot never grants an
+entitlement for a weapon's base skin, so a tierless entitlement is still a
+real cosmetic. Default skins ("Standard <weapon>", or a skin named after its
+own weapon) remain excluded. `skins_owned` counts tiered skins only so the
+"% of total" tile compares against the tiered `skins_total` denominator.
+Verified against a fake client: default excluded, tierless retained, rarity
+order Ultra > Premium > Standard, VP sum correct, payload JSON-serialisable.
+
+# v5.6.4 release
+
+## Input lock during automated login
+
+New `backend/input_lock.py` blocks physical mouse+keyboard (Win32 `BlockInput`)
+for the duration of an automated login, so a stray click cannot steal focus
+from the Riot Client window Vortex is typing into.
+
+Safety is the whole design - a lock that fails to lift bricks the desktop, so
+nothing depends on a single release path:
+
+- Windows only lets the thread that called `BlockInput(TRUE)` call
+  `BlockInput(FALSE)`, so one dedicated thread owns the hold, does its own
+  waiting, and always releases in a `finally` (including on crash).
+- Hard ceiling of `_LOGIN_HARD_LIMIT + 30s`; the hold cannot outlive it.
+- Holding ESC ~0.4s lifts it (`BlockInput` stops input reaching the queue but
+  the system still tracks physical key state, so `GetAsyncKeyState` sees it).
+- Ctrl+Alt+Del always lifts it - Windows does that itself.
+- `atexit` releases on process shutdown.
+- A refused `BlockInput` (unelevated) reports False rather than claiming a lock.
+
+Wired at `_run_login_worker` (arm/release around every login path) and
+`_set_login_stage` (release the moment an attempt reaches done/error/idle).
+Release is attempt-scoped so a superseded worker finishing late cannot unlock
+the newer attempt that replaced it. New `lock_input_during_login` setting
+(defaults on) with a Launch & Login toggle; `server._sync_input_lock_pref()`
+keeps it in sync and reuses the caller's settings snapshot rather than issuing
+another `get_settings()`.
+
+Tests: new `tests/test_input_lock.py`, 12 cases, all against a faked `_user32`
+so the suite never actually freezes input. Covers timeout release, ESC release,
+release from a foreign thread, idempotent release, no double-blocking, a
+throwing unblock, a crashing login worker, and the superseded-worker case.
+Fixed during testing: the holder only signalled `started` when the hold *ended*,
+so `arm()` paid its full 2s wait on every login (suite 17.7s -> 1.6s).
+
+## Match history rows no longer squash
+
+`.matches-list` is a column flex box and a flex item shrinks before its scroll
+container ever scrolls, so a long history compressed every `.match-card` below
+its natural height and the row's `overflow: hidden` sliced the stat text in
+half. `.match-card` now sets `flex-shrink: 0`; `.player-lookup`, a sibling in
+the same hard-bounded flex column, got the same guard.
+
+Measured in Chrome against the real stylesheet, 20 rows in a 520px shell:
+before, rows crushed to 22px with 20/20 clipped; after, 62px with 0 clipped and
+the list scrolling. Fix lands on the shared row component, so the Account
+Manager modal, Dashboard and player-profile lookup all benefit.

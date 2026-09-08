@@ -3,6 +3,27 @@
 > Safety override: direct process-memory access and code injection were removed.
 > The completed legacy entries below are historical only and must not be restored.
 
+### Claude (login input lock + match row squash)
+
+Status: DONE
+
+Scope: Block physical mouse/keyboard for the duration of an automated login so
+stray input cannot steal focus mid-type, and stop long match histories from
+compressing their rows.
+
+Files owned: `backend/input_lock.py`, `backend/client_launcher.py`,
+`backend/server.py`, `frontend/index.html`, `frontend/app.js`,
+`frontend/styles.css`, `tests/test_input_lock.py`, `backend/version.py`,
+`version.json`, `installer/vortex_setup.iss`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Notes: Completed 2026-09-08, released as v5.6.4. The input lock has five
+independent release paths (owning-thread `finally`, hard timeout, ESC hold,
+Ctrl+Alt+Del, `atexit`) because a lock that fails to lift makes the desktop
+unusable - do not remove any of them. Release is attempt-scoped so a superseded
+worker cannot unlock the attempt that replaced it. Gated by the
+`lock_input_during_login` setting, default on. Tests fake `_user32` and must
+never call the real `BlockInput`.
+
 ### Claude (dashboard skin collection)
 
 Status: DONE

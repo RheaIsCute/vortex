@@ -434,6 +434,7 @@ const DOM = {
     btnOpenLog: document.getElementById("btn-open-log"),
     settingsStaySignedIn: document.getElementById("settings-stay-signed-in"),
     settingsAutoLaunch: document.getElementById("settings-auto-launch"),
+    settingsLockInput: document.getElementById("settings-lock-input"),
     settingsLiveMatchEnabled: document.getElementById("settings-live-match-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
@@ -3745,6 +3746,8 @@ function openSettingsModal() {
     loadLoginLogPath();
     if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = (state.settings.stay_signed_in || "1") !== "0";
     if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = state.settings.auto_launch_after_login === "1";
+    // Defaults on - an unset value must lock, not leave the login exposed.
+    if (DOM.settingsLockInput) DOM.settingsLockInput.checked = (state.settings.lock_input_during_login || "1") !== "0";
     openModal(DOM.modalSettings);
 }
 
@@ -3780,6 +3783,7 @@ async function saveSettings() {
             live_hud_enabled: liveMatchOn ? "1" : "0",
             stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
             auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
+            lock_input_during_login: DOM.settingsLockInput?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
             post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim()
         }
@@ -6230,7 +6234,7 @@ function renderSkinCollection(inv) {
     if (!items.length) {
         return `<div class="stat-block">
             <h5 class="stat-block-title"><i class="fa-solid fa-layer-group"></i> Skin Collection</h5>
-            <p class="dash-roster-empty">No premium skins found on this account yet.</p>
+            <p class="dash-roster-empty">No skins found on this account yet - open VALORANT to the menus and refresh.</p>
         </div>`;
     }
 

@@ -3114,6 +3114,11 @@ select.form-control option {
     align-items: center;
     column-gap: 14px;
     width: 100%;
+    /* .matches-list is a column flex box, and a flex item shrinks before its
+       scroll container ever scrolls. Without this, a long history squeezes
+       every row below its natural height and `overflow: hidden` below slices
+       the stat text in half instead of the list scrolling. */
+    flex-shrink: 0;
     padding: 10px 16px;
     border: 1px solid var(--stroke-1);
     border-left: 3px solid var(--stroke-2);
@@ -7600,6 +7605,9 @@ button.match-card, button.dash-player {
     align-items: center;
     gap: 9px;
     margin: 14px 0;
+    /* Sibling of the scrolling match list inside a hard-bounded flex column;
+       without this it gets squeezed along with the rows. */
+    flex-shrink: 0;
     padding: 9px 11px;
     background: var(--surface-2);
     border: 1px solid var(--stroke);
