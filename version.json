@@ -1,5 +1,5 @@
 {
-  "version": "5.6.2",
+  "version": "5.6.3",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.2: Fixed account switching so logging in while Riot Client is already signed in closes the current client session first."
+  "changelog": "Vortex v5.6.3: A manual LOGIN now supersedes any older account login, and playable/banned status is confirmed immediately after Riot signs in."
 }

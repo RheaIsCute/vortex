@@ -3,10 +3,11 @@ name: Build Windows installer
 on:
   push:
     branches: [master]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-installer:
@@ -35,3 +36,10 @@ jobs:
           path: dist_installer/VortexSetup.exe
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: powershell
+        run: gh release create ${{ github.ref_name }} dist_installer/VortexSetup.exe --title "Vortex ${{ github.ref_name }}" --generate-notes
