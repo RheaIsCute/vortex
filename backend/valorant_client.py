@@ -629,6 +629,101 @@ class ValorantLiveClient:
             pass
         return best_payload
 
+    def all_presences(self) -> List[Dict[str, Any]]:
+        """
+        All decoded private presences visible to this session from the local
+        chat endpoint. Each entry is::
+
+            {
+                "puuid":   str,
+                "game_name": str,   # may be empty if not revealed
+                "tag_line":  str,
+                "presence":  dict,  # _flatten_presence output
+            }
+
+        Useful during agent select to enumerate all 10 players in the same
+        pregame match without relying on the pregame endpoint's EnemyTeam
+        (which is always empty in standard matchmaking).
+        """
+        res = self._local("/chat/v4/presences")
+        if not res or res.status_code != 200:
+            return []
+        out: List[Dict[str, Any]] = []
+        try:
+            for p in res.json().get("presences", []) or []:
+                puuid = (p.get("puuid") or "").strip()
+                if not puuid:
+                    continue
+                raw = p.get("private")
+                decoded: Dict[str, Any] = {}
+                if raw:
+                    try:
+                        decoded = json.loads(
+                            base64.b64decode(raw).decode("utf-8", errors="ignore")
+                        )
+                    except Exception:
+                        pass
+                flat = self._flatten_presence(decoded) if decoded else {}
+                out.append({
+                    "puuid": puuid,
+                    "game_name": (p.get("game_name") or "").strip(),
+                    "tag_line": (p.get("tag_line") or "").strip(),
+                    "presence": flat,
+                })
+        except Exception:
+            pass
+        return out
+
+    def pregame_enemy_puuids(
+        self,
+        ally_puuids: List[str],
+        match_map: str = "",
+    ) -> List[str]:
+        """
+        Identify enemy team PUUIDs during agent select using the chat
+        presence roster.
+
+        Riot's pregame endpoint only exposes AllyTeam in standard matchmaking
+        (EnemyTeam is always empty).  However, the local /chat/v4/presences
+        endpoint sees every player in the same session whose client is
+        connected.  Filtering by sessionLoopState=="PREGAME" and the same
+        matchMap then subtracting the known ally PUUIDs gives us the enemy
+        five.
+
+        Args:
+            ally_puuids: PUUIDs already known to be on the ally team (from
+                         the pregame AllyTeam payload).
+            match_map:   The map asset path from the pregame payload, used
+                         as a secondary filter to avoid collisions if two
+                         different matches happen to be in agent select at
+                         the same time (edge case, but safe to guard).
+
+        Returns:
+            List of enemy PUUIDs (may be empty or partial if presences have
+            not propagated yet — callers should treat it as best-effort).
+        """
+        all_p = self.all_presences()
+        ally_set = {p.lower() for p in ally_puuids if p}
+
+        enemies: List[str] = []
+        for entry in all_p:
+            puuid = entry["puuid"]
+            if puuid.lower() in ally_set:
+                continue
+            pres = entry.get("presence") or {}
+            state = (pres.get("sessionLoopState") or "").upper()
+            if state != "PREGAME":
+                continue
+            # Secondary map filter — only skip when both sides have a map
+            # and they don't match.
+            pmap = (pres.get("matchMap") or "").lower().rstrip("/")
+            wmap = (match_map or "").lower().rstrip("/")
+            if wmap and pmap and pmap != wmap:
+                continue
+            enemies.append(puuid)
+
+        return enemies
+
     # -- names -----------------------------------------------------------
 
     def resolve_names(self, puuids: List[str]) -> Dict[str, str]:
@@ -1908,6 +2003,7 @@ def get_weapon_data() -> Dict[str, Any]:
                 "tier": tier.get("name", ""),
                 "tier_color": tier.get("color", ""),
                 "tier_icon": tier.get("icon", ""),
+                "tier_rank": tier.get("rank", 0),
             }
             if tier:
                 premium_total += 1
@@ -2519,6 +2615,36 @@ def _inventory(client: "ValorantLiveClient") -> Dict[str, Any]:
     owned_skins = {levels.get(lvl) for lvl in owned_levels if levels.get(lvl)}
     value = sum(prices.get(lvl, 0) for lvl in owned_levels)
 
+    # The owned collection, flattened to one card per skin. Base/default skins
+    # (no content tier) are dropped so the grid only shows real cosmetics.
+    weapon_order = {name.lower(): i for i, name in enumerate(LOADOUT_ORDER)}
+    collection: List[Dict[str, Any]] = []
+    tier_counts: Dict[str, int] = {}
+    for sid in owned_skins:
+        skin = skins.get(sid or "")
+        if not skin or not skin.get("tier_icon"):
+            continue
+        collection.append({
+            "weapon": skin["weapon"],
+            "skin": skin["name"],
+            "icon": skin["icon"],
+            "tier": skin["tier"],
+            "tier_color": skin["tier_color"],
+            "tier_icon": skin["tier_icon"],
+            "tier_rank": skin.get("tier_rank", 0),
+        })
+        tier_counts[skin["tier"]] = tier_counts.get(skin["tier"], 0) + 1
+    collection.sort(key=lambda c: (
+        -c["tier_rank"],
+        weapon_order.get(c["weapon"].lower(), 99),
+        c["skin"].lower(),
+    ))
+    # Tier summary in the same rarest-first order as the sorted collection.
+    tiers: List[Dict[str, Any]] = []
+    for c in collection:
+        if not any(t["name"] == c["tier"] for t in tiers):
+            tiers.append({"name": c["tier"], "count": tier_counts.get(c["tier"], 0)})
+
     equipped: List[Dict[str, Any]] = []
     loadout = client.loadout()
     for gun in loadout.get("Guns", []) or []:
@@ -2538,11 +2664,12 @@ def _inventory(client: "ValorantLiveClient") -> Dict[str, Any]:
                           or skin["name"].lower() == weapon_name.lower(),
         })
 
-    order = {name.lower(): i for i, name in enumerate(LOADOUT_ORDER)}
-    equipped.sort(key=lambda e: order.get(e["weapon"].lower(), 99))
+    equipped.sort(key=lambda e: weapon_order.get(e["weapon"].lower(), 99))
 
     return {
-        "skins_owned": len(owned_skins),
+        # Premium (content-tier) skins only, so it lines up with skins_total
+        # and with the collection grid below.
+        "skins_owned": len(collection),
         "skins_total": meta["premium_total"],
         "value_vp": value,
         "agents_owned": len(client.entitlements(ITEM_AGENT)),
@@ -2551,6 +2678,8 @@ def _inventory(client: "ValorantLiveClient") -> Dict[str, Any]:
         "cards": len(client.entitlements(ITEM_CARD)),
         "titles": len(client.entitlements(ITEM_TITLE)),
         "loadout": equipped,
+        "collection": collection,
+        "tiers": tiers,
     }
 
 
@@ -2597,6 +2726,7 @@ def build_player_stats(client: "ValorantLiveClient") -> Dict[str, Any]:
         stats["inventory"] = {
             "skins_owned": 0, "skins_total": 0, "value_vp": 0, "agents_owned": 0,
             "buddies": 0, "sprays": 0, "cards": 0, "titles": 0, "loadout": [],
+            "collection": [], "tiers": [],
         }
 
     return stats

@@ -2,6 +2,118 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-07 - Removed invasive memory/process access
+
+- Removed the direct process-memory reader, DLL injector, native injected DLL,
+  offset APIs, settings/UI, build scripts, documentation, cached bytecode, and
+  stale experimental bundles.
+- Restored opt-in external live telemetry and added regression coverage that
+  rejects invasive Win32 memory and remote-thread APIs.
+- Rebuilt and verified the standard application bundle and installer. Full
+  suite: 142 passed.
+
+## 2026-09-07 - Codex - Live combat metric fidelity
+
+- Preserved the existing Settings-gated Overwolf / VAL Tracker live provider
+  as the authoritative current-match K/D/A source when it has a local scoreline;
+  Riot's live summary now only fills optional fields the event provider lacks.
+- Added `hs_pct_basis` to live combat snapshots. The dashboard and click-through
+  HUD now label true shot-based HS% separately from the headshot-kill fallback,
+  so a reliable fallback is not presented as a different metric.
+- The dashboard aim trace now uses the provider's rolling HS values, and the
+  current-match card shows a LIVE source chip. The self roster row also shows
+  live HS% when the provider supplies it.
+- Added regression coverage for both HS% bases. Full suite: 156 passed; Python
+  compile, JavaScript syntax checks, and targeted tests passed. Existing
+  unrelated working-tree whitespace warnings remain outside this task.
+
+## 2026-09-07 - Codex - Direct memory live stats, no Overwolf
+
+- Corrected the live combat path so `memory_reading_enabled` is the sole source
+  for live K/D/A, HS%, damage, ADR and ACS. The path no longer calls or falls
+  back to Overwolf, VAL Tracker, or Vortex Telemetry.
+- Added direct-reader fields for headshots, bodyshots, legshots, damage and
+  rounds, with `kda_ready`, `precision_ready`, and `scoreboard_ready` status
+  indicators. Missing patch offsets remain unavailable rather than showing
+  substitute telemetry.
+- Updated Settings copy and the live UI to identify direct game-memory data.
+
+## 2026-09-07 — Claude — Memory-read live combat provider (KDA / HS% for the whole lobby)
+
+Added a second live-combat provider that sources exact current-match K/D/A from
+VALORANT process memory, gated by the existing **Memory Reading** setting, and
+wired it into the same HUD + live roster the Overwolf provider already feeds.
+
+1. **`backend/memory_reader.py`** — new `VALORANT_STRUCT_OFFSETS` map (generic
+   UE `UWorld -> GameState -> PlayerArray` steps set to real defaults; the
+   VALORANT `APlayerState` combat fields ship at `0` = unconfigured). Added
+   `ValorantMemoryReader.read_ptr/read_int/read_fstring` and `read_scoreboard()`
+   which walks the player array and returns `{name, team, kills, deaths,
+   assists, score}` per player, or `[]` if any required offset is unset or a
+   read fails. `MemoryReaderManager` gained `struct_offsets`, `get_struct_offsets()`,
+   `get_scoreboard()`; `update_offsets()` now routes struct keys to that map.
+   New module fns `get_memory_scoreboard()`, `get_struct_offsets()`.
+2. **`backend/live_memory.py`** (new) — `MemoryCombatTracker.snapshot(match_id,
+   my_name)` turns the raw scoreboard into the exact dict shape
+   `LiveCombatTracker.snapshot()` returns: `players` feed keyed by lowercase
+   game name (with real assists), local totals, `source="memory_reader"`.
+   Latches the last good read through short round gaps; aim/damage fields stay
+   `None`/`0` (memory can't read them) rather than being faked.
+3. **`backend/server.py`** — `_live_combat_snapshot(match_id, my_name)` now
+   proceeds when *either* Live Match Features *or* Memory Reading is on. When
+   memory reading has data it wins, and Overwolf's per-shot / damage figures
+   are merged on top (`source="memory_reader+overwolf_gep"`); otherwise it
+   falls back to the Overwolf provider unchanged. `_attach_live_combat()`
+   applies real assists and full-lobby coverage for the memory source; the
+   `live_provider` block and `_self_block` reason strings are source-aware.
+4. **Frontend** — `live_overlay.js` and `app.js` treat `memory_reader*` as an
+   exact live source; the roster LIVE pill tooltip names the source. Settings
+   copy notes memory reading now feeds live match K/D/A.
+5. **Tests** — `tests/test_live_memory.py` (12 cases: tracker build/latch/error
+   handling, struct-offset registration + routing, scoreboard degradation).
+
+Not done / needs the live game: the patch-specific `playerstate_*` offsets are
+`0` out of the box, so the provider reports "offsets not resolved for this
+patch" and falls back to Overwolf until they're set via
+`POST /api/memory-reading/offsets`. The full structural machinery, wiring, and
+fallback are in place and tested with a fake reader.
+
+## 2026-09-07 — Antigravity — Integrate VALORANT Memory Reading Offsets
+
+Integrated patch memory offsets into memory reading subsystem and exposed dynamic offset endpoints:
+
+1. **Memory Offsets Registration**: Registered all 21 patch offsets in `VALORANT_OFFSETS` inside `backend/memory_reader.py` (`GWorld`, `ProcessEvent`, `StaticFindObject`, `StaticLoadObject`, `BoneMatrix`, `SetOutlineMode`, `FMemory::Malloc`, `PlayFinisher`, `GetSpreadValues`, `GetSpreadAngles`, `ToVectorAndNormalize`, `ToAngleAndNormalize`, `GetFiringLocationAndDirection`, `TriggerVeh`, `K2_DrawLine`, `K2_DrawBox`, `K2_DrawText`, `RHSP_Fire`, `SetControlRotation`, `LineOfSight`, `GetActorEyesViewPoint`).
+2. **Address Resolution & Memory Reading**: Added `resolve_address(offset_key)` to `ValorantMemoryReader` to calculate absolute memory addresses from process `base_address + offset`. Updated `get_player_list()` to read and resolve the `GWorld` pointer.
+3. **Offset Management & API**: Added `get_offsets()` and `update_offsets()` methods to `MemoryReaderManager`. Added `GET /api/memory-reading/offsets` and `POST /api/memory-reading/offsets` endpoints in `backend/server.py`, and included `offsets` map and `offset_count` in `GET /api/memory-reading/status`.
+4. **Testing**: Added unit tests in `tests/test_memory_reader.py` (`test_offsets_registration`, `test_resolve_address`, `test_update_offsets`). All 147 tests passed cleanly.
+
+## 2026-09-07 — Antigravity — Fix memory reading in settings feature
+
+Fixed the in-game memory reading settings feature across frontend, backend endpoints,
+lifecycle management, and Win32 low-level memory operations:
+
+1. **Frontend Settings UI**: Added `memoryReadingModeSection` binding in `DOM`,
+   dynamically toggled `#memory-reading-mode-section` visibility based on the
+   `settingsMemoryReading` checkbox state both upon opening the settings modal and
+   on checkbox change events.
+2. **Settings API and Lifecycle**: Updated `POST /api/settings` to arm and attach
+   the memory reader upon enabling or mode switching; added auto-attachment during
+   live match polls (`_live_snapshot`) and startup when VALORANT is running; and
+   added clean handle detachment in `_post_valorant_watch_loop` when VALORANT exits.
+3. **Endpoints**: Updated `GET /api/memory-reading/status` to report `mode`, `enabled`,
+   and `settings_enabled`, with auto-attachment if enabled in settings and VALORANT is
+   running. Updated `GET /api/memory-reading/players` to attempt attachment if enabled
+   in settings before querying player data. Corrected outdated error message in
+   `POST /api/memory-reading/enable`.
+4. **64-bit Win32 Safety**: Added full ctypes `argtypes` and `restype` signatures across
+   `backend/memory_reader.py` and `backend/injector.py` to eliminate 64-bit pointer and
+   handle truncation; properly handled `INVALID_HANDLE_VALUE` checks; prioritized the
+   actual game shipping process (`VALORANT-Win64-Shipping.exe`) over the launcher
+   (`VALORANT.exe`); and added `is_alive()` process verification.
+5. **Testing**: Added unit tests in `tests/test_memory_reader.py` and settings UI tests in
+   `tests/test_settings_and_ui.py`. Verified with `node --check frontend/app.js` and
+   full pytest suite (144 passed).
+
 ## 2026-09-05 — Release v5.5.46 (Account Manager Card View)
 
 Published the Account Manager visual update as v5.5.46: a compact Card View
@@ -1598,3 +1710,20 @@ Tests:
 - Built and integrity-verified `dist_installer/VortexSetup.exe`. Installer
   ProductVersion: `5.5.47`; SHA-256:
   `95F890E0F4D120A0388A53D70A18BB2FEA7F06E8AC8BDC3AFBE2411D21448326`.
+
+## 2026-09-06 - Windows startup port conflict
+
+Changed the launcher port probe to use SO_EXCLUSIVEADDRUSE on Windows instead of SO_REUSEADDR, which incorrectly accepted a port occupied by another Python service. Exhausting the preferred range now requests an OS-assigned port. Regression test passed; rebuilt frozen smoke test passed on 8766 while 8765 remained occupied; executable elevation manifest verified. Applied the rebuilt bundle locally with replaced-file backups in backups/portfix-20260906-160718.
+
+## 2026-09-08 - Dashboard skin collection
+
+Inventory tab now lists the account's actual owned skins, not just counts.
+`_inventory()` in `backend/valorant_client.py` resolves owned skin-level
+entitlements to their skins and returns a `collection` array (weapon, skin
+name, render icon, content tier + colour/icon/rank) plus a rarest-first
+`tiers` summary; `get_weapon_data()` skins now carry `tier_rank`. Base/default
+skins (no content tier) are excluded. Frontend `renderInventory()` renders the
+collection grouped by rarity with tier legend chips, skin art images, and a
+live weapon/name text filter. New CSS under section 10.14. Existing counts and
+equipped-loadout strip unchanged; empty/fallback inventory gains
+`collection: []`, `tiers: []`. Tests: test_valorant_client.py 25 passed.

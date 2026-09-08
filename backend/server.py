@@ -48,7 +48,6 @@ from backend.live_combat import LiveCombatTracker
 from backend.version import APP_VERSION
 from backend import updater
 from backend import runtime_audit
-from backend import memory_reader
 
 app = FastAPI(title="Vortex Valorant Account Manager API", version=APP_VERSION)
 app.add_middleware(
@@ -283,7 +282,38 @@ async def background_auto_detect_and_link(account_id: int):
 
     detected = False
     for _ in range(16):
-        await asyncio.sleep(1.8)
+        # Account identity and ban state are available from Riot Client's
+        # local userinfo endpoint well before XP/MMR calls finish. Surface and
+        # persist that answer first; the slower rank/history enrichment runs
+        # after the LOGIN flow is already complete.
+        await asyncio.sleep(0.35)
+
+        info = await asyncio.to_thread(launcher.get_active_riot_session, target_username)
+        if info and info.get("found") and info.get("status_confirmed"):
+            detected = True
+            client_launcher._set_login_stage(
+                "done", f"Logged in as {info.get('display_name') or info.get('username')}"
+            )
+            update_payload = {
+                k: v for k, v in info.items()
+                if k not in ("found", "username", "status_confirmed")
+            }
+            update_payload["last_updated"] = datetime.now().isoformat()
+            current_acc = db.get_account_by_id(account_id)
+            if current_acc and current_acc.get("tag") in ("Smurf", "Ranked", "Unrated", "", None):
+                update_payload["tag"] = db.category_for_account(info)
+
+            moved = apply_account_update(account_id, update_payload)
+            if _stay_signed_in_pref():
+                persisted = await asyncio.to_thread(client_launcher.is_session_persisted)
+                client_launcher.LOGIN_PROGRESS["stay_signed_in"] = persisted
+            if _auto_launch_pref() and not moved:
+                asyncio.create_task(_launch_game_for_current_session())
+            if not moved and info.get("display_name"):
+                asyncio.create_task(background_scrape_account(
+                    account_id, info["display_name"], info.get("region") or "NA"
+                ))
+            break
 
         # Check for immediate auth error from Riot lockfile API
         auth_err = await asyncio.to_thread(launcher.check_login_error)
@@ -387,6 +417,14 @@ async def _wait_for_checked_account(username: str, timeout: float = 120.0,
 
         if message:
             CHECK_PROGRESS["message"] = f"{username}: {message}"
+
+        quick_info = await asyncio.to_thread(launcher.get_active_riot_session, username)
+        if quick_info and quick_info.get("found") and quick_info.get("status_confirmed"):
+            client_launcher._set_login_stage(
+                "done", f"Verified {quick_info.get('display_name') or username}.", username
+            )
+            return {"info": quick_info, "cancelled": False, "invalid_credentials": False,
+                    "message": ""}
 
         info = await asyncio.to_thread(launcher.get_active_riot_account, username)
         if (info and info.get("found") and
@@ -740,7 +778,9 @@ async def recheck_banned_account(account_id: int):
     detected_info = None
     for _ in range(14):
         await asyncio.sleep(0.5)
-        info = await asyncio.to_thread(launcher.get_active_riot_account, acc["username"])
+        info = await asyncio.to_thread(launcher.get_active_riot_session, acc["username"])
+        if info and not info.get("status_confirmed"):
+            info = None
         if info and info.get("found") and info.get("username", "").strip().lower() == acc["username"].strip().lower():
             detected_info = info
             break
@@ -1449,6 +1489,16 @@ async def launch_account(account_id: int, background_tasks: BackgroundTasks,
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    # A deliberate LOGIN click takes priority over a background roster check.
+    # Otherwise its worker can resume later and log into a different account
+    # after the user has already chosen this one.
+    if CHECK_PROGRESS.get("running"):
+        CHECK_PROGRESS["running"] = False
+        CHECK_PROGRESS["message"] = "Roster verification cancelled by a manual login."
+        client_launcher.cancel_active_login(
+            f"Cancelled to start login for {account['username']}."
+        )
+
     settings = db.get_settings()
     custom_path = settings.get("riot_client_path", "")
 
@@ -1565,14 +1615,6 @@ async def update_settings(req: SettingsUpdate):
         overwolf.enable_live_match_integration()
         restoration = await asyncio.to_thread(_restore_live_match_startup)
 
-    # Handle memory reading enable/disable based on settings change
-    memory_was_enabled = previous.get("memory_reading_enabled", "0") == "1"
-    memory_is_enabled = current.get("memory_reading_enabled", "0") == "1"
-    
-    if memory_was_enabled and not memory_is_enabled:
-        # User disabled memory reading
-        await asyncio.to_thread(memory_reader.disable_memory_reading)
-    
     response = {"success": True, "settings": db.get_settings()}
     if cleanup is not None:
         response["live_match_cleanup"] = cleanup
@@ -1635,60 +1677,6 @@ async def open_login_log():
 async def app_version():
     """Returns the running app's version, for display in Settings/About."""
     return {"version": APP_VERSION}
-
-
-@app.post("/api/memory-reading/enable")
-async def enable_memory_reading_endpoint():
-    """
-    Enable in-game memory reading for accessing hidden player information.
-    WARNING: This may violate Terms of Service.
-    """
-    settings = db.get_settings()
-    if settings.get("memory_reading_enabled", "0") != "1":
-        return {
-            "success": False,
-            "message": "Memory reading is disabled in settings. Enable it first in Settings > Advanced."
-        }
-    
-    # Get mode from settings (default to external, which is safer)
-    mode = settings.get("memory_reading_mode", "external")
-    
-    result = await asyncio.to_thread(memory_reader.enable_memory_reading, mode)
-    return result
-
-
-@app.post("/api/memory-reading/disable")
-async def disable_memory_reading():
-    """Disable in-game memory reading"""
-    await asyncio.to_thread(memory_reader.disable_memory_reading)
-    return {"success": True, "message": "Memory reading disabled"}
-
-
-@app.get("/api/memory-reading/status")
-async def memory_reading_status():
-    """Check if memory reading is currently active"""
-    enabled = await asyncio.to_thread(memory_reader.is_memory_reading_enabled)
-    settings_enabled = db.get_settings().get("memory_reading_enabled", "0") == "1"
-    return {
-        "enabled": enabled,
-        "settings_enabled": settings_enabled,
-        "message": "Memory reading is active" if enabled else "Memory reading is inactive"
-    }
-
-
-@app.get("/api/memory-reading/players")
-async def get_memory_players():
-    """Get player list from game memory"""
-    settings = db.get_settings()
-    if settings.get("memory_reading_enabled", "0") != "1":
-        return {
-            "success": False,
-            "message": "Memory reading is disabled in settings",
-            "players": []
-        }
-    
-    result = await asyncio.to_thread(memory_reader.get_memory_players)
-    return result
 
 
 @app.get("/api/check-update")
@@ -1846,10 +1834,7 @@ def _live_combat_snapshot(match_id: str) -> Dict[str, Any]:
             "source": "disabled",
             "reason": "Optional Overwolf telemetry is disabled in Settings.",
         }
-    return _LIVE_COMBAT.snapshot(
-        match_id,
-        allow_tracker=True,
-    )
+    return _LIVE_COMBAT.snapshot(match_id, allow_tracker=True)
 
 # Set by build_live_snapshot(): True only in agent select or a live match.
 # app.py's Live Aim HUD keeper reads this to stay hidden in the menus.
@@ -2526,6 +2511,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "damage": 0,
         "source": "unavailable",
         "headshot_kill_pct": None,
+        "hs_pct_basis": None,
         # Round-derived - live every poll, whatever Riot is or isn't publishing.
         "rounds_played": played,
         "rounds_won": rounds_won,
@@ -2539,7 +2525,8 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
 
     # Overwolf's official VALORANT Game Events Provider supplies the live
     # scoreboard and local round reports that Riot's core-game response omits.
-    if event_live.get("available"):
+    event_has_local_score = event_live.get("available")
+    if event_has_local_score:
         kills = int(event_live.get("kills", 0) or 0)
         deaths = int(event_live.get("deaths", 0) or 0)
         assists = int(event_live.get("assists", 0) or 0)
@@ -2558,6 +2545,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "kda": round((kills + assists) / max(1, deaths), 2),
             "hs_pct": event_live.get("hs_pct"),
             "headshot_kill_pct": event_live.get("headshot_kill_pct"),
+            "hs_pct_basis": event_live.get("hs_pct_basis"),
             "adr": event_live.get("adr"),
             "acs": event_live.get("acs"),
             "headshots": int(event_live.get("headshots", 0) or 0),
@@ -2569,7 +2557,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "accuracy_history": event_live.get("accuracy_history") or [],
         })
 
-    if live:
+    if live and not event_has_local_score:
         kills = int(live.get("kills", 0) or 0)
         deaths = int(live.get("deaths", 0) or 0)
         assists = int(live.get("assists", 0) or 0)
@@ -2591,6 +2579,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "kda": round((kills + assists) / max(1, deaths), 2),
             "hs_pct": round(head / shots * 100, 1) if shots else 0.0,
             "headshot_kill_pct": None,
+            "hs_pct_basis": "shots" if shots else None,
             "adr": live.get("adr", 0),
             "acs": live.get("acs", 0),
             "headshots": head,
@@ -2600,7 +2589,6 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
             "damage": int(live.get("total_damage", 0) or 0),
             "kills_per_round": round(kills / max(1, live_rounds), 2),
         })
-
     recent = {
         "kd": me.get("kd", 0.0),
         "kda": me.get("kda", 0.0),
@@ -2654,6 +2642,7 @@ def _self_block(client, match_id: str, me: Optional[Dict[str, Any]],
         "kd": current["kd"],
         "kda": current["kda"],
         "hs_pct": current["hs_pct"],
+        "hs_pct_basis": current["hs_pct_basis"],
         "adr": current["adr"],
         "acs": current["acs"],
         "headshots": current["headshots"],
@@ -2925,13 +2914,33 @@ def _build_pregame_block(client, presence: Dict[str, Any], match_id: Optional[st
     team_id = (ally_team.get("TeamID") or "Blue").strip()
     starting_side = "Defender" if team_id.lower() == "blue" else "Attacker"
 
-    # Enemy team in pregame (if available, e.g. custom games)
+    # Enemy team: the pregame endpoint exposes EnemyTeam only in custom games;
+    # in standard matchmaking it is always empty. Fall back to presence-based
+    # discovery: read all players whose local client reports sessionLoopState
+    # PREGAME and subtract the known ally PUUIDs to get the enemy five.
     enemy_team = data.get("EnemyTeam") or {}
     enemy = enemy_team.get("Players", []) or []
 
+    map_info = valorant_client.resolve_map(data.get("MapID", ""))
+
+    if not enemy:
+        ally_puuids = [p.get("Subject", "") for p in ally if p.get("Subject")]
+        map_asset_path = data.get("MapID", "")
+        try:
+            enemy_puuids = client.pregame_enemy_puuids(ally_puuids, map_asset_path)
+        except Exception:
+            enemy_puuids = []
+        # Build minimal player stubs so _roster_entry can fetch their stats.
+        # TeamID is set to "Red" (the conventional enemy-team id when we are Blue).
+        enemy_team_id = "Red" if team_id.lower() == "blue" else "Blue"
+        enemy = [
+            {"Subject": puuid, "TeamID": enemy_team_id, "CharacterID": ""}
+            for puuid in enemy_puuids
+            if puuid and puuid not in {p.get("Subject", "") for p in ally}
+        ]
+
     puuids = [p.get("Subject", "") for p in ally + enemy if p.get("Subject")]
     names = _cached_names(client, match_id, puuids)
-    map_info = valorant_client.resolve_map(data.get("MapID", ""))
 
     remaining_ns = data.get("PhaseTimeRemainingNS", 0) or 0
     queue_id = (presence.get("queueId", "") or "").lower()
@@ -3246,18 +3255,6 @@ def build_live_snapshot() -> Dict[str, Any]:
     if not snapshot["valorant_running"]:
         return snapshot
 
-    # Optional telemetry providers are only started when their Settings
-    # switches are enabled.
-    now = time.monotonic()
-    if (_live_match_features_enabled(db.get_settings()) and
-            now - _OVERWOLF_WAKE["checked_at"] >= 60.0):
-        _OVERWOLF_WAKE["checked_at"] = now
-        try:
-            overwolf.ensure_available()
-            overwolf.ensure_tracker()
-        except Exception:
-            pass
-
     client = valorant_client.ValorantLiveClient()
     if not client.connect():
         snapshot["message"] = "Waiting for the game's session to come up..."
@@ -3431,29 +3428,12 @@ async def overwolf_install():
 
 @app.post("/api/telemetry/gep")
 async def telemetry_gep_event(req: TelemetryEventRequest):
-    """Receive a live VALORANT GEP update from Vortex Telemetry.
-
-    app.py binds the API to 127.0.0.1, so this bridge cannot be reached from
-    another computer. Normalize the event to the format used by the fallback
-    reader before passing it to the combat tracker.
-    """
-    if not _live_match_features_enabled():
-        return {"accepted": False, "disabled": True}
-    raw = req.event if isinstance(req.event, dict) else {}
-    feature = str(raw.get("featureName") or raw.get("feature") or "")
-    key = str(raw.get("key") or "")
-    if not feature or not key:
-        raise HTTPException(status_code=422, detail="Telemetry event needs feature and key.")
-    event = {
-        "featureName": feature,
-        "categoryName": str(raw.get("categoryName") or raw.get("category") or feature),
-        "key": key,
-        "value": raw.get("value"),
+    """Retained compatibility endpoint; direct memory tracking ignores GEP."""
+    return {
+        "accepted": False,
+        "disabled": True,
+        "message": "Direct memory tracking is enabled; telemetry providers are not used.",
     }
-    accepted = await asyncio.to_thread(_LIVE_COMBAT.ingest, event, req.match_id)
-    if accepted:
-        invalidate_live_snapshot()
-    return {"accepted": accepted}
 
 
 @app.get("/api/live/session")

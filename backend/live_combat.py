@@ -89,6 +89,24 @@ def _hs_pct(head_shots: int, total_shots: int, hs_kills, kills):
     return None
 
 
+def _hs_pct_basis(head_shots: int, total_shots: int, hs_kills, kills):
+    """Return the evidence behind ``hs_pct``.
+
+    GEP builds that populate the shot-location counters give a true hit-based
+    percentage.  When those counters are unavailable, the only reliable live
+    value is headshot kills divided by kills.  Keeping this distinction in the
+    API prevents the UI from presenting the fallback as more precise than it
+    is.
+    """
+    hs_kills = int(hs_kills or 0)
+    kills = int(kills or 0)
+    if total_shots and head_shots > hs_kills:
+        return "shots"
+    if kills:
+        return "kills"
+    return None
+
+
 class LiveCombatTracker:
     """Stateful receiver for Vortex Telemetry's current VALORANT GEP session."""
 
@@ -484,6 +502,7 @@ class LiveCombatTracker:
                     round(int(hs_kills or 0) / max(1, int(kills or 0)) * 100, 1)
                     if kills is not None else None
                 ),
+                "hs_pct_basis": _hs_pct_basis(head, shots, hs_kills, kills),
                 "headshots": head,
                 "bodyshots": body,
                 "legshots": leg,

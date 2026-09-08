@@ -124,15 +124,27 @@ Stability: Riot internal endpoints can change. Callers must handle unavailable d
 
 ## Live-match telemetry
 
-Owner: `backend/live_combat.py`, `backend/overwolf.py`, and `overwolf/vortex-telemetry/`
+Owner: `backend/live_combat.py`, `backend/overwolf.py`, and
+`frontend/live_overlay.*`.
 
-Purpose: Provide opt-in match state to the API and `frontend/live_overlay.*`.
+Purpose: Provide optional live-match state without reading or modifying another
+process's memory and without injecting code.
 
-Input: Tracker logs and local telemetry events.
+Input: Opt-in Overwolf/Vortex Telemetry events and Riot client data.
 
 Output: Live-combat state dictionaries with availability/source indicators.
 
-Stability: Optional feature; account management must function when it is disabled or unavailable.
+Stability: Optional feature; account management must function when it is disabled
+or unavailable. Process-memory access, DLL injection, remote threads, and game
+hooks are forbidden.
+
+Live combat source (`server._live_combat_snapshot`):
+
+- `LiveCombatTracker` consumes only the optional telemetry feed.
+- Missing telemetry produces unavailable live stats rather than fabricated data.
+- Live combat snapshots include `hs_pct_basis`: `"shots"` means the provider
+  had hit-location totals, while `"kills"` means the displayed HS value is the
+  headshot-kills / kills fallback. Consumers must label these accurately.
 
 Live Match lifecycle:
 

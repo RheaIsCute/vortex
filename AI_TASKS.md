@@ -1,5 +1,124 @@
 # Shared AI Task Board
 
+> Safety override: direct process-memory access and code injection were removed.
+> The completed legacy entries below are historical only and must not be restored.
+
+### Claude (dashboard skin collection)
+
+Status: DONE
+
+Scope: Make the dashboard Inventory ("skins") tab show the account's actual
+owned skins with images, grouped by rarity, plus a text filter.
+
+Files owned: `backend/valorant_client.py`, `frontend/app.js`,
+`frontend/styles.css`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Notes: Completed 2026-09-08. `_inventory()` returns a `collection` array and
+`tiers` summary; frontend `renderInventory()` renders grouped skin cards with
+valorant-api render icons and a live weapon/name filter. Additive payload
+change, backward compatible. test_valorant_client.py: 25 passed.
+
+### Codex (direct memory live combat, no Overwolf)
+
+Status: DONE
+
+Scope: Make the Memory Reading setting the sole live-combat data source,
+remove Overwolf/VAL Tracker fallback and wake-up behavior from live stats, and
+calculate live HS%/damage metrics from the direct scoreboard when configured
+memory fields are available.
+
+Files owned: `backend/memory_reader.py`, `backend/live_memory.py`,
+`backend/server.py`, `frontend/index.html`, `frontend/app.js`,
+`frontend/live_overlay.js`, `tests/test_live_memory.py`,
+`tests/test_settings_and_ui.py`, `AI_CONTRACTS.md`, `AI_CHANGES.md`,
+`AI_TASKS.md`, `MEMORY_READING.md`
+
+Dependencies: Preserve account management and the existing direct-reader
+settings lifecycle. The legacy Overwolf subsystem may remain available for
+compatibility tests, but must not be called by live combat tracking.
+
+Notes: Completed 2026-09-07. Direct live combat now uses only
+`MemoryCombatTracker`; missing direct offsets remain unavailable and never
+fall back to telemetry. Direct hit/damage fields are normalized when present.
+
+### Codex (live combat metric fidelity)
+
+Status: DONE
+
+Scope: Preserve real Overwolf/VAL Tracker live combat data through the
+current-match dashboard and roster, distinguish shot-based HS% from the
+headshot-kill fallback, and keep the existing Live Match setting as the gate.
+
+Files owned: `backend/live_combat.py`, `backend/live_memory.py`,
+`backend/server.py`, `frontend/app.js`, `frontend/live_overlay.js`,
+`frontend/styles.css`, `tests/test_live_combat.py`,
+`tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve the existing optional provider lifecycle and the
+memory-reading compatibility path.
+
+Notes: Completed 2026-09-07. Live snapshots now preserve event-provider
+K/D/A, distinguish shot-based HS% from headshot-kill fallback values, and
+surface source/live state in the dashboard, HUD, and self roster. Full suite
+and syntax checks passed.
+
+### Claude (memory-read live combat provider)
+
+Status: DONE
+
+Scope: Add a second live-combat provider that reads exact current-match K/D/A
+(self + full lobby) from VALORANT process memory, gated by the existing Memory
+Reading setting, feeding the same HUD + live roster as the Overwolf provider.
+
+Files owned: `backend/memory_reader.py`, `backend/live_memory.py` (new),
+`backend/server.py`, `frontend/app.js`, `frontend/live_overlay.js`,
+`frontend/index.html`, `tests/test_live_memory.py`, `AI_CHANGES.md`,
+`AI_CONTRACTS.md`, `AI_TASKS.md`, `MEMORY_READING.md`
+
+Dependencies: Preserve the Overwolf/Vortex-Telemetry provider and the Live
+Match Features lifecycle contract; account management must still work with both
+toggles off. External-only aim/ESP/trigger code is explicitly out of scope and
+was declined.
+
+Notes: Completed 2026-09-07. `MemoryCombatTracker` produces the same snapshot
+shape `_self_block()`/`_attach_live_combat()` already consume;
+`_live_combat_snapshot()` prefers memory when it resolves and merges Overwolf's
+per-shot precision on top, else falls back unchanged. The patch-specific
+`playerstate_*` struct offsets ship at 0, so until they are set via
+`POST /api/memory-reading/offsets` the provider reports "not resolved" and the
+Overwolf fallback engages. Structural machinery + wiring + fallback covered by
+`tests/test_live_memory.py` with a fake reader. Full suite not run here (the
+session's command runner was blocked after unrelated pasted content) — run
+`python -m pytest` before release.
+
+### Antigravity (fix memory reading in settings feature)
+
+Status: DONE
+
+Scope: Fix memory reading settings toggle and mode selection in frontend UI,
+ensure memory reading auto-attaches and syncs with backend settings, fix
+process liveness and clean exit detection, and fix 64-bit ctypes Win32 handle
+truncation in memory reading and injection.
+
+Files owned: `backend/memory_reader.py`, `backend/injector.py`, `backend/server.py`,
+`frontend/app.js`, `tests/test_settings_and_ui.py`, `tests/test_memory_reader.py`,
+`AI_TASKS.md`, `AI_CHANGES.md`
+
+Notes: Completed 2026-09-07. Added dynamic mode section visibility binding to
+settings modal and toggle events; updated server settings handler to properly
+arm/enable memory reading on save and mode switch; integrated automatic attachment
+during live match loop and startup when VALORANT is running; added clean detachment
+on VALORANT process exit; established explicit 64-bit ctypes signatures for all Win32
+calls; fixed INVALID_HANDLE_VALUE detection; and added comprehensive tests (144 passed).
+
+### Codex (Windows startup port conflict)
+
+Status: DONE
+
+Scope: Correct Windows port availability checks and repair the local launcher.
+
+Files owned: `app.py`, `tests/test_startup_port.py`, `AI_TASKS.md`, `AI_CHANGES.md`
+
 Read this file before editing. Do not assume an assignment from stale chat context.
 
 ## Status values

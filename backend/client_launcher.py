@@ -139,9 +139,10 @@ _VALORANT_PROCS = {"valorant.exe", "valorant-win64-shipping.exe"}
 _RIOT_PROCS = {"riot client.exe", "riotclientservices.exe", "riotclientux.exe",
                "riotclientuxrender.exe", "riotclientcrashhandler.exe"}
 
-# Riot can briefly show an authenticated-looking error modal after a submit.
-# Keep this retry budget local to one login request so a flaky client cannot
-# create an unbounded sign-out/sign-in loop.
+# Riot can briefly show an authenticated-looking error modal, or leave the
+# sign-in form mounted with an inline "trouble signing you in" message, after
+# a submit. Keep this retry budget local to one login request so a flaky client
+# cannot create an unbounded sign-out/sign-in loop.
 _RIOT_POPUP_MAX_ATTEMPTS = 3
 _RIOT_POPUP_RESULT_TIMEOUT = 45.0
 
@@ -281,11 +282,52 @@ _LOGIN_HARD_LIMIT = 210.0
 # arriving together must never run that sequence concurrently, otherwise each
 # worker can close the window the other worker is trying to fill.
 _LOGIN_START_LOCK = threading.Lock()
-_LOGIN_CANCEL_EVENT = threading.Event()
+_LOGIN_CANCEL_LOCAL = threading.local()
+_ACTIVE_LOGIN_CANCEL_EVENT = threading.Event()
+
+
+class _ActiveLoginCancelProxy:
+    """Compatibility facade for callers that cancel the current attempt."""
+
+    def set(self) -> None:
+        _ACTIVE_LOGIN_CANCEL_EVENT.set()
+
+    def clear(self) -> None:
+        _ACTIVE_LOGIN_CANCEL_EVENT.clear()
+
+    def is_set(self) -> bool:
+        return _ACTIVE_LOGIN_CANCEL_EVENT.is_set()
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        return _ACTIVE_LOGIN_CANCEL_EVENT.wait(timeout)
+
+
+# Kept as a facade for existing callers/tests; workers use scoped events.
+_LOGIN_CANCEL_EVENT = _ActiveLoginCancelProxy()
+
+
+def _login_cancel_event() -> threading.Event:
+    """Return this worker's cancellation token, never a newer login's token."""
+    return getattr(_LOGIN_CANCEL_LOCAL, "event", _ACTIVE_LOGIN_CANCEL_EVENT)
+
+
+def _run_login_worker(attempt: int, cancel_event: threading.Event, target, *args) -> None:
+    """Run one automation worker with an attempt-scoped cancellation token."""
+    _LOGIN_CANCEL_LOCAL.attempt = attempt
+    _LOGIN_CANCEL_LOCAL.event = cancel_event
+    try:
+        target(*args)
+    finally:
+        _LOGIN_CANCEL_LOCAL.__dict__.clear()
 
 
 def _set_login_stage(stage: str, message: str, username: Optional[str] = None) -> None:
     global _LOGIN_PROGRESS_REVISION
+    attempt = getattr(_LOGIN_CANCEL_LOCAL, "attempt", None)
+    # A superseded worker can finish an in-flight UIA call after a newer LOGIN
+    # has started. Its status must never replace the newer request's progress.
+    if attempt is not None and attempt != LOGIN_PROGRESS.get("attempt"):
+        return
     terminal = stage in ("done", "error", "idle")
     if terminal:
         login_logger.info("[%s] login cleanup starting for terminal stage=%s", username or LOGIN_PROGRESS.get("username", ""), stage)
@@ -333,7 +375,7 @@ def wait_for_login_progress_change(revision: int, timeout: float = 1.0):
 
 def cancel_active_login(message: str = "Verification cancelled.") -> None:
     """Stop the active automation worker at its next safe checkpoint."""
-    _LOGIN_CANCEL_EVENT.set()
+    _ACTIVE_LOGIN_CANCEL_EVENT.set()
     if LOGIN_PROGRESS.get("active"):
         _set_login_stage("error", message, LOGIN_PROGRESS.get("username") or None)
 
@@ -621,7 +663,7 @@ def set_stay_signed_in(hwnd: int, window=None, checkbox=None,
         # fixed amount on every successful normal-path toggle.
         deadline = time.monotonic() + 0.4
         while not ticked and time.monotonic() < deadline:
-            if _LOGIN_CANCEL_EVENT.wait(0.02):
+            if _login_cancel_event().wait(0.02):
                 return False
             ticked = checkbox.GetTogglePattern().ToggleState == 1
 
@@ -817,6 +859,10 @@ class ClientLauncher:
             # for to get it corrected on the next real sync.
             "region": "",
             "status": "PLAYABLE",
+            # PLAYABLE is only authoritative once the local userinfo endpoint
+            # has answered; its default must not turn a transient outage into
+            # a false account-status update.
+            "status_confirmed": False,
             "puuid": "",
         }
 
@@ -844,6 +890,7 @@ class ClientLauncher:
                     result["status"] = "BANNED"
                 elif state in ("SUSPENDED", "TEMP_BANNED") or restriction_types & {"TEMPORARY_BAN", "SUSPENDED"}:
                     result["status"] = "SUSPENDED"
+                result["status_confirmed"] = True
 
                 region_id = str((info.get("region") or {}).get("id") or info.get("original_platform_id", "")).upper()
                 if any(x in region_id for x in ("LA", "LAN", "LAS", "LATAM")):
@@ -1326,20 +1373,40 @@ class ClientLauncher:
             return False
 
     @classmethod
-    def read_login_ui_state(cls, hwnd: Optional[int] = None):
-        """Return popup and validation state from one scoped UIA traversal."""
+    def read_login_ui_state(cls, hwnd: Optional[int] = None, include_retryable: bool = False):
+        """Return popup/validation state, optionally including retryable errors.
+
+        The optional third value is separate from ``popup_sign_out`` because
+        current Riot builds can keep the sign-in form visible and show the
+        failure copy without rendering the modal's ``Sign out`` button.
+        """
         auto = _uia()
         if auto is None:
-            return None, None
+            return (None, None, None) if include_retryable else (None, None)
         try:
             hwnd = hwnd or cls.find_riot_window()
             if not hwnd:
-                return None, None
+                return (None, None, None) if include_retryable else (None, None)
             snapshot = cls._snapshot_for_hwnd(hwnd, auto)
-            return snapshot.get("popup_sign_out"), snapshot.get("validation_error")
+            state = (
+                snapshot.get("popup_sign_out"),
+                snapshot.get("validation_error"),
+                snapshot.get("retryable_error"),
+            )
+            return state if include_retryable else state[:2]
         except Exception as exc:
             login_logger.debug("login state detection failed: %s", exc)
-            return None, None
+            return (None, None, None) if include_retryable else (None, None)
+
+    @staticmethod
+    def _unpack_login_ui_state(state):
+        """Accept old two-value test/integration results as well as new state."""
+        values = tuple(state or ())
+        if len(values) >= 3:
+            return values[0], values[1], values[2]
+        if len(values) == 2:
+            return values[0], values[1], None
+        return None, None, None
 
     @classmethod
     def find_transient_login_popup(cls, hwnd: Optional[int] = None):
@@ -1349,14 +1416,22 @@ class ClientLauncher:
         action. That keeps a generic Riot button, or a normal signed-in client,
         from triggering account recovery.
         """
-        popup, _ = cls.read_login_ui_state(hwnd)
+        popup, _, _ = cls._unpack_login_ui_state(cls.read_login_ui_state(hwnd))
         return popup
 
     @classmethod
     def find_login_validation_error(cls, hwnd: Optional[int] = None) -> Optional[str]:
         """Return known client-side form validation copy without reading credentials."""
-        _, validation_error = cls.read_login_ui_state(hwnd)
+        _, validation_error, _ = cls._unpack_login_ui_state(cls.read_login_ui_state(hwnd))
         return validation_error
+
+    @classmethod
+    def find_login_retryable_error(cls, hwnd: Optional[int] = None) -> Optional[str]:
+        """Return transient Riot sign-in failure state without exposing credentials."""
+        _, _, retryable_error = cls._unpack_login_ui_state(
+            cls.read_login_ui_state(hwnd, include_retryable=True)
+        )
+        return retryable_error
 
     @classmethod
     def click_transient_login_sign_out(cls, hwnd: Optional[int] = None, button=None) -> bool:
@@ -1384,20 +1459,21 @@ class ClientLauncher:
         """Wait until the detected modal is no longer present."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return False
-            popup, _ = cls.read_login_ui_state()
+            popup, _, _ = cls._unpack_login_ui_state(cls.read_login_ui_state())
             if popup is None:
                 return True
-            _LOGIN_CANCEL_EVENT.wait(0.1)
-        popup, _ = cls.read_login_ui_state()
+            _login_cancel_event().wait(0.1)
+        popup, _, _ = cls._unpack_login_ui_state(cls.read_login_ui_state())
         return popup is None
 
     @classmethod
     def _monitor_login_result(cls, username: str, password: str,
                               stay_signed_in: bool, client_path: Optional[str] = None,
                               timeout: float = _RIOT_POPUP_RESULT_TIMEOUT) -> Optional[bool]:
-        """Watch the submitted login for success, auth errors, or Riot's modal.
+        """Watch the submitted login for success, auth errors, or Riot's transient
+        modal/inline failure states.
 
         This runs on the same worker that filled the form, which is important
         for UI Automation's single-threaded COM apartment. On the transient
@@ -1408,7 +1484,7 @@ class ClientLauncher:
         popup_attempt = 1
 
         while time.monotonic() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return False
             session = cls.get_active_riot_session(username)
             session_user = (session.get("username") or "").strip().lower() if session else ""
@@ -1420,7 +1496,9 @@ class ClientLauncher:
                 )
                 return True
 
-            popup_button, validation_error = cls.read_login_ui_state()
+            popup_button, validation_error, retryable_error = cls._unpack_login_ui_state(
+                cls.read_login_ui_state(include_retryable=True)
+            )
             if popup_button is not None:
                 login_logger.warning("[%s] Riot transient login popup detected", username)
                 if popup_attempt >= _RIOT_POPUP_MAX_ATTEMPTS:
@@ -1479,6 +1557,36 @@ class ClientLauncher:
                     return False
                 continue
 
+            if retryable_error:
+                login_logger.warning(
+                    "[%s] Riot inline transient sign-in error detected: %s",
+                    username, retryable_error,
+                )
+                if popup_attempt >= _RIOT_POPUP_MAX_ATTEMPTS:
+                    message = f"Riot login temporarily unavailable after {_RIOT_POPUP_MAX_ATTEMPTS} attempts."
+                    login_logger.error(
+                        "[%s] Riot inline transient login failure persisted after %d attempts",
+                        username, popup_attempt,
+                    )
+                    _set_login_stage("error", message, username)
+                    return False
+
+                popup_attempt += 1
+                _set_login_stage(
+                    "typing",
+                    f"Retrying login: attempt {popup_attempt}/{_RIOT_POPUP_MAX_ATTEMPTS}...",
+                    username,
+                )
+                result = cls._attempt_login_fill(
+                    username, password, stay_signed_in, tries=3, form_timeout=20.0
+                )
+                if result is not True:
+                    _set_login_stage(
+                        "error", "Riot's sign-in form was not ready for the retry.", username
+                    )
+                    return False
+                continue
+
             if validation_error:
                 login_logger.warning("[%s] Riot client-side validation detected: %s", username, validation_error)
                 _set_login_stage(
@@ -1500,7 +1608,7 @@ class ClientLauncher:
                 )
                 return False
 
-            _LOGIN_CANCEL_EVENT.wait(0.2)
+            _login_cancel_event().wait(0.2)
 
         message = "Riot did not confirm this sign-in before the attempt timed out. Please try again."
         login_logger.warning("[%s] login result monitor timed out", username)
@@ -1529,7 +1637,7 @@ class ClientLauncher:
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return None
             auth = cls.get_lockfile_auth()
             if not auth:
@@ -1554,11 +1662,11 @@ class ClientLauncher:
         """Blocks until none of `names` is running. Lowercase exe names."""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return False
             if not _is_process_running_fast(names):
                 return True
-            _LOGIN_CANCEL_EVENT.wait(0.1)
+            _login_cancel_event().wait(0.1)
         return not _is_process_running_fast(names)
 
     @classmethod
@@ -1588,7 +1696,7 @@ class ClientLauncher:
         poll_interval = 0.04
         try:
             while True:
-                if _LOGIN_CANCEL_EVENT.is_set():
+                if _login_cancel_event().is_set():
                     return None
                 hwnd = cls.find_riot_window()
                 if not hwnd:
@@ -1619,8 +1727,8 @@ class ClientLauncher:
                     break
                 wait_for = min(remaining, poll_interval)
                 woke = (
-                    listener.wait(wait_for, _LOGIN_CANCEL_EVENT)
-                    if listener else _LOGIN_CANCEL_EVENT.wait(wait_for)
+                    listener.wait(wait_for, _login_cancel_event())
+                    if listener else _login_cancel_event().wait(wait_for)
                 )
                 poll_interval = 0.04 if woke else min(0.25, poll_interval * 1.6)
         finally:
@@ -1732,9 +1840,20 @@ class ClientLauncher:
             ):
                 submit = button
         all_text = " ".join(names)
-        popup_failure = (
-            "unable to load" in all_text or
-            "trouble signing you in right now" in all_text
+        # Riot exposes this failure in two shapes. The older/current modal has
+        # a Sign out button; the state shown on the login page keeps the form
+        # mounted and only exposes the failure copy. Match semantic fragments
+        # so UIA splitting the sentence across text nodes still works.
+        has_inline_failure_copy = (
+            "trouble signing you in" in all_text and
+            ("right now" in all_text or "try again later" in all_text)
+        )
+        has_load_failure_copy = "unable to load" in all_text
+        transient_failure = has_inline_failure_copy or has_load_failure_copy
+        popup_failure = transient_failure and sign_out is not None
+        retryable_error = (
+            "inline_transient_sign_in"
+            if transient_failure and not popup_failure else None
         )
         validation_error = None
         if "special characters" in all_text and (
@@ -1748,6 +1867,7 @@ class ClientLauncher:
             "submit": submit,
             "stay_signed_in": checkbox,
             "popup_sign_out": sign_out if popup_failure else None,
+            "retryable_error": retryable_error,
             "validation_error": validation_error,
         }
 
@@ -1826,7 +1946,7 @@ class ClientLauncher:
                     label, type(e).__name__,
                 )
 
-        if _LOGIN_CANCEL_EVENT.is_set():
+        if _login_cancel_event().is_set():
             return False
 
         # Some Riot builds expose a read-only ValuePattern even though keyboard
@@ -1870,7 +1990,7 @@ class ClientLauncher:
         deadline = time.monotonic() + max(0.0, timeout)
         control = submit_control
         poll_interval = 0.04
-        while not _LOGIN_CANCEL_EVENT.is_set():
+        while not _login_cancel_event().is_set():
             if control is None:
                 try:
                     control = cls._scan_login_controls(window).get("submit")
@@ -1893,8 +2013,8 @@ class ClientLauncher:
                 break
             wait_for = min(remaining, poll_interval)
             woke = (
-                listener.wait(wait_for, _LOGIN_CANCEL_EVENT)
-                if listener is not None else _LOGIN_CANCEL_EVENT.wait(wait_for)
+                listener.wait(wait_for, _login_cancel_event())
+                if listener is not None else _login_cancel_event().wait(wait_for)
             )
             poll_interval = 0.04 if woke else min(0.2, poll_interval * 1.6)
             try:
@@ -1902,7 +2022,7 @@ class ClientLauncher:
             except Exception:
                 control = None
 
-        if _LOGIN_CANCEL_EVENT.is_set():
+        if _login_cancel_event().is_set():
             return False
         try:
             pass_field.SetFocus()
@@ -1926,13 +2046,13 @@ class ClientLauncher:
         pyautogui.press('tab')
 
         while time.monotonic() < deadline:
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return None
             remaining = deadline - time.monotonic()
             if listener is not None:
-                listener.wait(min(0.25, max(0.0, remaining)), _LOGIN_CANCEL_EVENT)
+                listener.wait(min(0.25, max(0.0, remaining)), _login_cancel_event())
             else:
-                _LOGIN_CANCEL_EVENT.wait(min(0.25, max(0.0, remaining)))
+                _login_cancel_event().wait(min(0.25, max(0.0, remaining)))
             try:
                 snapshot = cls._scan_login_controls(window)
             except Exception:
@@ -1978,7 +2098,7 @@ class ClientLauncher:
         filled, and None when no form appeared at all.
         """
         for attempt in range(1, tries + 1):
-            if _LOGIN_CANCEL_EVENT.is_set():
+            if _login_cancel_event().is_set():
                 return False
             form = cls.wait_for_login_form(timeout=form_timeout if attempt == 1 else 10.0)
             if form is None:
@@ -2037,7 +2157,7 @@ class ClientLauncher:
                     pass_field = snapshot.get("password") or pass_field
                     if cls._field_text(user_field) != username:
                         continue
-                if _LOGIN_CANCEL_EVENT.is_set():
+                if _login_cancel_event().is_set():
                     return False
 
                 if pass_field is None:
@@ -2049,14 +2169,14 @@ class ClientLauncher:
                             "password field never mounted after advancing from username"
                         )
                         continue
-                if _LOGIN_CANCEL_EVENT.is_set():
+                if _login_cancel_event().is_set():
                     return False
 
                 _set_login_stage("typing", "Entering password...", username)
                 if not cls.fill_field_verified(pass_field, password, "password", masked=True):
                     continue
                 _timing_mark("password_assigned")
-                if _LOGIN_CANCEL_EVENT.is_set():
+                if _login_cancel_event().is_set():
                     return False
 
                 # One fresh scoped traversal is both the final popup check and
@@ -2094,7 +2214,7 @@ class ClientLauncher:
                         checkbox=snapshot.get("stay_signed_in"),
                         password_field=pass_field,
                     )
-                    if _LOGIN_CANCEL_EVENT.is_set():
+                    if _login_cancel_event().is_set():
                         return False
                     if rescanned_user is not None and cls._field_text(user_field) != username:
                         login_logger.warning("the form reset while setting stay-signed-in")
@@ -2137,14 +2257,14 @@ class ClientLauncher:
         a reason another relaunch won't change.
 
         After a form submission, the result monitor also handles Riot's
-        transient "Unable to load" modal with up to three total submissions.
-        That popup-specific retry does not change the form-reset/relaunch
-        policy above.
+        transient "Unable to load" modal and inline sign-in error with up to
+        three total submissions. That transient-error retry does not change
+        the form-reset/relaunch policy above.
         """
         if getattr(_LOGIN_TIMING_LOCAL, "trace", None) is None:
             _timing_begin()
         _set_login_stage("waiting_window", "Waiting for the Riot Client to open...", username)
-        if _LOGIN_CANCEL_EVENT.is_set():
+        if _login_cancel_event().is_set():
             return
         hwnd = cls.find_riot_window()
         if hwnd:
@@ -2157,7 +2277,7 @@ class ClientLauncher:
 
         # ---- stage 1: the window that's already open ----------------------
         result = cls._attempt_login_fill(username, password, stay_signed_in, tries=3)
-        if _LOGIN_CANCEL_EVENT.is_set():
+        if _login_cancel_event().is_set():
             return
         if result is True:
             cls._monitor_login_result(username, password, stay_signed_in, client_path)
@@ -2356,15 +2476,26 @@ class ClientLauncher:
         and `auto_fill_credentials` still keeps one restart in reserve if the
         page fights back. Each step is confirmed before the next runs.
         """
+        global _ACTIVE_LOGIN_CANCEL_EVENT
         with _LOGIN_START_LOCK:
             age = time.time() - float(LOGIN_PROGRESS.get("started_at") or 0.0)
             if LOGIN_PROGRESS.get("active") and age < 150.0:
                 active_user = LOGIN_PROGRESS.get("username") or "another account"
-                return {
-                    "success": False,
-                    "busy": True,
-                    "message": f"A login for {active_user} is already in progress.",
-                }
+                if active_user.strip().lower() == username.strip().lower():
+                    return {
+                        "success": False,
+                        "busy": True,
+                        "message": f"A login for {active_user} is already in progress.",
+                    }
+                # A new account choice always wins. The prior worker owns its
+                # own token, so it cannot resume when this new attempt starts.
+                _ACTIVE_LOGIN_CANCEL_EVENT.set()
+                _set_login_stage(
+                    "error", f"Cancelled to start login for {username}.", active_user
+                )
+                # Most waits are cancellable; this tiny yield lets an old UIA
+                # worker reach its next checkpoint before we touch the client.
+                time.sleep(0.15)
 
             # Claim the login before doing any process work.  _set_login_stage
             # keeps the claim until the verifier marks the attempt done/error.
@@ -2373,7 +2504,9 @@ class ClientLauncher:
             LOGIN_PROGRESS["stay_signed_in"] = None
             LOGIN_PROGRESS["needs_elevation"] = False
             LOGIN_PROGRESS["active"] = True
-            _LOGIN_CANCEL_EVENT.clear()
+            attempt = LOGIN_PROGRESS["attempt"]
+            _ACTIVE_LOGIN_CANCEL_EVENT = threading.Event()
+            cancel_event = _ACTIVE_LOGIN_CANCEL_EVENT
         login_logger.info("[%s] login attempt started mode=%s", username,
                           "retry" if not restart_client else "standard")
         _set_login_stage("opening", "Preparing to sign in...", username)
@@ -2403,7 +2536,11 @@ class ClientLauncher:
                     login_logger.exception("[%s] retry worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)
 
-            threading.Thread(target=_retry_worker, daemon=True).start()
+            threading.Thread(
+                target=_run_login_worker,
+                args=(attempt, cancel_event, _retry_worker),
+                daemon=True,
+            ).start()
             return {"success": True, "message": f"Retrying the login for {username}..."}
 
         # Fast path: the client is already open. Hand the whole login to one
@@ -2459,14 +2596,19 @@ class ClientLauncher:
                     login_logger.exception("[%s] warm login worker crashed", username)
                     _set_login_stage("error", f"Login automation crashed: {e}", username)
 
-            threading.Thread(target=_warm_worker, daemon=True).start()
+            threading.Thread(
+                target=_run_login_worker,
+                args=(attempt, cancel_event, _warm_worker),
+                daemon=True,
+            ).start()
             return {"success": True, "message": f"Logging in to {username}..."}
 
         # Cold path: nothing open to reuse - full teardown and relaunch, on a
         # worker thread for the same UIA-threading reason.
         threading.Thread(
-            target=cls._full_restart_login,
-            args=(username, password, stay_signed_in, target_path),
+            target=_run_login_worker,
+            args=(attempt, cancel_event, cls._full_restart_login,
+                  username, password, stay_signed_in, target_path),
             daemon=True,
         ).start()
         return {"success": True, "message": f"Logging in to {username}..."}

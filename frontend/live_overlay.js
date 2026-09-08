@@ -28,6 +28,8 @@
 
     function waiting(text = "Waiting for match telemetry") {
         el.root.classList.add("is-waiting");
+        const hsLabelEl = el.root.querySelector(".hud-label");
+        if (hsLabelEl) hsLabelEl.textContent = "HS %";
         el.round.textContent = "WAITING"; el.hs.innerHTML = "--<em>%</em>"; el.sub.textContent = text;
         el.kda.textContent = "-- / -- / --"; el.kd.textContent = "-- KD"; el.observed.textContent = "LIVE";
         el.head.textContent = el.body.textContent = el.leg.textContent = "--"; el.dmg.textContent = "-- DMG"; draw([]);
@@ -61,7 +63,10 @@
         );
         el.root.classList.remove("is-waiting");
         el.round.textContent = `ROUND ${current.round_number || match.round || "--"}`;
+        const hsLabel = current.hs_pct_basis === "kills" ? "HS KILLS %" : "HS %";
         el.hs.innerHTML = `${current.hs_pct == null ? "--" : Number(current.hs_pct).toFixed(1)}<em>%</em>`;
+        const hsLabelEl = el.root.querySelector(".hud-label");
+        if (hsLabelEl) hsLabelEl.textContent = hsLabel;
         el.sub.textContent = (current.source === "overwolf_gep" || current.source === "vortex_telemetry")
             ? "Exact live match data" : "Current match data";
         el.kda.textContent = current.kda_line || "-- / -- / --";

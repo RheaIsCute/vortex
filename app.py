@@ -140,12 +140,17 @@ def find_available_port(default_port: int = 8765) -> int:
     for port in range(default_port, default_port + 50):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # Windows SO_REUSEADDR can bind over another listener, making
+                # an occupied port appear free even though Uvicorn cannot use it.
+                if sys.platform == "win32":
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
                 s.bind(("127.0.0.1", port))
                 return port
         except OSError:
             continue
-    return default_port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 PORT = find_available_port(8765)

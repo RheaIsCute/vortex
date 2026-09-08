@@ -736,8 +736,7 @@
                 <div class="form-group">
                     <p class="field-help">
                         Enables live match tracking and the in-game aim HUD. Turning it
-                        off also closes the VAL Tracker / Overwolf integration and
-                        disables related startup entries.
+                        off hides the optional HUD and disables its telemetry providers.
                     </p>
                     <div class="switch-row">
                         <label class="switch">
@@ -745,8 +744,8 @@
                             <span class="switch-track"><span class="switch-thumb"></span></span>
                         </label>
                         <div class="switch-row-text">
-                            <strong>Enable Live Match Features</strong>
-                            <span>Exact current-game K/D/A, headshot chance and a click-through aim HUD. Off by default; Vortex works normally without it.</span>
+                            <strong>Enable Live Match HUD</strong>
+                            <span>Enables the live dashboard, click-through HUD, and optional telemetry providers.</span>
                         </div>
                     </div>
                 </div>
@@ -796,37 +795,6 @@
                             <strong>Start VALORANT after login</strong>
                             <span>Launches VALORANT automatically once login finishes.</span>
                         </div>
-                    </div>
-                </div>
-                </section>
-
-                <!-- Memory Reading (Risky Feature) -->
-                <section class="settings-section">
-                    <h3 class="settings-section-title"><i class="fa-solid fa-triangle-exclamation" style="color: #ff6b6b;"></i> Memory Reading (RISKY)</h3>
-                <div class="form-group">
-                    <div class="switch-row memory-reading-warning">
-                        <label class="switch">
-                            <input type="checkbox" id="settings-memory-reading">
-                            <span class="switch-track"><span class="switch-thumb"></span></span>
-                        </label>
-                        <div class="switch-row-text">
-                            <strong><i class="fa-solid fa-triangle-exclamation" style="color: #ff6b6b;"></i> Enable In-Game Memory Reading</strong>
-                            <span class="warning-text">⚠️ WARNING: Reads VALORANT process memory to access hidden player usernames and tags. This may violate Riot's Terms of Service and could result in account penalties. Use at your own risk.</span>
-                        </div>
-                    </div>
-                    
-                    <div id="memory-reading-mode-section" style="margin-top: 12px; margin-left: 20px;">
-                        <label style="font-size: 12px; color: var(--text-sub); display: block; margin-bottom: 6px;">
-                            <i class="fa-solid fa-cog"></i> Memory Reading Mode:
-                        </label>
-                        <select id="settings-memory-reading-mode" class="form-control" style="max-width: 300px;">
-                            <option value="external">External (Safer - needs offsets)</option>
-                            <option value="internal">Internal (No offsets - EXTREMELY RISKY)</option>
-                        </select>
-                        <p class="field-help" style="margin-top: 6px;">
-                            <strong>External:</strong> Uses ReadProcessMemory. Requires offset updates but less detectable.<br>
-                            <strong>Internal:</strong> Injects DLL into game. No offsets needed but HIGHLY detectable by Vanguard. Almost guaranteed ban.
-                        </p>
                     </div>
                 </div>
                 </section>

@@ -103,6 +103,35 @@ class LoginThreadingTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("Riot Client.exe", command)
 
+    def test_login_for_a_different_account_supersedes_the_active_attempt(self):
+        original_event = cl._ACTIVE_LOGIN_CANCEL_EVENT
+        try:
+            old_event = threading.Event()
+            cl._ACTIVE_LOGIN_CANCEL_EVENT = old_event
+            cl.LOGIN_PROGRESS.update(
+                active=True, username="old-account", started_at=time.time(), attempt=4,
+            )
+            with patch.object(cl.ClientLauncher, "detect_riot_client_path", return_value=__file__), \
+                 patch("os.path.exists", return_value=True), \
+                 patch.object(cl.ClientLauncher, "find_riot_window", return_value=None), \
+                 patch.object(cl.ClientLauncher, "_full_restart_login"):
+                result = cl.ClientLauncher.login_account("new-account", "pw", client_path=__file__)
+
+            self.assertTrue(result["success"])
+            self.assertTrue(old_event.is_set())
+            self.assertEqual("new-account", cl.LOGIN_PROGRESS["username"])
+            self.assertFalse(cl._ACTIVE_LOGIN_CANCEL_EVENT.is_set())
+        finally:
+            cl._ACTIVE_LOGIN_CANCEL_EVENT = original_event
+
+    def test_superseded_worker_cannot_replace_newer_progress(self):
+        cl.LOGIN_PROGRESS.update(active=True, username="new", stage="opening", attempt=9)
+        cl._run_login_worker(
+            8, threading.Event(), cl._set_login_stage, "error", "old worker", "old"
+        )
+        self.assertEqual("opening", cl.LOGIN_PROGRESS["stage"])
+        self.assertEqual("new", cl.LOGIN_PROGRESS["username"])
+
 
 class CredentialInputTests(unittest.TestCase):
     class Control:
@@ -167,6 +196,23 @@ class CredentialInputTests(unittest.TestCase):
         self.assertIs(snapshot["submit"], submit)
         self.assertIs(snapshot["stay_signed_in"], checkbox)
         self.assertIs(snapshot["popup_sign_out"], sign_out)
+
+    def test_control_scan_detects_inline_signin_failure_without_signout(self):
+        username = self.Control(name="Username", automation_id="login-user")
+        password = self.Control(automation_id="password-input", is_password=True)
+        failure = self.Control(
+            name="Sorry, we're having trouble signing you in right now. "
+                 "Please try again later."
+        )
+        root = self.Control(
+            control_type="WindowControl",
+            children=[username, password, failure],
+        )
+
+        snapshot = cl.ClientLauncher._scan_login_controls(root)
+
+        self.assertIsNone(snapshot["popup_sign_out"])
+        self.assertEqual(snapshot["retryable_error"], "inline_transient_sign_in")
 
     def test_single_edit_page_resolves_username_only(self):
         username = self.Control(name="", automation_id="")
@@ -537,6 +583,26 @@ class RiotTransientLoginPopupTests(unittest.TestCase):
             "Riot login temporarily unavailable after 3 attempts.",
         )
         self.assertFalse(cl.LOGIN_PROGRESS["active"])
+
+    def test_inline_error_retries_same_form_and_then_succeeds(self):
+        with patch.object(cl.ClientLauncher, "get_active_riot_session", side_effect=[
+                None, {"found": True, "username": "acc", "display_name": "Player#NA1"}]), \
+             patch.object(
+                 cl.ClientLauncher,
+                 "read_login_ui_state",
+                 side_effect=[
+                     (None, None, "inline_transient_sign_in"),
+                     (None, None, None),
+                 ],
+             ), \
+             patch.object(cl.ClientLauncher, "_attempt_login_fill", return_value=True) as fill, \
+             patch.object(cl.ClientLauncher, "check_login_error", return_value=None), \
+             patch.object(cl.time, "sleep"):
+            result = cl.ClientLauncher._monitor_login_result("acc", "pw", True, timeout=1)
+
+        self.assertTrue(result)
+        fill.assert_called_once_with("acc", "pw", True, tries=3, form_timeout=20.0)
+        self.assertEqual(cl.LOGIN_PROGRESS["stage"], "done")
 
     def test_two_popups_allow_the_third_attempt_to_succeed(self):
         with patch.object(cl.ClientLauncher, "get_active_riot_session", side_effect=[

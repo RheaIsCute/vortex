@@ -62,9 +62,16 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         # 5. Normal settings does not contain the old settings-log-path input box
         self.assertNotIn('id="settings-log-path"', index_html)
 
-        # 6. The single Live Match switch also explains the external cleanup.
-        self.assertIn("closes the VAL Tracker / Overwolf integration", index_html)
-        self.assertIn("disables related startup entries", index_html)
+        # 6. Live match features remain opt-in.
+        self.assertIn("disables its telemetry providers", index_html)
+        self.assertIn("Enable Live Match HUD", index_html)
+
+        # Live combat keeps the opt-in setting authoritative and labels the
+        # headshot metric honestly when the provider only has headshot kills.
+        self.assertIn('live_hud_enabled: liveMatchOn ? "1" : "0"', app_js)
+        self.assertIn('cur.hs_pct_basis === "kills" ? "HS Kills" : "Headshot"', app_js)
+        self.assertIn('dash-me-live-chip', app_js)
+
 
     def test_legacy_ranked_rendering_uses_backend_eligibility_and_repaints(self):
         root = Path(__file__).parent.parent

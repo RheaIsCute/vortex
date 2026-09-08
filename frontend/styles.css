@@ -2668,23 +2668,6 @@ select.form-control option {
     line-height: 1.4;
 }
 
-/* Warning text styling for risky settings */
-.warning-text {
-    color: var(--danger) !important;
-    font-weight: 600;
-}
-
-.memory-reading-warning {
-    background: rgba(var(--danger-rgb), 0.05);
-    border: 1px solid rgba(var(--danger-rgb), 0.2);
-    border-radius: var(--radius-sm);
-    padding: var(--sp-5);
-}
-
-.memory-reading-warning .switch-row-text strong {
-    color: var(--danger);
-}
-
 /* An earlier edit left `.field-help code` grouped with the checkbox rule, which
    turned inline <code> into a flex container - a block-level box that forced a
    line break either side of it and split one-line help text across three lines. */
@@ -7426,8 +7409,96 @@ body.dashboard-mode .header-actions .header-divider {
 
 .inv-collection {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 10px;
+}
+
+/* --- Owned skin collection -------------------------------------------------- */
+
+.inv-tier-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.inv-tier-chip {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--stroke-1);
+    background: var(--surface-1);
+}
+
+.inv-tier-chip b { color: var(--text-main); margin-left: 3px; }
+
+.inv-search {
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    color: var(--text-main);
+    background: var(--surface-1);
+    border: 1px solid var(--stroke-1);
+    border-radius: var(--radius-md);
+    outline: none;
+    transition: border-color var(--dur-2) ease;
+}
+
+.inv-search:focus { border-color: var(--edge); }
+
+.inv-collection-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.inv-tier-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--skin-tint, var(--stroke-1));
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-sub);
+}
+
+.inv-tier-head img { width: 16px; height: 16px; object-fit: contain; }
+
+.inv-tier-head b {
+    color: var(--text-dim);
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+.inv-skin-collectible {
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+}
+
+.inv-skin-collectible .inv-skin-top { width: 100%; }
+
+.inv-skin-collectible .inv-skin-art {
+    height: 54px;
+    object-position: center;
+    margin: 2px 0;
+}
+
+.inv-skin-collectible .inv-skin-name {
+    max-width: 100%;
+    white-space: normal;
+    font-size: 12px;
+    line-height: 1.25;
 }
 
 /* --- 10.15 Responsive ---------------------------------------------------- */
@@ -8310,6 +8381,26 @@ button.match-card, button.dash-player {
     font-weight: 800;
     color: var(--a-soft);
 }
+
+.dash-me-live-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    padding: 3px 8px;
+    border: 1px solid rgba(45, 212, 191, 0.34);
+    border-radius: var(--radius-full);
+    background: rgba(45, 212, 191, 0.09);
+    color: #5eead4;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.dash-me-live-chip i { font-size: 9px; }
+.dash-me-live-chip + .dash-me-round-chip { margin-left: 0; }
 
 .dash-me-tiles.is-combat {
     margin-top: 8px;

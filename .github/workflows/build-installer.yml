@@ -1,0 +1,37 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build and verify installer
+        shell: cmd
+        run: build.bat
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: VortexSetup
+          path: dist_installer/VortexSetup.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -63,6 +63,7 @@ class LiveCombatTrackerTests(unittest.TestCase):
         # r1 hit=5 head=4 body=1 leg=0; r2 hit=3 head=1 body=1 leg=1 -> head 5
         self.assertEqual(5, out["headshots"])
         self.assertEqual(round(5 / 8 * 100, 1), out["hs_pct"])  # 62.5
+        self.assertEqual("shots", out["hs_pct_basis"])
         self.assertIsNone(out["acs"])
 
     def test_hs_pct_falls_back_to_headshot_kill_rate_when_gep_headshots_stuck(self):
@@ -87,6 +88,7 @@ class LiveCombatTrackerTests(unittest.TestCase):
         out = LiveCombatTracker(self.temp.name).snapshot(self.MATCH_ID)
         self.assertEqual(75.0, out["hs_pct"])       # 3 hs-kills / 4 kills
         self.assertEqual(75.0, out["headshot_kill_pct"])
+        self.assertEqual("kills", out["hs_pct_basis"])
 
     def test_kill_feed_builds_other_player_scoreboard(self):
         def feed(attacker, victim, headshot=False):

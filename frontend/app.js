@@ -437,8 +437,6 @@ const DOM = {
     settingsLiveMatchEnabled: document.getElementById("settings-live-match-enabled"),
     settingsPostValorantEnabled: document.getElementById("settings-post-valorant-enabled"),
     settingsPostValorantPath: document.getElementById("settings-post-valorant-path"),
-    settingsMemoryReading: document.getElementById("settings-memory-reading"),
-    settingsMemoryReadingMode: document.getElementById("settings-memory-reading-mode"),
     updateStatusText: document.getElementById("update-status-text"),
     themePicker: document.getElementById("theme-picker"),
 
@@ -2511,30 +2509,50 @@ async function openMatchesModal(id) {
     }
     openModal(DOM.modalMatches);
 
+    let data;
     try {
-        const res = await fetch(`/api/accounts/${id}/matches`, { signal: controller.signal });
-        const data = await res.json();
-        if (requestToken !== state._matchHistoryRequestToken ||
-            state.activeMatchAccId !== id || !DOM.modalMatches.classList.contains("active")) return;
-        if (data.account) {
-            Object.assign(acc, data.account);
-            syncMatchModalSummary(acc);
-            renderAccounts(true);
+        // Keep only the network round-trip inside the try. A render exception
+        // below must never be reported to the user as "couldn't load match
+        // history" - and, just as importantly, an account that has genuinely
+        // never played a game must land on the neutral empty state, not the
+        // connection-error card.
+        // The endpoint reconciles the live Riot session and can fall back to
+        // several third-party lookups, so give it real time before giving up.
+        const timer = setTimeout(() => controller.abort(), 45000);
+        try {
+            const res = await fetch(`/api/accounts/${id}/matches`, { signal: controller.signal });
+            data = await res.json();
+        } finally {
+            clearTimeout(timer);
         }
-        const matches = Array.isArray(data.matches) && data.matches.length ? data.matches : cachedMatches;
-        state.currentAccountMatches = matches;
-        renderMatchHistoryList(matches);
-        DOM.matchMetaWinrate.textContent = recentWinrateLabel(matches, acc.winrate);
     } catch (err) {
-        if (err.name === "AbortError" || requestToken !== state._matchHistoryRequestToken) return;
+        // A newer open superseded this one - drop it silently. Our own timeout
+        // abort still lands here but keeps the current request token, so it
+        // should surface as a normal failure.
+        if (requestToken !== state._matchHistoryRequestToken) return;
         if (!cachedMatches.length) {
             DOM.matchesListContainer.innerHTML = stateBlock({ kind: "error", icon: "fa-triangle-exclamation", title: "Couldn't load match history", hint: "Check the connection and refresh." });
         }
+        return;
     } finally {
         if (state._matchHistoryAbortController === controller) {
             state._matchHistoryAbortController = null;
         }
     }
+
+    if (requestToken !== state._matchHistoryRequestToken ||
+        state.activeMatchAccId !== id || !DOM.modalMatches.classList.contains("active")) return;
+
+    if (data && data.account) {
+        Object.assign(acc, data.account);
+        syncMatchModalSummary(acc);
+        renderAccounts(true);
+    }
+    const serverMatches = data && Array.isArray(data.matches) ? data.matches : [];
+    const matches = serverMatches.length ? serverMatches : cachedMatches;
+    state.currentAccountMatches = matches;
+    renderMatchHistoryList(matches);
+    DOM.matchMetaWinrate.textContent = recentWinrateLabel(matches, acc.winrate);
 }
 
 // A recent match arrives in one of two shapes: the Account-Manager path
@@ -3727,8 +3745,6 @@ function openSettingsModal() {
     loadLoginLogPath();
     if (DOM.settingsStaySignedIn) DOM.settingsStaySignedIn.checked = (state.settings.stay_signed_in || "1") !== "0";
     if (DOM.settingsAutoLaunch) DOM.settingsAutoLaunch.checked = state.settings.auto_launch_after_login === "1";
-    if (DOM.settingsMemoryReading) DOM.settingsMemoryReading.checked = (state.settings.memory_reading_enabled || "0") === "1";
-    if (DOM.settingsMemoryReadingMode) DOM.settingsMemoryReadingMode.value = state.settings.memory_reading_mode || "external";
     openModal(DOM.modalSettings);
 }
 
@@ -3765,9 +3781,7 @@ async function saveSettings() {
             stay_signed_in: DOM.settingsStaySignedIn?.checked ? "1" : "0",
             auto_launch_after_login: DOM.settingsAutoLaunch?.checked ? "1" : "0",
             post_valorant_launch_enabled: DOM.settingsPostValorantEnabled?.checked ? "1" : "0",
-            post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim(),
-            memory_reading_enabled: DOM.settingsMemoryReading?.checked ? "1" : "0",
-            memory_reading_mode: DOM.settingsMemoryReadingMode?.value || "external"
+            post_valorant_launch_path: (DOM.settingsPostValorantPath?.value || "").trim()
         }
     };
 
@@ -5083,6 +5097,9 @@ function renderDuoBanner(match) {
 function renderAccuracyGraph(current, share) {
     const reports = Array.isArray(current.accuracy_history) ? current.accuracy_history.slice(-12) : [];
     const values = reports.map(report => {
+        if (report.hs_pct !== null && report.hs_pct !== undefined) {
+            return Number(report.hs_pct);
+        }
         const head = Number(report.headshots || 0);
         const body = Number(report.bodyshots || 0);
         const leg = Number(report.legshots || 0);
@@ -5109,7 +5126,7 @@ function renderAccuracyGraph(current, share) {
     return '<div class="dash-accuracy-card" title="Headshot accuracy by observed round">' +
         '<div class="dash-accuracy-heading">' +
             '<span><i class="fa-solid fa-chart-line"></i> Aim trace</span>' +
-            '<strong>' + hs + '% <small>HS</small></strong>' +
+            '<strong>' + hs + '% <small>' + (current.hs_pct_basis === "kills" ? "HS KILLS" : "HS") + '</small></strong>' +
         '</div>' +
         '<div class="dash-accuracy-plot">' +
             '<span class="dash-accuracy-grid g1"></span><span class="dash-accuracy-grid g2"></span><span class="dash-accuracy-grid g3"></span>' +
@@ -5159,7 +5176,8 @@ function renderMeCard(match) {
     const recent = me.recent || {};
     const hasCombat = !!cur.available;
     const inMatch = match.phase === "in_match";
-    const gepLive = cur.source === "overwolf_gep" || cur.source === "vortex_telemetry";
+    const hsLabel = cur.hs_pct_basis === "kills" ? "HS Kills" : "Headshot";
+    const liveSourceLabel = cur.source === "vortex_telemetry" ? "Vortex Telemetry" : "Riot client";
 
     const num = (v, digits) => (v === null || v === undefined)
         ? "--"
@@ -5172,7 +5190,7 @@ function renderMeCard(match) {
     const combatTiles = [
         { k: "K / D / A", v: cur.kda_line || "--", c: hasCombat ? "is-kda" : "is-pending" },
         { k: "K/D", v: num(cur.kd, 2), c: goodBad(cur.kd, 1) },
-        { k: cur.hs_pct != null ? "Headshot" : "HS Kills", v: cur.hs_pct != null ? pct(cur.hs_pct) : pct(cur.headshot_kill_pct), c: hasCombat ? "is-hs" : "is-pending" },
+        { k: cur.hs_pct != null ? hsLabel : "HS Kills", v: cur.hs_pct != null ? pct(cur.hs_pct) : pct(cur.headshot_kill_pct), c: hasCombat ? "is-hs" : "is-pending" },
         { k: "ADR", v: num(cur.adr), c: hasCombat ? "is-adr" : "is-pending" },
         { k: "ACS", v: num(cur.acs), c: hasCombat ? "is-acs" : "is-pending" }
     ];
@@ -5238,14 +5256,12 @@ function renderMeCard(match) {
         ? '<img src="' + me.tier_icon + '" class="dash-me-rank" loading="lazy" decoding="async" alt="" onerror="this.style.display=\'none\';">'
         : "";
 
-    // GEP combat is real live data, so don't waste space on a warning banner.
-    // The graph below communicates the source and updates every observed round.
-    const pendingHtml = gepLive ? "" : (hasCombat ? "" :
+    const pendingHtml = hasCombat ? "" :
         '<div class="dash-me-pending">' +
             '<i class="fa-solid fa-hourglass-half"></i>' +
             '<span>' + escapeHtml(cur.reason || "Waiting on Riot for this match's combat stats.") +
             ' Rounds, sides and streak above are live now; K/D/A, HS%, ADR and ACS appear when Vortex Telemetry is connected.</span>' +
-        '</div>');
+        '</div>';
 
     const hitHtml = (hasCombat && shots)
         ? renderAccuracyGraph(cur, share)
@@ -5253,6 +5269,9 @@ function renderMeCard(match) {
 
     const roundChip = inMatch
         ? '<span class="dash-me-round-chip">Round ' + (cur.round_number || 1) + '</span>'
+        : "";
+    const liveChip = hasCombat
+        ? '<span class="dash-me-live-chip"><i class="fa-solid fa-satellite-dish"></i> LIVE · ' + escapeHtml(liveSourceLabel) + '</span>'
         : "";
 
     DOM.dashMe.innerHTML =
@@ -5273,6 +5292,7 @@ function renderMeCard(match) {
                 '<span class="dash-me-section-title">' +
                     '<i class="fa-solid fa-circle-dot"></i> Current Match' +
                 '</span>' +
+                liveChip +
                 roundChip +
             '</div>' +
             '<div class="dash-me-tiles">' + tileHtml(roundTiles) + '</div>' +
@@ -5415,8 +5435,8 @@ function renderRoster(el, players) {
                </div>`
             : "";
 
-        // Show exact current-game K/D when Overwolf's live provider has it for
-        // this player; otherwise the recent-match averages, same as always. The
+        // Show exact current-game K/D when telemetry has it for this player;
+        // otherwise show the recent-match averages, same as always. The
         // averages are never relabelled as live.
         const live = (p.live && p.live.available) ? p.live : null;
         const liveKd = live ? (Number(live.kills || 0) / Math.max(1, Number(live.deaths || 0))) : 0;
@@ -5425,10 +5445,14 @@ function renderRoster(el, players) {
                 ? `${live.kills}/${live.deaths}/${live.assists}`
                 : `${live.kills}/${live.deaths}`)
             : "";
+        const liveSource = "supplied by live-match telemetry";
         const liveStatsHtml = live
             ? stat("is-kd", "fa-crosshairs", liveKda, "Current match kills / deaths" + (live.assists != null ? " / assists" : "")) +
               stat("is-kd", "fa-chart-line", `${liveKd.toFixed(2)} KD`, "Current match K/D") +
-              `<span class="dash-player-stat-pill is-live" title="Exact current-game numbers from Overwolf"><i class="fa-solid fa-satellite-dish"></i> LIVE</span>`
+              (live.hs_pct != null
+                  ? stat("is-hs", "fa-bullseye", `${live.hs_pct}% ${live.hs_pct_basis === "kills" ? "HS KILLS" : "HS"}`, "Current match headshot percentage")
+                  : "") +
+              `<span class="dash-player-stat-pill is-live" title="Exact current-game numbers ${liveSource}"><i class="fa-solid fa-satellite-dish"></i> LIVE</span>`
             : stat("is-kd", "fa-crosshairs", p.kd > 0 ? `${p.kd} KD` : "-- KD", "Recent matches K/D") +
               stat("is-hs", "fa-bullseye", p.hs_pct > 0 ? `${p.hs_pct}% HS` : "-- HS", "Recent matches Headshot accuracy") +
               stat("is-adr", "fa-burst", p.adr > 0 ? `${p.adr} ADR` : "-- ADR", "Recent average damage per round") +
@@ -6178,19 +6202,108 @@ function renderInventory() {
             </h5>
             ${(inv.loadout || []).length ? `
             <div class="inv-loadout">
-                ${inv.loadout.map(g => `
-                    <div class="inv-skin" style="--skin-tint:${g.tier_color ? g.tier_color + "33" : "transparent"}">
-                        <div class="inv-skin-top">
-                            <span class="inv-skin-weapon">${escapeHtml(g.weapon)}</span>
-                        ${g.tier_icon ? `<img class="inv-skin-tier" src="${g.tier_icon}" alt="${escapeHtml(g.tier)}" title="${escapeHtml(g.tier)}" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
-                        </div>
-                        <span class="inv-skin-name ${g.is_default ? "is-default" : ""}">${escapeHtml(g.skin)}</span>
-                        ${g.icon ? `<img class="inv-skin-art" src="${g.icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
-                    </div>
-                `).join("")}
+                ${inv.loadout.map(g => invSkinCard(g, g.is_default)).join("")}
             </div>` : '<p class="dash-roster-empty">Loadout unavailable - open VALORANT to the menus.</p>'}
         </div>
+
+        ${renderSkinCollection(inv)}
     `;
+
+    wireSkinCollection();
+}
+
+/** One skin tile: weapon label, tier badge, name, and the skin render. */
+function invSkinCard(g, isDefault) {
+    return `<div class="inv-skin" style="--skin-tint:${g.tier_color ? g.tier_color + "33" : "transparent"}">
+        <div class="inv-skin-top">
+            <span class="inv-skin-weapon">${escapeHtml(g.weapon)}</span>
+            ${g.tier_icon ? `<img class="inv-skin-tier" src="${g.tier_icon}" alt="${escapeHtml(g.tier)}" title="${escapeHtml(g.tier)}" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+        </div>
+        <span class="inv-skin-name ${isDefault ? "is-default" : ""}">${escapeHtml(g.skin)}</span>
+        ${g.icon ? `<img class="inv-skin-art" src="${g.icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+    </div>`;
+}
+
+/** The full owned-skin collection, grouped by rarity with a live filter. */
+function renderSkinCollection(inv) {
+    const items = inv.collection || [];
+    if (!items.length) {
+        return `<div class="stat-block">
+            <h5 class="stat-block-title"><i class="fa-solid fa-layer-group"></i> Skin Collection</h5>
+            <p class="dash-roster-empty">No premium skins found on this account yet.</p>
+        </div>`;
+    }
+
+    const tierChips = (inv.tiers || [])
+        .map(t => `<span class="inv-tier-chip">${escapeHtml(t.name)} <b>${t.count}</b></span>`)
+        .join("");
+
+    // Preserve the backend order (rarest first) while chunking into tier groups.
+    const groups = [];
+    items.forEach(it => {
+        let g = groups.find(x => x.tier === it.tier);
+        if (!g) { g = { tier: it.tier, color: it.tier_color, icon: it.tier_icon, items: [] }; groups.push(g); }
+        g.items.push(it);
+    });
+
+    return `<div class="stat-block">
+        <h5 class="stat-block-title">
+            <i class="fa-solid fa-layer-group"></i> Skin Collection
+            <span class="stat-block-note">${items.length} skins</span>
+        </h5>
+        <div class="inv-tier-legend">${tierChips}</div>
+        <input type="text" class="inv-search" id="inv-search" placeholder="Filter by weapon or skin name..." autocomplete="off">
+        <div class="inv-collection-groups" id="inv-collection-groups">
+            ${groups.map(g => `
+                <div class="inv-tier-group" data-tier="${escapeHtml(g.tier)}">
+                    <div class="inv-tier-head"${g.color ? ` style="--skin-tint:${g.color}"` : ""}>
+                        ${g.icon ? `<img src="${g.icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+                        <span>${escapeHtml(g.tier || "Other")}</span>
+                        <b>${g.items.length}</b>
+                    </div>
+                    <div class="inv-collection">
+                        ${g.items.map(it => `
+                            <div class="inv-skin inv-skin-collectible"
+                                 data-search="${escapeHtml((it.weapon + " " + it.skin).toLowerCase())}"
+                                 style="--skin-tint:${it.tier_color ? it.tier_color + "33" : "transparent"}">
+                                <div class="inv-skin-top">
+                                    <span class="inv-skin-weapon">${escapeHtml(it.weapon)}</span>
+                                    ${it.tier_icon ? `<img class="inv-skin-tier" src="${it.tier_icon}" alt="${escapeHtml(it.tier)}" title="${escapeHtml(it.tier)}" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+                                </div>
+                                ${it.icon ? `<img class="inv-skin-art" src="${it.icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+                                <span class="inv-skin-name">${escapeHtml(it.skin)}</span>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+            `).join("")}
+        </div>
+        <p class="dash-roster-empty" id="inv-search-empty" style="display:none;">No skins match that search.</p>
+    `;
+}
+
+/** Wires the collection's live text filter after the panel is (re)rendered. */
+function wireSkinCollection() {
+    const box = document.getElementById("inv-search");
+    if (!box) return;
+    const groupsWrap = document.getElementById("inv-collection-groups");
+    const empty = document.getElementById("inv-search-empty");
+
+    box.addEventListener("input", () => {
+        const q = box.value.trim().toLowerCase();
+        let shown = 0;
+        groupsWrap.querySelectorAll(".inv-tier-group").forEach(group => {
+            let groupShown = 0;
+            group.querySelectorAll(".inv-skin-collectible").forEach(card => {
+                const hit = !q || card.dataset.search.includes(q);
+                card.style.display = hit ? "" : "none";
+                if (hit) groupShown++;
+            });
+            group.style.display = groupShown ? "" : "none";
+            shown += groupShown;
+        });
+        if (empty) empty.style.display = shown ? "none" : "";
+    });
 }
 
 // ==========================================================================
