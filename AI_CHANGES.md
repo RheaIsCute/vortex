@@ -2,6 +2,17 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-09 - Reject Riot friend search during account login
+
+- Removed positional and single-edit credential detection, which mistook the
+  signed-in client's friend search for a username input.
+- Removed automatic blind typing when the login form cannot be identified.
+- Logout now sends DELETE without requiring a preliminary authenticated GET;
+  failed HTTP responses and missing lockfiles with live processes do not prove
+  logout. Warm and cold login workers stop on unconfirmed logout.
+- Full suite: 173 passed. Added search/chat and blind-entry regression
+  coverage. v5.6.8 installer build and integrity verification passed.
+
 ## 2026-09-09 - Codex - Batch account-check sign-out reliability
 
 - Check Accounts now waits for Riot's authenticated session to disappear;

@@ -1349,17 +1349,14 @@ class ClientLauncher:
         port, password = auth_info
         url = f"https://127.0.0.1:{port}/rso-auth/v1/session"
         try:
-            runtime_audit.riot_api("GET", f"https://127.0.0.1:{port}/rso-auth/v1/session", "local Riot Client API - session check")
-            res = requests.get(url, auth=("riot", password), verify=False, timeout=1.0)
-            if res.status_code == 200 and res.json().get("type") == "authenticated":
-                runtime_audit.riot_api("DELETE", f"https://127.0.0.1:{port}/rso-auth/v1/session", "local Riot Client API - sign out")
-                runtime_audit.process_terminate("Riot session", "local Riot Client REST API", "sign out active account")
-                del_res = requests.delete(url, auth=("riot", password), verify=False, timeout=1.5)
-                accepted = del_res.status_code in (200, 204)
-                if not accepted:
-                    login_logger.warning("Riot Client rejected sign-out request (HTTP %s)", del_res.status_code)
-                return accepted
-            login_logger.warning("Riot Client session was not authenticated during sign-out (HTTP %s)", res.status_code)
+            # Request logout even when a preliminary session read would fail
+            # or return a session shape we do not recognize.
+            runtime_audit.riot_api("DELETE", url, "local Riot Client API - sign out")
+            del_res = requests.delete(url, auth=("riot", password), verify=False, timeout=1.5)
+            accepted = del_res.status_code in (200, 204)
+            if not accepted:
+                login_logger.warning("Riot Client rejected sign-out request (HTTP %s)", del_res.status_code)
+            return accepted
         except Exception as exc:
             login_logger.warning("Riot Client sign-out request failed: %s", type(exc).__name__)
         return False
@@ -1767,19 +1764,20 @@ class ClientLauncher:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if _login_cancel_event().is_set():
-                return None
+                return False
             auth = cls.get_lockfile_auth()
             if not auth:
-                # No lockfile means no client session at all - signed out by
-                # definition.
-                return True
+                if not _is_process_running_fast(_RIOT_PROCS):
+                    return True
+                time.sleep(0.25)
+                continue
             port, pw = auth
             try:
                 res = requests.get(
                     f"https://127.0.0.1:{port}/rso-auth/v1/session",
                     auth=("riot", pw), verify=False, timeout=1.0
                 )
-                if res.status_code != 200 or res.json().get("type") != "authenticated":
+                if res.status_code == 200 and res.json().get("type") in ("unauthenticated", "unauthorized"):
                     return True
             except Exception as exc:
                 # A stale lockfile after the client has closed is a valid
@@ -1948,22 +1946,8 @@ class ClientLauncher:
             elif any(token in identity for token in ("username", "user name", "email")):
                 user_field = user_field or field
 
-        if len(edits) >= 2:
-            user_field = user_field or edits[0]
-            pass_field = pass_field or next((field for field in edits if field is not user_field), None)
-        elif len(edits) == 1 and user_field is None and pass_field is None:
-            # Riot's current page uses one edit at a time. Distinguish the
-            # password step when UI Automation exposes IsPassword; otherwise
-            # the lone edit is the initial username field.
-            only = edits[0]
-            try:
-                one_is_password = bool(getattr(only, "IsPassword", False))
-            except Exception:
-                one_is_password = False
-            if one_is_password:
-                pass_field = only
-            else:
-                user_field = only
+        # An arbitrary edit is often the signed-in client's friend search.
+        # Never infer credential identity from the number/order of edits.
 
         submit = None
         sign_out = None
@@ -2425,14 +2409,7 @@ class ClientLauncher:
             # that will only fail to focus the window a few seconds later.
             if _elevation_blocked_login(username):
                 return
-            # Otherwise: UI Automation isn't usable in this build, or the
-            # client never reached a sign-in screen. The timing-based path can
-            # still handle the first of those.
-            login_logger.info(
-                "[%s] no readable login form - falling back to the timing-based entry path", username
-            )
-            cls._fill_credentials_blind(hwnd, username, password, cold_start, stay_signed_in)
-            cls._monitor_login_result(username, password, stay_signed_in, client_path)
+            _set_login_stage("error", "Riot's sign-in fields could not be identified. Sign out in Riot Client and retry.", username)
             return
 
         # ---- stage 2: one restart, then one more go -----------------------
@@ -2707,7 +2684,9 @@ class ClientLauncher:
                     if had_session:
                         _set_login_stage("signout", "Signing out of the current session...", username)
                         cls.api_sign_out()
-                        cls.wait_for_signed_out(timeout=8.0)
+                        if not cls.wait_for_signed_out(timeout=8.0):
+                            _set_login_stage("error", "Riot did not confirm logout. Sign out in Riot Client and retry.", username)
+                            return
                         _set_login_stage("waiting_window", "Loading the sign-in page...", username)
                     else:
                         _set_login_stage("waiting_window", "Opening the sign-in page...", username)
@@ -2784,9 +2763,8 @@ class ClientLauncher:
                 if cls.wait_for_signed_out(timeout=8.0):
                     login_logger.info("[%s] previous session signed out", username)
                 else:
-                    login_logger.warning(
-                        "[%s] sign-out not confirmed - restarting the client anyway", username
-                    )
+                    _set_login_stage("error", "Riot did not confirm logout. Sign out in Riot Client and retry.", username)
+                    return
 
             # 3. Restart the client from scratch.
             _set_login_stage("opening", "Restarting the Riot Client...", username)

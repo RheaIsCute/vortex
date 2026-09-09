@@ -1,5 +1,15 @@
 # Shared AI Task Board
 
+### Codex (reject friend search as login form)
+
+Status: DONE
+
+Files owned: `backend/client_launcher.py`, `tests/test_login_flow.py`, `AI_TASKS.md`, `AI_CHANGES.md`
+
+Scope: Require identified credential fields, remove blind entry, and reject unconfirmed logout.
+
+Validation: Existing full suite passed (171); login regression suite passed with search-field and blind-input coverage. Live Riot verification remains outstanding.
+
 > Safety override: direct process-memory access and code injection were removed.
 > The completed legacy entries below are historical only and must not be restored.
 

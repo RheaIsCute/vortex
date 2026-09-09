@@ -1,5 +1,5 @@
 {
-  "version": "5.6.7",
+  "version": "5.6.8",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.7: Clipboard-based active-account backup and restore, with banned accounts excluded from backup data."
+  "changelog": "Vortex v5.6.8: Reliable Riot account switching. Vortex now recognizes only real sign-in fields, never types into the friend search, and stops if Riot does not confirm logout."
 }

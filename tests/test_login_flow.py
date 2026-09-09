@@ -231,17 +231,17 @@ class CredentialInputTests(unittest.TestCase):
         self.assertIsNone(snapshot["popup_sign_out"])
         self.assertEqual(snapshot["retryable_error"], "inline_transient_sign_in")
 
-    def test_single_edit_page_resolves_username_only(self):
+    def test_unnamed_search_edit_is_not_a_username(self):
         username = self.Control(name="", automation_id="")
         root = self.Control(control_type="WindowControl", children=[username])
 
         snapshot = cl.ClientLauncher._scan_login_controls(root)
 
-        self.assertIs(snapshot["username"], username)
+        self.assertIsNone(snapshot["username"])
         self.assertIsNone(snapshot["password"])
 
     def test_login_form_ready_with_username_only(self):
-        username = self.Control(name="", automation_id="")
+        username = self.Control(name="Username", automation_id="")
         window = self.Control(control_type="WindowControl", children=[username])
         auto = MagicMock()
         auto.ControlFromHandle.return_value = window
@@ -253,6 +253,24 @@ class CredentialInputTests(unittest.TestCase):
         _window, user_field, pass_field = form
         self.assertIs(user_field, username)
         self.assertIsNone(pass_field)
+
+    def test_friend_search_and_chat_are_not_login_fields(self):
+        window = self.Control(control_type="WindowControl", children=[
+            self.Control(name="Search friends"), self.Control(name="Message"),
+        ])
+        snapshot = cl.ClientLauncher._scan_login_controls(window)
+        self.assertIsNone(snapshot["username"])
+        self.assertIsNone(snapshot["password"])
+
+    def test_missing_login_form_never_uses_blind_input(self):
+        with patch.object(cl.ClientLauncher, "find_riot_window", return_value=123), \
+             patch.object(cl.ClientLauncher, "_attempt_login_fill", return_value=None), \
+             patch.object(cl, "_elevation_blocked_login", return_value=False), \
+             patch.object(cl.ClientLauncher, "_fill_credentials_blind") as blind, \
+             patch.object(cl.ClientLauncher, "_monitor_login_result") as monitor:
+            cl.ClientLauncher.auto_fill_credentials("example", "secret", False, False)
+        blind.assert_not_called()
+        monitor.assert_not_called()
 
     def test_reveal_password_field_tabs_and_returns_mounted_field(self):
         user_field = self.Control(name="", automation_id="")
