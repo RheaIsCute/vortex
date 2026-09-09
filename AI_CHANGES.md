@@ -2,6 +2,17 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-08 - Codex - Account penalty timers
+
+- Account checks and refreshes now recognize Riot restriction expirations in
+  ISO, Unix-second, and Unix-millisecond formats, preserving the nearest active
+  queue ban, matchmaking suspension, or other timed penalty in SQLite.
+- Timed restrictions remain on the normal roster rather than being treated as
+  permanent bans. Account cards render a compact red warning and live countdown;
+  it removes itself as soon as the expiry is reached.
+- Added focused restriction/storage coverage. Targeted suite: 57 passed;
+  Python compile and JavaScript syntax checks passed.
+
 ## 2026-09-07 - Removed invasive memory/process access
 
 - Removed the direct process-memory reader, DLL injector, native injected DLL,
@@ -1847,3 +1858,31 @@ injected keystrokes, an injected Enter, and injected clicks all pass through.
 Verified by mutation: reintroducing the v5.6.4 behaviour fails 3 tests, including
 `test_injected_enter_passes_through`. Suite: 163 passed, 1 pre-existing
 environmental failure (`test_startup_port`, a port held by a running Vortex).
+
+## 2026-09-08 - Sharper dashboard rendering at 1080p
+
+Live-dashboard agent images now prefer Vortex's bundled 1024px display icons
+whenever the agent name or UUID resolves, instead of trusting potentially small
+API thumbnails. The current-player and roster portraits use eager loading and
+explicit intrinsic dimensions matching their CSS boxes; recap/rank artwork also
+declares its integer display dimensions. Dashboard raster art remains on the
+browser's high-quality interpolation path and icon fonts request geometric
+precision. Cache-busted CSS/JS URLs ensure installed WebView2 caches pick up the
+change. Layout, styling, and higher-resolution breakpoints are unchanged.
+
+Verification: JavaScript syntax check, clean diff check, dedicated UI contract
+coverage, and the full suite (168 passed). A 1920x1080 Chrome capture verified
+the initial boot canvas; Chrome's one-shot headless mode could not settle the
+polling dashboard before capture, so no screenshot artifact is retained.
+
+## v5.6.6 release
+
+- Bundles the 1080p dashboard rendering improvements and timed Riot penalty
+  countdowns.
+- Version sources synchronized at 5.6.6. Full suite: 168 passed.
+- Built `dist/Vortex/Vortex.exe` with 3,888 files in `_internal`; its embedded
+  manifest requests `requireAdministrator`, `uiAccess=false`, and all three
+  isolated frozen startup/API/UIA smoke runs passed.
+- Built and integrity-verified `dist_installer/VortexSetup.exe` (263,133,235
+  bytes). SHA-256:
+  `B32ABF4D1800FC1C066EFE27EB9F8AE71582C91DF52C83CF900996C0959C1A81`.

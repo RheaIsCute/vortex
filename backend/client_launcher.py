@@ -28,6 +28,7 @@ import win32process
 import win32api
 from ctypes import wintypes
 from typing import Optional, Dict, Any, Tuple
+from datetime import datetime, timezone
 
 from backend import elevation
 from backend import input_lock
@@ -72,6 +73,82 @@ if not login_logger.handlers:
     _input_lock_logger.setLevel(logging.DEBUG)
     _input_lock_logger.addHandler(_handler)
     _input_lock_logger.propagate = False
+
+
+def _penalty_expiry(value: Any) -> str:
+    """Normalize Riot's varied restriction-expiry values to an ISO instant."""
+    if isinstance(value, dict):
+        for key in ("value", "time", "timestamp", "expiresAt", "expires_at"):
+            if key in value:
+                return _penalty_expiry(value[key])
+        return ""
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 100_000_000_000:  # Riot commonly sends Unix milliseconds.
+            timestamp /= 1000
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    raw = value.strip()
+    try:
+        if raw.replace(".", "", 1).isdigit():
+            return _penalty_expiry(float(raw))
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        return ""
+
+
+def _timed_penalty(acct_state: str, restrictions: Any) -> Dict[str, str]:
+    """Return the nearest active Riot matchmaking restriction, if available."""
+    now = datetime.now(timezone.utc)
+    active = []
+    for restriction in restrictions or []:
+        if not isinstance(restriction, dict):
+            continue
+        restriction_type = str(restriction.get("type") or restriction.get("restrictionType") or "").upper()
+        expiry = ""
+        for key in ("expires_at", "expiresAt", "expiration", "expirationTime", "expiry", "endTime", "end_time", "penaltyEndTime"):
+            expiry = _penalty_expiry(restriction.get(key))
+            if expiry:
+                break
+        if not expiry:
+            continue
+        try:
+            expires = datetime.fromisoformat(expiry).astimezone(timezone.utc)
+        except ValueError:
+            continue
+        if expires <= now:
+            continue
+        # A future restriction is the authoritative timed penalty even if Riot
+        # describes the account state generically as TEMP_BANNED/SUSPENDED.
+        if restriction_type or acct_state in ("TEMP_BANNED", "SUSPENDED"):
+            if "QUEUE" in restriction_type:
+                label = "Queue ban"
+            elif "SUSPEND" in restriction_type or acct_state == "SUSPENDED":
+                label = "Matchmaking suspended"
+            else:
+                label = "Timed penalty"
+            active.append((expires, {"penalty_type": label, "penalty_expires_at": expiry}))
+    return min(active, key=lambda item: item[0])[1] if active else {}
+
+
+def _has_timed_restriction(restrictions: Any) -> bool:
+    """Whether Riot supplied an expiry at all, including one just elapsed."""
+    expiry_keys = ("expires_at", "expiresAt", "expiration", "expirationTime", "expiry", "endTime", "end_time", "penaltyEndTime")
+    return any(
+        isinstance(restriction, dict) and any(_penalty_expiry(restriction.get(key)) for key in expiry_keys)
+        for restriction in (restrictions or [])
+    )
+
+
+def _restriction_items(value: Any) -> list:
+    """Riot has returned both a one-object and an array restriction payload."""
+    if isinstance(value, dict):
+        return [value]
+    return value if isinstance(value, (list, tuple)) else []
 
 class _PROCESSENTRY32W(ctypes.Structure):
     _fields_ = [
@@ -887,6 +964,8 @@ class ClientLauncher:
             # a false account-status update.
             "status_confirmed": False,
             "puuid": "",
+            "penalty_type": "",
+            "penalty_expires_at": "",
         }
 
         try:
@@ -907,10 +986,20 @@ class ClientLauncher:
                     result["display_name"] = f"{game_name}#{tag_line}"
 
                 state = (acct.get("state") or "").upper()
-                restrictions = ((info.get("ban") or {}).get("restrictions") or [])
-                restriction_types = {(r.get("type") or "").upper() for r in restrictions}
+                ban_data = info.get("ban") or {}
+                restrictions = _restriction_items(ban_data.get("restrictions") or ban_data.get("Restrictions"))
+                restriction_types = {(r.get("type") or "").upper() for r in restrictions if isinstance(r, dict)}
+                timed_penalty = _timed_penalty(state, restrictions)
                 if state in ("BANNED", "PERMA_BANNED") or restriction_types & {"PERMANENT_BAN", "BANNED"}:
                     result["status"] = "BANNED"
+                elif timed_penalty:
+                    # A finite queue lock is not a permanent account ban. Keep
+                    # it on the roster and let the stored expiry drive its card.
+                    result.update(timed_penalty)
+                elif _has_timed_restriction(restrictions):
+                    # Riot can briefly retain an elapsed restriction while
+                    # clearing its account-state cache. The expiry wins.
+                    result["status"] = "PLAYABLE"
                 elif state in ("SUSPENDED", "TEMP_BANNED") or restriction_types & {"TEMPORARY_BAN", "SUSPENDED"}:
                     result["status"] = "SUSPENDED"
                 result["status_confirmed"] = True
@@ -997,6 +1086,8 @@ class ClientLauncher:
             "region": "NA",
             "status": "PLAYABLE",
             "puuid": "",
+            "penalty_type": "",
+            "penalty_expires_at": "",
             # None is important: a client that is not in a usable party is
             # not evidence that Competitive is locked.
             "competitive_queue_eligible": None,
@@ -1034,11 +1125,17 @@ class ClientLauncher:
                 # Status parsing (Playable vs Banned vs Suspended)
                 acct_state = (acct.get("state") or "").upper()
                 ban_data = uinfo.get("ban", {}) or {}
-                restrictions = ban_data.get("restrictions", []) or []
+                restrictions = _restriction_items(ban_data.get("restrictions") or ban_data.get("Restrictions"))
+                restriction_types = {(r.get("type") or "").upper() for r in restrictions if isinstance(r, dict)}
+                timed_penalty = _timed_penalty(acct_state, restrictions)
 
-                if acct_state in ("BANNED", "PERMA_BANNED") or any(r.get("type") in ("PERMANENT_BAN", "BANNED") for r in restrictions):
+                if acct_state in ("BANNED", "PERMA_BANNED") or restriction_types & {"PERMANENT_BAN", "BANNED"}:
                     result["status"] = "BANNED"
-                elif acct_state in ("SUSPENDED", "TEMP_BANNED") or any(r.get("type") in ("TEMPORARY_BAN", "SUSPENDED") for r in restrictions):
+                elif timed_penalty:
+                    result.update(timed_penalty)
+                elif _has_timed_restriction(restrictions):
+                    result["status"] = "PLAYABLE"
+                elif acct_state in ("SUSPENDED", "TEMP_BANNED") or restriction_types & {"TEMPORARY_BAN", "SUSPENDED"}:
                     result["status"] = "SUSPENDED"
                 else:
                     result["status"] = "PLAYABLE"

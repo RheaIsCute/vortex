@@ -1,5 +1,5 @@
 {
-  "version": "5.6.5",
+  "version": "5.6.6",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.5: Fixes v5.6.4's login regression - the input lock no longer swallows Vortex's own keystrokes, so logins submit again. The lock now suppresses only real mouse and keyboard input; tap ESC to unlock."
+  "changelog": "Vortex v5.6.6: Sharper 1080p dashboard portraits and small UI artwork using bundled high-resolution assets, plus live self-clearing countdowns for timed Riot matchmaking penalties."
 }

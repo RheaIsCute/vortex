@@ -191,6 +191,8 @@ class Database:
                     puuid TEXT DEFAULT '',
                     competitive_queue_eligible INTEGER,
                     ranked_eligibility_source TEXT DEFAULT '',
+                    penalty_type TEXT DEFAULT '',
+                    penalty_expires_at TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT ''
@@ -220,7 +222,11 @@ class Database:
                 # eligibility response for this account yet; it is not a
                 # guess that the account cannot play Competitive.
                 ("competitive_queue_eligible", "INTEGER"),
-                ("ranked_eligibility_source", "TEXT DEFAULT ''")
+                ("ranked_eligibility_source", "TEXT DEFAULT ''"),
+                # Timed Riot restrictions stay on the normal roster so their
+                # remaining matchmaking lockout can be shown on the card.
+                ("penalty_type", "TEXT DEFAULT ''"),
+                ("penalty_expires_at", "TEXT DEFAULT ''")
             ]
 
             for col_name, col_def in new_columns:
@@ -262,6 +268,8 @@ class Database:
                     puuid TEXT DEFAULT '',
                     competitive_queue_eligible INTEGER,
                     ranked_eligibility_source TEXT DEFAULT '',
+                    penalty_type TEXT DEFAULT '',
+                    penalty_expires_at TEXT DEFAULT '',
                     last_login TEXT DEFAULT '',
                     last_updated TEXT DEFAULT '',
                     created_at TEXT DEFAULT '',
@@ -274,7 +282,9 @@ class Database:
             for col_name, col_def in (("last_login", "TEXT DEFAULT ''"),
                                       ("puuid", "TEXT DEFAULT ''"),
                                       ("competitive_queue_eligible", "INTEGER"),
-                                      ("ranked_eligibility_source", "TEXT DEFAULT ''")):
+                                      ("ranked_eligibility_source", "TEXT DEFAULT ''"),
+                                      ("penalty_type", "TEXT DEFAULT ''"),
+                                      ("penalty_expires_at", "TEXT DEFAULT ''")):
                 if col_name not in existing_banned_cols:
                     try:
                         cursor.execute(f"ALTER TABLE banned_accounts ADD COLUMN {col_name} {col_def}")
@@ -740,8 +750,9 @@ class Database:
                     top_champs, rank_icon_url, peak_rank_tier, peak_rank_division,
                     peak_rank_icon_url, peak_rank_season, card_small_url,
                     match_history, status, favorite, puuid, competitive_queue_eligible,
-                    ranked_eligibility_source, last_updated, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ranked_eligibility_source, penalty_type, penalty_expires_at,
+                    last_updated, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 account.get("username", "").strip(),
                 account.get("password", "").strip(),
@@ -769,6 +780,8 @@ class Database:
                 (None if account.get("competitive_queue_eligible") is None
                  else int(bool(account.get("competitive_queue_eligible")))),
                 (account.get("ranked_eligibility_source") or "").strip(),
+                (account.get("penalty_type") or "").strip(),
+                (account.get("penalty_expires_at") or "").strip(),
                 now,
                 now
             ))
@@ -885,7 +898,7 @@ class Database:
         "top_champs", "rank_icon_url", "peak_rank_tier", "peak_rank_division",
         "peak_rank_icon_url", "peak_rank_season", "card_small_url",
         "match_history", "status", "favorite", "puuid", "competitive_queue_eligible",
-        "ranked_eligibility_source", "last_login",
+        "ranked_eligibility_source", "penalty_type", "penalty_expires_at", "last_login",
         "last_updated", "created_at"
     ]
 

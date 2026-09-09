@@ -162,6 +162,44 @@ Read this file before editing. Do not assume an assignment from stale chat conte
 
 ## Active Tasks
 
+### Codex (1080p dashboard rendering quality)
+
+Status: DONE
+
+Scope: Prefer the shipped high-resolution agent artwork throughout the live
+dashboard and make small raster/vector UI elements rasterize at stable integer
+sizes, preserving the existing layout and styling at 1080p and above.
+
+Files owned: `frontend/app.js`, `frontend/styles.css`, `frontend/index.html`,
+`tests/test_settings_and_ui.py`, `AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Keep changes in the penalty task's shared frontend files
+non-overlapping and preserve its in-progress account-card work.
+
+Notes: Completed 2026-09-08. Known dashboard agents now use the bundled
+1024px artwork instead of API thumbnails; critical portrait/rank images have
+explicit integer intrinsic sizes and eager above-fold loading; dashboard
+raster/vector rendering stays on the browser's quality paths; stylesheet and
+script URLs are cache-busted. Full suite: 168 passed.
+
+### Codex (account penalty timers)
+
+Status: DONE
+
+Scope: Persist Riot timed matchmaking restrictions during account checks and
+refreshes, and surface a live, self-clearing penalty countdown on account cards.
+
+Files owned: `backend/client_launcher.py`, `backend/database.py`,
+`frontend/app.js`, `frontend/styles.css`, `tests/test_account_penalties.py`,
+`AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve permanent ban handling and the current account-card layout.
+
+Notes: Completed 2026-09-08. Timed Riot restriction expiries are normalized and
+stored with a type, then rendered as a compact red card warning with a live,
+self-clearing countdown. Permanent bans continue through the existing banned
+account path. Targeted tests: 57 passed; Python and JavaScript syntax checks passed.
+
 ### Codex (v5.5.47 match-history recovery release)
 
 Status: DONE

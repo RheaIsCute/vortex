@@ -1267,6 +1267,34 @@ body.modal-open { overflow: hidden; scrollbar-gutter: stable; }
     border: 1px solid var(--stroke-1);
 }
 
+/* A compact, high-signal warning for finite Riot queue restrictions. The
+   countdown is data, not a separate card treatment, so it fits every view. */
+.account-penalty {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    min-height: 22px;
+    padding: 3px 6px;
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    border-radius: var(--radius-xs);
+    background: rgba(185, 28, 28, 0.18);
+    color: #fca5a5;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.account-penalty > i { color: #ef4444; }
+.account-penalty-label { overflow: hidden; text-overflow: ellipsis; }
+.account-penalty-countdown { color: #fff; font-variant-numeric: tabular-nums; }
+.roster-name-line .account-penalty { flex: 0 1 auto; }
+.card-view-state .account-penalty { max-width: 185px; }
+.account-card.has-penalty.roster-row,
+.account-visual-card.has-penalty { border-left-color: rgba(239, 68, 68, 0.85); }
+
 .card-favorite-btn {
     background: transparent;
     border: none;
@@ -5476,6 +5504,7 @@ body.dashboard-mode .header-actions .header-divider {
     object-fit: cover;
     background: var(--surface-3);
     border: 1px solid var(--stroke-2);
+    image-rendering: auto;
 }
 
 .dash-me-agent.is-empty {
@@ -6123,6 +6152,7 @@ body.dashboard-mode .header-actions .header-divider {
     object-fit: cover;
     background: var(--surface-3);
     border: 1px solid var(--stroke-2);
+    image-rendering: auto;
 }
 
 .dash-player-agent.is-empty {
@@ -6542,6 +6572,19 @@ body.dashboard-mode .header-actions .header-divider {
        rasterized without device-pixel awareness, which is what made the
        portraits look pixelated on high-DPI displays. */
     image-rendering: auto;
+}
+
+/* Keep dashboard artwork on WebView2's high-quality interpolation path. The
+   HTML also supplies intrinsic dimensions for the tiny images so decoding
+   never causes them to be rasterized from a provisional fractional box. */
+.dash-view img,
+.dashboard-mode .app-header img {
+    image-rendering: auto;
+}
+
+.dash-view i,
+.dashboard-mode .app-header i {
+    text-rendering: geometricPrecision;
 }
 
 .dash-agent-btn span {
@@ -9008,24 +9051,30 @@ body.accent-anim *::after {
     .account-card-grid { grid-template-columns: 1fr; }
 }
 
-/* --- 11.3 Legacy Ranked account treatment -------------------------------- */
-/* A quiet frost ring — reads as "special" without the old white bloom, and
-   layers cleanly under the accent glow of an active / favourited card. */
-.account-card.is-legacy-ranked {
+/* --- 11.3 Beta account treatment ----------------------------------------- */
+/* A quiet frost glow marks Riot-confirmed Competitive access below level 20
+   and layers cleanly under the accent glow of an active / favourited card. */
+.account-card.is-legacy-ranked,
+.account-visual-card.is-legacy-ranked {
     border-color: var(--wa-4);
-    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-2), var(--bevel);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-2),
+                0 0 18px -10px rgba(255, 255, 255, 0.8), var(--bevel);
 }
 
 /* This rule intentionally comes after normal accent/favorite card treatment. */
 .account-card.is-legacy-ranked.is-favorite,
-.account-card.is-legacy-ranked.is-active-session {
+.account-card.is-legacy-ranked.is-active-session,
+.account-visual-card.is-legacy-ranked.is-favorite,
+.account-visual-card.is-legacy-ranked.is-active-session {
     border-color: var(--wa-4);
-    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-3), var(--glow-sm), var(--bevel);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--wa-3),
+                0 0 20px -9px rgba(255, 255, 255, 0.85), var(--glow-sm), var(--bevel);
 }
 
-.account-card.is-legacy-ranked:hover {
+.account-card.is-legacy-ranked:hover,
+.account-visual-card.is-legacy-ranked:hover {
     border-color: var(--edge-strong);
-    box-shadow: var(--shadow-lg), var(--glow-sm), var(--bevel);
+    box-shadow: var(--shadow-lg), 0 0 22px -8px rgba(255, 255, 255, 0.9), var(--glow-sm), var(--bevel);
 }
 
 .badge-legacy {
@@ -9049,9 +9098,15 @@ body.accent-anim *::after {
 
 .accounts-table tr.is-legacy-ranked td {
     background-image: linear-gradient(var(--wa-1), var(--wa-1));
+    box-shadow: inset 0 1px 0 var(--wa-3), inset 0 -1px 0 var(--wa-3);
 }
 .accounts-table tr.is-legacy-ranked td:first-child {
-    box-shadow: inset 3px 0 0 var(--wa-4);
+    box-shadow: inset 3px 0 0 var(--wa-4), inset 0 1px 0 var(--wa-3), inset 0 -1px 0 var(--wa-3),
+                -5px 0 12px -10px rgba(255, 255, 255, 0.9);
+}
+.accounts-table tr.is-legacy-ranked td:last-child {
+    box-shadow: inset -1px 0 0 var(--wa-3), inset 0 1px 0 var(--wa-3), inset 0 -1px 0 var(--wa-3),
+                5px 0 12px -10px rgba(255, 255, 255, 0.9);
 }
 
 /* --- 11.4 Raw import: slim dropzone, format hint, result panel ----------- */

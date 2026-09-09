@@ -84,6 +84,8 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("const isLegacyRanked = isLegacyRankedEligible(acc)", app_js)
         self.assertIn("a.is_legacy_ranked_eligible, a.ranked_capable", app_js)
         self.assertIn(".account-card.is-legacy-ranked.is-favorite", styles_css)
+        self.assertIn(".account-visual-card.is-legacy-ranked", styles_css)
+        self.assertIn(".accounts-table tr.is-legacy-ranked td", styles_css)
 
     def test_live_match_controls_markup(self):
         root = Path(__file__).parent.parent
@@ -178,6 +180,22 @@ class SettingsAndUITests(unittest.IsolatedAsyncioTestCase):
         # 6. Missing combat data shows a dash, not a misleading "0 / 0 / 0".
         self.assertIn("const hasCombat =", app_js)
         self.assertIn('"—"', app_js)
+
+    def test_dashboard_uses_shipped_high_resolution_agent_art(self):
+        """Small live-dashboard portraits must not fall back to API thumbnails."""
+        root = Path(__file__).parent.parent
+        app_js = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles_css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
+        index_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("getDashboardAgentIcon(nameOrId", app_js)
+        self.assertIn("agent.unresolved ? localGameAssetUrl(fallback) : agent.icon", app_js)
+        self.assertIn('class="dash-me-agent" width="44" height="44"', app_js)
+        self.assertIn('class="dash-player-agent" width="40" height="40"', app_js)
+        self.assertIn(".dash-view img,", styles_css)
+        self.assertIn("image-rendering: auto", styles_css)
+        self.assertIn("styles.css?v=1080p-quality-1", index_html)
+        self.assertIn("app.js?v=1080p-quality-1", index_html)
 
     def test_roster_workspace_layout(self):
         """The desktop workspace is a status strip + dense roster rows."""

@@ -107,7 +107,8 @@ const state = {
     _profileAbortController: null,
     _statsPromise: null,
     _statsSummaryPromise: null,
-    _statsRenderSignature: null
+    _statsRenderSignature: null,
+    _penaltyCountdownTimer: null
 };
 
 // Fallback tier mapping
@@ -227,6 +228,11 @@ const ValorantAssets = {
             return { name: "Agent", icon: localGameAssetUrl(nameOrId), portrait: "", role: "", roleIcon: "" };
         }
         return this._unknownAgent();
+    },
+    /** Prefer the shipped 1024px icon over small live-API thumbnails. */
+    getDashboardAgentIcon(nameOrId, fallback = "") {
+        const agent = this.getAgent(nameOrId);
+        return agent.unresolved ? localGameAssetUrl(fallback) : agent.icon;
     },
     getMap(nameOrId) {
         if (!nameOrId) {
@@ -1315,6 +1321,7 @@ function accountsSignature(list) {
         a.peak_rank_icon_url, a.peak_rank_season, a.status, a.favorite,
         a.needs_check, a.competitive_queue_eligible,
         a.is_legacy_ranked_eligible, a.ranked_capable, a.ranked_eligibility_source,
+        a.penalty_type, a.penalty_expires_at,
         minute(a.last_login)
     ].join("")).join("")
         + "|" + state.activeAccountId + "|" + state.viewMode;
@@ -1865,6 +1872,61 @@ function getStatusBadge(status) {
     }
 }
 
+function penaltyExpiresAt(acc) {
+    const expires = Date.parse(acc && acc.penalty_expires_at);
+    return Number.isFinite(expires) ? expires : 0;
+}
+
+function formatPenaltyCountdown(milliseconds) {
+    const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return days
+        ? `${days}d ${String(hours).padStart(2, "0")}h`
+        : `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function penaltyWarning(acc) {
+    const expires = penaltyExpiresAt(acc);
+    if (!expires || expires <= Date.now()) return "";
+    const label = acc.penalty_type || "Timed penalty";
+    return `<span class="account-penalty" data-penalty-expires-at="${expires}" title="${escapeHtml(label)} ends when this countdown reaches zero"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span class="account-penalty-label">${escapeHtml(label)}</span><time class="account-penalty-countdown">${formatPenaltyCountdown(expires - Date.now())}</time></span>`;
+}
+
+function clearPenaltyCountdown() {
+    if (state._penaltyCountdownTimer) {
+        clearInterval(state._penaltyCountdownTimer);
+        state._penaltyCountdownTimer = null;
+    }
+}
+
+function updatePenaltyCountdowns() {
+    let pending = false;
+    document.querySelectorAll(".account-penalty[data-penalty-expires-at]").forEach((notice) => {
+        const expires = Number(notice.dataset.penaltyExpiresAt);
+        const remaining = expires - Date.now();
+        if (!Number.isFinite(expires) || remaining <= 0) {
+            const card = notice.closest(".account-card, .account-visual-card");
+            notice.remove();
+            if (card) card.classList.remove("has-penalty");
+            return;
+        }
+        const countdown = notice.querySelector(".account-penalty-countdown");
+        if (countdown) countdown.textContent = formatPenaltyCountdown(remaining);
+        pending = true;
+    });
+    if (!pending) clearPenaltyCountdown();
+}
+
+function startPenaltyCountdown() {
+    updatePenaltyCountdowns();
+    if (!state._penaltyCountdownTimer && document.querySelector(".account-penalty[data-penalty-expires-at]")) {
+        state._penaltyCountdownTimer = setInterval(updatePenaltyCountdowns, 1000);
+    }
+}
+
 function renderAccounts(silent = false) {
     if (DOM.skeletonGrid) DOM.skeletonGrid.style.display = "none";
 
@@ -1885,6 +1947,7 @@ function renderAccounts(silent = false) {
         DOM.accountsTableWrapper.style.display = "none";
         DOM.accountsTableBody.innerHTML = "";
         DOM.emptyState.style.display = "flex";
+        clearPenaltyCountdown();
         return;
     }
 
@@ -1904,6 +1967,7 @@ function renderAccounts(silent = false) {
         renderCardView();
         DOM.accountsTableBody.classList.toggle("animate-in", isNewSet);
     }
+    startPenaltyCountdown();
 }
 
 // Win rate for an account, preferring what its saved matches actually show.
@@ -1946,6 +2010,7 @@ function buildAccountView(acc) {
     // Backend-derived: this account is under the level gate but Riot still
     // reports it as Competitive-eligible ("Legacy Ranked").
     const isLegacyRanked = isLegacyRankedEligible(acc);
+    const penaltyNotice = penaltyWarning(acc);
 
     const lastLoginFormatted = isActive
         ? '<span class="last-login-val is-active"><span class="live-dot-mini"></span> Active Now</span>'
@@ -1961,6 +2026,7 @@ function buildAccountView(acc) {
             isActive ? "is-active-session" : "",
             isHighlighted ? "is-highlighted" : "",
             isLegacyRanked ? "is-legacy-ranked" : "",
+            penaltyNotice ? "has-penalty" : "",
         ].filter(Boolean).join(" "),
         legacyBadge: isLegacyRanked
             ? '<span class="badge-legacy" title="Legacy Ranked Access&#10;This account can access Competitive below the normal level requirement."><i class="fa-solid fa-gem"></i> Legacy Ranked</span>'
@@ -1991,6 +2057,7 @@ function buildAccountView(acc) {
         statusChip: ["", "PLAYABLE"].includes((acc.status || "").toUpperCase())
             ? ""
             : getStatusBadge(acc.status),
+        penaltyNotice,
         displayName: acc.display_name || acc.username,
         lastLoginFormatted
     };
@@ -2023,6 +2090,7 @@ function renderHeroAccountCard(acc, isBanned = false, isUnsaved = false) {
                     <span class="badge-region">${escapeHtml(acc.region || 'NA')}</span>
                     <span class="badge-tag ${v.tagClass}">${escapeHtml(v.effectiveTag)}</span>
                     ${v.statusBadge}
+                    ${v.penaltyNotice}
                     ${v.legacyBadge}
                     <span class="session-state-chip ${sessionInfo.cls}">${isValRunning ? sessionInfo.label : "Riot Session Active"}</span>
                     <span class="hero-last-login"><i class="fa-regular fa-clock"></i> Last Login: <strong>Active Now</strong></span>
@@ -2248,7 +2316,7 @@ function renderGridView() {
                     <div class="roster-name-line">
                         <span class="roster-name" title="${escapeHtml(v.displayName)}">${escapeHtml(v.displayName)}</span>
                         ${acc.display_name ? `<button class="btn-mini-copy" onclick="copyText('${escapeHtml(acc.display_name)}', 'Riot ID copied')" title="Copy Riot ID"><i class="fa-regular fa-copy"></i></button>` : ''}
-                        ${v.liveBadge}${v.legacyBadge}
+                        ${v.liveBadge}${v.penaltyNotice}${v.legacyBadge}
                     </div>
                     <div class="roster-meta-line">
                         ${v.needsCheck
@@ -2318,7 +2386,7 @@ function renderTableView() {
                         <i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i>
                     </button>
                 </td>
-                <td>${v.statusBadge}${v.legacyBadge}${v.liveBadge}</td>
+                <td>${v.statusBadge}${v.penaltyNotice}${v.legacyBadge}${v.liveBadge}</td>
                 <td>
                     <div class="table-summoner">
                         <span class="table-name">${escapeHtml(v.displayName)}</span>
@@ -2406,7 +2474,7 @@ function renderCardView() {
             <article class="account-visual-card ${acc.favorite ? 'is-favorite' : ''} ${v.needsCheck ? 'needs-check' : ''} ${v.cardFlags}" data-id="${acc.id}" role="listitem" style="--i:${Math.min(i, 30)}">
                 <div class="card-view-topline">
                     <button class="card-favorite-btn ${acc.favorite ? 'active' : ''}" onclick="toggleFavorite(${acc.id})" title="Pin Account" aria-label="Pin account"><i class="fa-${acc.favorite ? 'solid' : 'regular'} fa-star"></i></button>
-                    <div class="card-view-state">${v.liveBadge}${v.legacyBadge}${v.needsCheck ? '<span class="badge-unset">Unverified</span>' : v.statusChip}</div>
+                    <div class="card-view-state">${v.liveBadge}${v.penaltyNotice}${v.legacyBadge}${v.needsCheck ? '<span class="badge-unset">Unverified</span>' : v.statusChip}</div>
                 </div>
                 <div class="card-view-identity">
                     <div class="card-view-rank ${v.tierClass}"><img src="${v.rankIconSrc}" alt="${v.rankTitle}" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${DEFAULT_TIER_ICON}';"><span>LV ${v.needsCheck ? '?' : (acc.level || '-')}</span></div>
@@ -5251,8 +5319,9 @@ function renderMeCard(match) {
     const shots = cur.shots || 0;
     const share = n => shots ? Math.round((n / shots) * 100) : 0;
 
-    const agentHtml = me.agent_icon
-        ? '<img src="' + me.agent_icon + '" class="dash-me-agent" loading="lazy" decoding="async" alt="' +
+    const dashboardAgentIcon = ValorantAssets.getDashboardAgentIcon(me.agent, me.agent_icon);
+    const agentHtml = dashboardAgentIcon
+        ? '<img src="' + dashboardAgentIcon + '" class="dash-me-agent" width="44" height="44" loading="eager" decoding="async" alt="' +
           escapeHtml(me.agent || "") + '" onerror="this.style.visibility=\'hidden\';">'
         : '<span class="dash-me-agent is-empty"><i class="fa-solid fa-user"></i></span>';
 
@@ -5338,7 +5407,7 @@ function renderRecap(live, hasMatch) {
             </div>
             <div class="dash-recap-score">${last.rounds_won} <span>-</span> ${last.rounds_lost}</div>
             <div class="dash-recap-sub">
-                ${last.agent_icon ? `<img src="${last.agent_icon}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
+                ${ValorantAssets.getDashboardAgentIcon(last.agent, last.agent_icon) ? `<img src="${ValorantAssets.getDashboardAgentIcon(last.agent, last.agent_icon)}" width="18" height="18" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">` : ""}
                 ${escapeHtml(last.map || "")} · ${escapeHtml(last.mode || "")}
             </div>
             <div class="dash-recap-stats">
@@ -5401,6 +5470,7 @@ function renderRoster(el, players) {
 
     el.innerHTML = players.map(p => {
         const tierIcon = p.tier_icon || DEFAULT_UNRANKED_ICON;
+        const dashboardAgentIcon = ValorantAssets.getDashboardAgentIcon(p.agent, p.agent_icon);
         const tierLabel = p.tier_label || "Unranked";
         const hasRank = (p.tier && p.tier > 0);
         const hasPeak = (p.peak_tier && p.peak_tier > 0 && p.peak_tier !== p.tier);
@@ -5465,8 +5535,8 @@ function renderRoster(el, players) {
         return `
             <button type="button" class="dash-player ${p.is_self ? "is-self" : ""} ${p.locked ? "is-locked" : ""} ${group ? `has-party pg-${((group - 1) % 5) + 1}` : ""}" onclick="openPlayerProfile(decodeURIComponent('${encodeURIComponent(p.name || "")}'), decodeURIComponent('${encodeURIComponent(p.puuid || "")}'))" title="Check this player's match history">
                 <div class="dash-player-lead">
-                    ${p.agent_icon
-                        ? `<img src="${p.agent_icon}" class="dash-player-agent" loading="lazy" decoding="async" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
+                    ${dashboardAgentIcon
+                        ? `<img src="${dashboardAgentIcon}" class="dash-player-agent" width="40" height="40" loading="eager" decoding="async" alt="${escapeHtml(p.agent)}" onerror="this.style.visibility='hidden';">`
                         : `<span class="dash-player-agent is-empty"><i class="fa-solid fa-user"></i></span>`}
                     ${p.locked ? `<span class="dash-player-locked" title="Locked in"><i class="fa-solid fa-lock"></i></span>` : ""}
                 </div>
@@ -5481,7 +5551,7 @@ function renderRoster(el, players) {
                         <span>${escapeHtml(p.agent || "Picking…")}</span>
                         ${p.level ? `<span class="dash-player-lvl">LV ${p.level}</span>` : ""}
                         ${hasPeak ? `<span class="dash-player-peak" title="Peak rank">
-                            <img src="${p.peak_tier_icon || DEFAULT_UNRANKED_ICON}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">
+                            <img src="${p.peak_tier_icon || DEFAULT_UNRANKED_ICON}" width="13" height="13" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';">
                             ${escapeHtml(p.peak_tier_label || "")}</span>` : ""}
                     </div>
                     <div class="dash-player-stats-row">
@@ -5490,7 +5560,7 @@ function renderRoster(el, players) {
                 </div>
 
                 <div class="dash-player-rank" title="${escapeHtml(tierLabel)}${p.rr ? ` (${p.rr} RR)` : ""}">
-                    <img src="${tierIcon}" alt="${escapeHtml(tierLabel)}" loading="lazy" decoding="async" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
+                    <img src="${tierIcon}" width="32" height="32" alt="${escapeHtml(tierLabel)}" loading="eager" decoding="async" onerror="this.src='${DEFAULT_UNRANKED_ICON}';">
                     <span class="dash-player-rr">${hasRank && p.rr ? `${p.rr} RR` : (hasRank ? "" : "Unranked")}</span>
                 </div>
             </button>
