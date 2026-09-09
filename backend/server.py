@@ -272,6 +272,14 @@ def apply_account_update(account_id: int, update_payload: dict) -> bool:
     return False
 
 
+def _persistable_riot_account_fields(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop session-detection flags before storing a Riot account snapshot."""
+    return {
+        key: value for key, value in info.items()
+        if key not in ("found", "username", "status_confirmed")
+    }
+
+
 async def background_scrape_account(account_id: int, display_name: str, region: str):
     """Background task to fetch live stats, official emblems, peak rank, and match history."""
     info = await asyncio.to_thread(launcher.get_active_riot_account)
@@ -582,14 +590,14 @@ async def run_batch_account_check():
                 if detected_info and detected_info.get("found"):
                     status = (detected_info.get("status") or "").upper()
                     if status in ("BANNED", "SUSPENDED"):
-                        update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+                        update_payload = _persistable_riot_account_fields(detected_info)
                         update_payload["last_updated"] = datetime.now().isoformat()
                         db.update_account(acc["id"], update_payload)
                         CHECK_PROGRESS["verified"] += 1
                         db.move_to_banned(acc["id"])
                         CHECK_PROGRESS["message"] = f"Moved banned account to Banned Accounts: {acc['username']}"
                     else:
-                        update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+                        update_payload = _persistable_riot_account_fields(detected_info)
                         update_payload["last_updated"] = datetime.now().isoformat()
 
                         # Keep the category tied to confirmed queue eligibility;
@@ -640,8 +648,22 @@ async def run_batch_account_check():
             # small deliberate cooldown between accounts for Riot's rate
             # limits, but do not charge every transition a blind two seconds
             # after the client is already ready.
-            await asyncio.to_thread(launcher.api_sign_out)
-            await asyncio.to_thread(launcher.wait_for_signed_out, 8.0)
+            signout_requested = await asyncio.to_thread(launcher.api_sign_out)
+            signed_out = await asyncio.to_thread(launcher.wait_for_signed_out, 8.0)
+            if not signed_out:
+                # Never type the next account into a client still authenticated
+                # as the previous one.  A forced close is a safe fallback for
+                # this run; the next login will use its normal cold-start path.
+                client_launcher.login_logger.warning(
+                    "[%s] batch sign-out was not confirmed (requested=%s); resetting Riot Client before continuing",
+                    acc["username"], signout_requested,
+                )
+                await asyncio.to_thread(launcher.force_kill_riot_client)
+                await asyncio.to_thread(
+                    launcher.wait_for_processes_gone,
+                    client_launcher._RIOT_PROCS,
+                    8.0,
+                )
             if idx < len(to_check) and CHECK_PROGRESS["running"]:
                 await asyncio.sleep(0.25)
 
@@ -654,9 +676,12 @@ async def run_batch_account_check():
                     8.0,
                 )
     finally:
-        # 5. Always: force close Riot Client and clear the running flag so the
-        # UI spinner stops no matter how the scan ended.
+        # 5. Always request sign-out before closing Riot Client.  A forced
+        # close alone preserves Riot's stay-signed-in token and leaves the
+        # last checked account logged in when the client opens again.
         try:
+            await asyncio.to_thread(launcher.api_sign_out)
+            await asyncio.to_thread(launcher.wait_for_signed_out, 8.0)
             await asyncio.to_thread(launcher.force_kill_riot_client)
         except Exception:
             client_launcher.login_logger.exception("batch check: final Riot Client close failed")
@@ -808,7 +833,7 @@ async def recheck_banned_account(account_id: int):
         return {"success": False, "still_banned": True, "message": f"Could not verify {acc['username']} - login failed."}
 
     status = (detected_info.get("status") or "").upper()
-    update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+    update_payload = _persistable_riot_account_fields(detected_info)
     update_payload["last_updated"] = datetime.now().isoformat()
 
     if status in ("BANNED", "SUSPENDED"):
@@ -945,6 +970,8 @@ async def cancel_check_accounts():
     CHECK_PROGRESS["running"] = False
     CHECK_PROGRESS["message"] = "Verification cancelled. Riot Client closed."
     client_launcher.cancel_active_login("Verification cancelled by user.")
+    await asyncio.to_thread(launcher.api_sign_out)
+    await asyncio.to_thread(launcher.wait_for_signed_out, 8.0)
     await asyncio.to_thread(launcher.force_kill_riot_client)
     return {"success": True, "message": "Account check cancelled"}
 
@@ -3780,7 +3807,7 @@ async def check_single_account(account_id: int):
             "message": message,
         }
 
-    update_payload = {k: v for k, v in detected_info.items() if k not in ("found", "username")}
+    update_payload = _persistable_riot_account_fields(detected_info)
     update_payload["last_updated"] = datetime.now().isoformat()
 
     status = (detected_info.get("status") or "").upper()

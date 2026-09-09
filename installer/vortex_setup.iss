@@ -1,9 +1,9 @@
 ; Inno Setup script for Vortex | Valorant Account Manager.
-; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=5.6.6
+; Compile with: ISCC installer\vortex_setup.iss /DAppVersion=5.6.7
 ; (AppVersion defaults below if not passed on the command line.)
 
 #ifndef AppVersion
-  #define AppVersion "5.6.6"
+  #define AppVersion "5.6.7"
 #endif
 
 #define AppName "Vortex"

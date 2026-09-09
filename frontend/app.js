@@ -457,6 +457,7 @@ const DOM = {
     modalBackup: document.getElementById("modal-backup"),
     modalBackupClose: document.getElementById("modal-backup-close"),
     btnDoExport: document.getElementById("btn-do-export"),
+    btnDoImportClipboard: document.getElementById("btn-do-import-clipboard"),
     btnTriggerImport: document.getElementById("btn-trigger-import"),
     fileImportInput: document.getElementById("file-import-input"),
 
@@ -956,6 +957,7 @@ function initEventListeners() {
     DOM.btnBackupRestore.addEventListener("click", () => openModal(DOM.modalBackup));
     DOM.modalBackupClose.addEventListener("click", () => closeModal(DOM.modalBackup));
     DOM.btnDoExport.addEventListener("click", handleExportBackup);
+    if (DOM.btnDoImportClipboard) DOM.btnDoImportClipboard.addEventListener("click", handleImportBackupFromClipboard);
     DOM.btnTriggerImport.addEventListener("click", () => DOM.fileImportInput.click());
     DOM.fileImportInput.addEventListener("change", handleImportBackup);
 
@@ -3905,38 +3907,57 @@ async function autoDetectClientPath() {
 }
 
 async function handleExportBackup() {
-    const filename = `valorant_accounts_backup_${new Date().toISOString().slice(0, 10)}.json`;
     try {
         const res = await fetch("/api/export");
         const text = await res.text();
-
-        // In the desktop build WebView2 blocks a programmatic <a download>, so
-        // route the save through the native dialog exposed by app.py. The
-        // browser build has no such bridge and falls back to the blob link.
-        const api = window.pywebview && window.pywebview.api;
-        if (api && typeof api.saveBackup === "function") {
-            const result = await api.saveBackup(text, filename);
-            if (result && result.cancelled) return;
-            if (!result || !result.success) {
-                showToast("Failed to export", "error");
-                return;
-            }
-        } else {
-            const url = window.URL.createObjectURL(new Blob([text], { type: "application/json" }));
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-        }
-
-        showToast("Backup exported", "success");
+        await copyText(text, "Backup copied to clipboard");
         closeModal(DOM.modalBackup);
     } catch (err) {
         showToast("Failed to export", "error");
     }
+}
+
+async function handleImportBackupFromClipboard() {
+    try {
+        let text = "";
+        if (navigator.clipboard && window.isSecureContext) {
+            text = await navigator.clipboard.readText();
+        } else {
+            const api = window.pywebview && window.pywebview.api;
+            const result = api && typeof api.readClipboard === "function"
+                ? await api.readClipboard()
+                : null;
+            if (!result || !result.success) {
+                showToast("Clipboard access is unavailable", "error");
+                return;
+            }
+            text = result.text || "";
+        }
+        await importBackupText(text);
+    } catch (err) {
+        showToast("Could not read backup from clipboard", "error");
+    }
+}
+
+async function importBackupText(rawText) {
+    const parsed = JSON.parse(rawText);
+    const accountsList = Array.isArray(parsed) ? parsed : (parsed.accounts || []);
+    if (accountsList.length === 0) {
+        showToast("No active accounts found in backup", "error");
+        return;
+    }
+
+    const res = await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(Array.isArray(parsed) ? {} : parsed), accounts: accountsList, banned_accounts: [] })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error("Import failed");
+    showToast(buildImportMessage(data), data.imported_count > 0 ? "success" : "info");
+    closeModal(DOM.modalBackup);
+    fetchAccounts();
+    fetchStatsSummary();
 }
 
 async function handleImportBackup(e) {
@@ -3946,31 +3967,7 @@ async function handleImportBackup(e) {
     const reader = new FileReader();
     reader.onload = async (event) => {
         try {
-            const parsed = JSON.parse(event.target.result);
-            const accountsList = Array.isArray(parsed) ? parsed : (parsed.accounts || []);
-            const bannedList = Array.isArray(parsed) ? [] : (parsed.banned_accounts || []);
-
-            if (accountsList.length === 0 && bannedList.length === 0) {
-                showToast("No accounts found in backup", "error");
-                return;
-            }
-
-            const res = await fetch("/api/import", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    ...parsed,
-                    accounts: accountsList
-                })
-            });
-
-            const data = await res.json();
-            if (data.success) {
-                showToast(buildImportMessage(data), data.imported_count > 0 ? "success" : "info");
-                closeModal(DOM.modalBackup);
-                fetchAccounts();
-                fetchStatsSummary();
-            }
+            await importBackupText(event.target.result);
         } catch (err) {
             showToast("Invalid JSON file", "error");
         }

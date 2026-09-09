@@ -123,8 +123,56 @@ class BatchAccountCheckTests(unittest.IsolatedAsyncioTestCase):
             await server.run_batch_account_check()
 
         process_wait.assert_called_once()
-        self.assertEqual(signout_wait.call_count, 2)
+        # One confirmed sign-out per account, plus one final sign-out request
+        # before Riot Client is closed.
+        self.assertEqual(signout_wait.call_count, 3)
         sleep.assert_awaited_once_with(0.25)
+
+    @patch.object(server.db, "is_globally_banned", return_value=False)
+    async def test_unconfirmed_batch_signout_resets_client_before_next_account(self, _global_banned):
+        account = {"id": 7, "username": "first", "password": "saved", "tag": ""}
+        with patch.object(server.db, "get_all_accounts", return_value=[account]), \
+             patch.object(server, "account_needs_check", return_value=True), \
+             patch.object(server.db, "get_settings", return_value={}), \
+             patch.object(server.launcher, "kill_valorant", return_value=True), \
+             patch.object(server.launcher, "force_kill_riot_client", return_value=True) as force_kill, \
+             patch.object(server.launcher, "wait_for_processes_gone", return_value=True) as process_wait, \
+             patch.object(server.launcher, "login_account", return_value={"success": False, "message": "busy"}), \
+             patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.launcher, "wait_for_signed_out", side_effect=[False, True]), \
+             patch.object(server.asyncio, "sleep", new=AsyncMock()):
+            await server.run_batch_account_check()
+
+        # Initial cleanup + fallback after the unconfirmed sign-out + final
+        # cleanup; critically, the fallback waits for the process to be gone.
+        self.assertGreaterEqual(force_kill.call_count, 3)
+        self.assertEqual(process_wait.call_count, 2)
+
+    @patch.object(server.db, "is_globally_banned", return_value=False)
+    async def test_batch_does_not_store_session_confirmation_flag(self, _global_banned):
+        account = {"id": 7, "username": "first", "password": "saved", "tag": ""}
+        verified = {
+            "info": {"found": True, "username": "first", "status_confirmed": True,
+                     "status": "PLAYABLE", "level": 20},
+            "cancelled": False, "invalid_credentials": False, "message": "Verified",
+        }
+        with patch.object(server.db, "get_all_accounts", return_value=[account]), \
+             patch.object(server, "account_needs_check", return_value=True), \
+             patch.object(server.db, "get_settings", return_value={}), \
+             patch.object(server.launcher, "kill_valorant", return_value=True), \
+             patch.object(server.launcher, "force_kill_riot_client", return_value=True), \
+             patch.object(server.launcher, "wait_for_processes_gone", return_value=True), \
+             patch.object(server.launcher, "login_account", return_value={"success": True}), \
+             patch.object(server.launcher, "api_sign_out", return_value=True), \
+             patch.object(server.launcher, "wait_for_signed_out", return_value=True), \
+             patch.object(server, "_wait_for_checked_account", new=AsyncMock(return_value=verified)), \
+             patch.object(server, "apply_account_update", return_value=False) as update, \
+             patch.object(server.asyncio, "sleep", new=AsyncMock()):
+            await server.run_batch_account_check()
+
+        payload = update.call_args.args[1]
+        self.assertNotIn("status_confirmed", payload)
+        self.assertEqual(payload["level"], 20)
 
     async def test_batch_skips_and_moves_globally_known_banned_username(self):
         account = {"id": 7, "username": "known-ban", "password": "saved", "tag": ""}

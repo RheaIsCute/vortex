@@ -2,6 +2,21 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-09 - Codex - Batch account-check sign-out reliability
+
+- Check Accounts now waits for Riot's authenticated session to disappear;
+  temporary local-client API errors while Riot remains running no longer count
+  as a completed logout. An unconfirmed handoff resets Riot Client before the
+  next account is attempted.
+- Stop and final batch cleanup now request and confirm sign-out before force
+  closing Riot Client, preventing the final checked account's stay-signed-in
+  session from being left behind.
+- Excluded the internal `status_confirmed` session flag from all persisted
+  Riot account snapshots. This fixes the observed `no such column:
+  status_confirmed` error that marked verified batch accounts as failed.
+- Validation: full suite 171 passed; backend compile, JavaScript syntax, and
+  diff checks passed.
+
 ## 2026-09-08 - Codex - Account penalty timers
 
 - Account checks and refreshes now recognize Riot restriction expirations in
@@ -1874,6 +1889,15 @@ Verification: JavaScript syntax check, clean diff check, dedicated UI contract
 coverage, and the full suite (168 passed). A 1920x1080 Chrome capture verified
 the initial boot canvas; Chrome's one-shot headless mode could not settle the
 polling dashboard before capture, so no screenshot artifact is retained.
+
+## v5.6.7 release
+
+- Backup now copies active-account JSON directly to the clipboard and restore
+  can read that JSON from the clipboard, including a native WebView2 clipboard
+  bridge for packaged Windows builds.
+- Banned accounts are excluded from exported backups and ignored during restore;
+  file-based JSON import remains available.
+- Version sources synchronized at 5.6.7.
 
 ## v5.6.6 release
 

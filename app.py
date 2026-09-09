@@ -8,6 +8,7 @@ import os
 import io
 import ctypes
 import traceback
+import pyperclip
 
 # Resolve the application root before importing any optional runtime. Frozen
 # builds are elevated by the embedded manifest before this code runs; source
@@ -612,7 +613,15 @@ def main():
             except OSError:
                 return {"success": False}
 
+        def readClipboard():
+            """Read plain text from the system clipboard for clipboard restore."""
+            try:
+                return {"success": True, "text": pyperclip.paste() or ""}
+            except Exception:
+                return {"success": False, "text": ""}
+
         window.expose(saveBackup)
+        window.expose(readClipboard)
         hud_enabled_at_start = db.get_settings().get("live_hud_enabled", "0") != "0"
         live_hud_window = _create_live_hud_window() if hud_enabled_at_start else None
         _startup_log("Live Aim HUD WebView " + ("created" if live_hud_window else "skipped (disabled)"))

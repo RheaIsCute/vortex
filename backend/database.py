@@ -1089,13 +1089,13 @@ class Database:
             conn.close()
 
     def export_all(self) -> Dict[str, Any]:
-        """Return a complete, portable backup (including hidden/banned rows)."""
+        """Return a portable backup of active accounts only."""
         return {
             "format": "vortex-backup",
             "version": 2,
             "exported_at": datetime.now().isoformat(),
             "accounts": self.get_all_accounts(sort_by="name"),
-            "banned_accounts": self.get_banned_accounts(),
+            "banned_accounts": [],
         }
 
     def import_all(self, accounts_list: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -1172,13 +1172,6 @@ class Database:
         """Merge a v2 backup without deleting anything already stored."""
         self.create_backup()
         result = self.import_all(payload.get("accounts") or [])
-        banned = payload.get("banned_accounts") or []
-        banned_result = self.import_all(banned)
-        # add_account automatically routes records carrying a banned status.
-        result["imported"] += banned_result["imported"]
-        result["skipped_existing"] += banned_result["skipped_existing"]
-        result["skipped_banned"] += banned_result["skipped_banned"]
-        result["repaired_passwords"] += banned_result["repaired_passwords"]
         return result
 
     def import_from_text(self, raw_text: str) -> Dict[str, Any]:

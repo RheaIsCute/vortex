@@ -3,6 +3,27 @@
 > Safety override: direct process-memory access and code injection were removed.
 > The completed legacy entries below are historical only and must not be restored.
 
+### Codex (batch account-check sign-out reliability)
+
+Status: DONE
+
+Scope: Ensure sequential Check Accounts sessions are conclusively signed out
+before the next account is started, with regression coverage for failed local
+Riot sign-out requests.
+
+Files owned: `backend/client_launcher.py`, `backend/server.py`,
+`tests/test_batch_account_check.py`, `tests/test_login_flow.py`,
+`AI_CHANGES.md`, `AI_TASKS.md`
+
+Dependencies: Preserve the existing Riot sign-in automation and cancellation
+contract.
+
+Notes: Completed 2026-09-09. Batch transitions and Stop/final cleanup now
+request and confirm sign-out before closing Riot Client. A local API timeout
+while the client remains alive can no longer be mistaken for logout. Internal
+session flags are excluded from persisted account metadata. Full suite: 171
+passed.
+
 ### Claude (login input lock + match row squash)
 
 Status: DONE

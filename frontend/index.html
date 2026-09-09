@@ -875,16 +875,19 @@
                 <div class="backup-card">
                     <div class="backup-card-icon"><i class="fa-solid fa-file-export"></i></div>
                     <h3>Export Accounts</h3>
-                    <p>Save all active and banned accounts and passwords. App settings stay local.</p>
+                    <p>Copy your active accounts and passwords to the clipboard. Banned accounts are excluded.</p>
                     <button class="btn btn-primary" id="btn-do-export">
-                        <i class="fa-solid fa-download"></i> Export JSON
+                        <i class="fa-regular fa-copy"></i> Copy Backup
                     </button>
                 </div>
 
                 <div class="backup-card">
                     <div class="backup-card-icon"><i class="fa-solid fa-file-import"></i></div>
                     <h3>Import Accounts</h3>
-                    <p>Restore accounts from an existing JSON file.</p>
+                    <p>Restore active accounts from clipboard text or an existing JSON file.</p>
+                    <button class="btn btn-primary" id="btn-do-import-clipboard">
+                        <i class="fa-solid fa-paste"></i> Restore from Clipboard
+                    </button>
                     <input type="file" id="file-import-input" accept=".json" style="display: none;">
                     <button class="btn btn-secondary" id="btn-trigger-import">
                         <i class="fa-solid fa-upload"></i> Import JSON

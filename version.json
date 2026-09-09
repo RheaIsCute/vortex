@@ -1,5 +1,5 @@
 {
-  "version": "5.6.6",
+  "version": "5.6.7",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.6: Sharper 1080p dashboard portraits and small UI artwork using bundled high-resolution assets, plus live self-clearing countdowns for timed Riot matchmaking penalties."
+  "changelog": "Vortex v5.6.7: Clipboard-based active-account backup and restore, with banned accounts excluded from backup data."
 }

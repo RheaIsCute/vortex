@@ -1335,10 +1335,15 @@ class ClientLauncher:
     @classmethod
     def api_sign_out(cls) -> bool:
         """
-        Signs out active account instantly using Riot Client's internal REST API.
+        Requests sign-out of the active account through Riot Client's local API.
+
+        This only reports whether Riot accepted the request.  Callers that are
+        about to switch credentials must additionally use ``wait_for_signed_out``
+        before they type into the next login form.
         """
         auth_info = cls.get_lockfile_auth()
         if not auth_info:
+            login_logger.debug("sign-out skipped: Riot Client lockfile unavailable")
             return False
 
         port, password = auth_info
@@ -1350,9 +1355,13 @@ class ClientLauncher:
                 runtime_audit.riot_api("DELETE", f"https://127.0.0.1:{port}/rso-auth/v1/session", "local Riot Client API - sign out")
                 runtime_audit.process_terminate("Riot session", "local Riot Client REST API", "sign out active account")
                 del_res = requests.delete(url, auth=("riot", password), verify=False, timeout=1.5)
-                return del_res.status_code in (200, 204)
-        except Exception:
-            pass
+                accepted = del_res.status_code in (200, 204)
+                if not accepted:
+                    login_logger.warning("Riot Client rejected sign-out request (HTTP %s)", del_res.status_code)
+                return accepted
+            login_logger.warning("Riot Client session was not authenticated during sign-out (HTTP %s)", res.status_code)
+        except Exception as exc:
+            login_logger.warning("Riot Client sign-out request failed: %s", type(exc).__name__)
         return False
 
     @classmethod
@@ -1772,8 +1781,14 @@ class ClientLauncher:
                 )
                 if res.status_code != 200 or res.json().get("type") != "authenticated":
                     return True
-            except Exception:
-                return True
+            except Exception as exc:
+                # A stale lockfile after the client has closed is a valid
+                # signed-out state.  A transient local API timeout while the
+                # Riot process is still alive is not: treating it as success
+                # starts the next account on top of the previous session.
+                if not _is_process_running_fast(_RIOT_PROCS):
+                    return True
+                login_logger.debug("waiting for Riot sign-out: local API unavailable (%s)", type(exc).__name__)
             time.sleep(0.25)
         return False
 

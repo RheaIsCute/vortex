@@ -103,6 +103,23 @@ class LoginThreadingTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("Riot Client.exe", command)
 
+    def test_signout_wait_does_not_accept_a_live_client_api_timeout(self):
+        clock_calls = 0
+
+        def clock():
+            nonlocal clock_calls
+            clock_calls += 1
+            return 0.0 if clock_calls <= 2 else 1.0
+
+        with patch.object(cl.ClientLauncher, "get_lockfile_auth", return_value=(1234, "secret")), \
+             patch.object(cl.requests, "get", side_effect=cl.requests.Timeout), \
+             patch.object(cl, "_is_process_running_fast", return_value=True), \
+             patch.object(cl.time, "time", side_effect=clock), \
+             patch.object(cl.time, "sleep"):
+            signed_out = cl.ClientLauncher.wait_for_signed_out(timeout=0.5)
+
+        self.assertFalse(signed_out)
+
     def test_login_for_a_different_account_supersedes_the_active_attempt(self):
         original_event = cl._ACTIVE_LOGIN_CANCEL_EVENT
         try:
