@@ -6,6 +6,12 @@ __pycache__/
 venv/
 env/
 
+# Local release credentials (never commit)
+.env
+.env.*
+!.env.example
+*.local.ps1
+
 # App data (per-machine, never commit real account data)
 database.sqlite
 database.sqlite-wal
