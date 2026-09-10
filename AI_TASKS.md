@@ -1,5 +1,19 @@
 # Shared AI Task Board
 
+### Codex (already-open Riot sign-in detection)
+
+Status: DONE
+
+Files owned: `backend/client_launcher.py`, `tests/test_login_flow.py`,
+`backend/version.py`, `version.json`, `installer/vortex_setup.iss`,
+`AI_CHANGES.md`, `AI_TASKS.md`
+
+Scope: Recognize an already-visible Riot credential form before deciding
+whether a current session needs to be signed out.
+
+Validation: Python syntax compilation passed. Targeted test execution requires
+the missing pinned `pyautogui` package in this environment.
+
 ### Codex (reject friend search as login form)
 
 Status: DONE

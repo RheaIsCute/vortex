@@ -2,6 +2,16 @@
 
 Append a new section for each completed task. Keep entries factual and concise.
 
+## 2026-09-10 - Detect an already-open Riot sign-in page
+
+- A Riot lockfile now indicates only that the local client service is running;
+  it no longer causes a logout attempt when verified username/password fields
+  are already visible.
+- Warm login fills the existing sign-in page directly, avoiding the false
+  "Riot did not confirm logout" failure.
+- Added a focused warm-login regression test. Python syntax compilation passed;
+  the test environment is missing the pinned `pyautogui` dependency.
+
 ## 2026-09-09 - Reject Riot friend search during account login
 
 - Removed positional and single-edit credential detection, which mistook the

@@ -2680,6 +2680,29 @@ class ClientLauncher:
                         cls.kill_valorant()
                         cls.wait_for_processes_gone(_VALORANT_PROCS, timeout=8.0)
 
+                    # A lockfile only proves that the local Riot service is
+                    # running.  It remains available on the sign-in page, so
+                    # it must not be used as evidence of an authenticated
+                    # session.  Prefer the actual credential controls: if
+                    # Riot is already showing them, there is nothing to sign
+                    # out and attempting a DELETE would otherwise leave this
+                    # login waiting for logout confirmation that can never
+                    # arrive.
+                    existing_form = cls.wait_for_login_form(timeout=1.5)
+                    if existing_form is not None:
+                        login_logger.info(
+                            "[%s] warm login - sign-in page already visible; skipping sign-out",
+                            username,
+                        )
+                        _set_login_stage(
+                            "waiting_window", "Using the sign-in page already open...", username
+                        )
+                        cls.auto_fill_credentials(
+                            username, password, cold_start=False,
+                            stay_signed_in=stay_signed_in, client_path=target_path,
+                        )
+                        return
+
                     had_session = bool(cls.get_lockfile_auth())
                     if had_session:
                         _set_login_stage("signout", "Signing out of the current session...", username)

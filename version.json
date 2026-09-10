@@ -1,5 +1,5 @@
 {
-  "version": "5.6.8",
+  "version": "5.6.9",
   "download_url": "https://github.com/RheaIsCute/vortex/releases/latest/download/VortexSetup.exe",
-  "changelog": "Vortex v5.6.8: Reliable Riot account switching. Vortex now recognizes only real sign-in fields, never types into the friend search, and stops if Riot does not confirm logout."
+  "changelog": "Vortex v5.6.9: Detects an already-open Riot sign-in page before attempting logout, so it fills the visible credentials form directly."
 }

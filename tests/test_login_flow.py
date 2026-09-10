@@ -86,6 +86,28 @@ class LoginThreadingTests(unittest.TestCase):
             self.assertTrue(done.wait(5))
             self.assertGreaterEqual(wff.call_count, 1)
 
+    def test_warm_login_skips_signout_when_signin_form_is_already_visible(self):
+        """A Riot lockfile persists on the sign-in page; it is not a session."""
+        done = threading.Event()
+
+        def fake_fill(*_args, **_kwargs):
+            done.set()
+
+        with patch.object(cl.ClientLauncher, "detect_riot_client_path", return_value=__file__), \
+             patch("os.path.exists", return_value=True), \
+             patch.object(cl.ClientLauncher, "find_riot_window", return_value=1234), \
+             patch.object(cl.ClientLauncher, "is_valorant_running", return_value=False), \
+             patch.object(cl.ClientLauncher, "wait_for_login_form", return_value=(object(), object(), object())), \
+             patch.object(cl.ClientLauncher, "get_lockfile_auth", return_value=(1234, "secret")) as lockfile, \
+             patch.object(cl.ClientLauncher, "api_sign_out") as sign_out, \
+             patch.object(cl.ClientLauncher, "auto_fill_credentials", side_effect=fake_fill):
+            result = cl.ClientLauncher.login_account("acc", "pw", client_path=__file__)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(done.wait(5))
+        sign_out.assert_not_called()
+        lockfile.assert_not_called()
+
     def test_cold_login_spawns_full_restart_worker(self):
         done = threading.Event()
         with patch.object(cl.ClientLauncher, "detect_riot_client_path", return_value=__file__), \
